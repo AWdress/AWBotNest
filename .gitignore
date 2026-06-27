@@ -1,0 +1,50 @@
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# ── 虚拟环境 ──
+.venv/
+venv/
+ENV/
+
+# ── 前端 ──
+webui/frontend/node_modules/
+# 构建产物：Docker 内会重新构建，故忽略
+webui/static/
+
+# ── 已安装/导入的插件（用户数据，不提交）──
+# 忽略 plugins/ 下所有内容，仅保留平台脚手架：模板 + 包标记
+plugins/*
+!plugins/__init__.py
+!plugins/_TEMPLATE.py
+
+# ── 敏感配置（绝不提交）──
+# config/config.py 是加载垫片(代码)，应提交；真实配置在 data/config.json
+config/config.legacy.py
+config/reply_message.py
+
+# ── 运行时数据 / Docker 卷映射目录（绝不提交，含密钥/登录态/隐私）──
+# data/: config.json(密钥)、auth.json(密码哈希)、state.toml、plugins_state.json、kv/、repo_sync.json、activity.json
+data/
+logs/
+sessions/
+db_file/
+temp_file/
+mysql/
+*.log
+*.session
+*.session-journal
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+
+# ── IDE / 系统 ──
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

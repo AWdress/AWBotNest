@@ -1,0 +1,49 @@
+# ── 版本控制 / IDE ──
+.git
+.gitignore
+.github
+.vscode/
+.idea/
+*.swp
+
+# ── Python ──
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+
+# ── 虚拟环境（镜像内重新装）──
+.venv/
+venv/
+ENV/
+
+# ── 前端：源码会 COPY 进构建阶段，但产物和依赖不带入 ──
+webui/frontend/node_modules/
+webui/static/
+# 注：webui/static 由构建阶段生成并 COPY，不从宿主带入
+
+# ── 运行时数据（用挂载卷，不进镜像）──
+logs/
+*.log
+sessions/
+*.session
+*.session-journal
+db_file/
+data/
+temp_file/
+
+# ── 敏感配置（不烘进镜像）──
+# config/config.py 是加载垫片(代码)，需烘进镜像（不排除）。
+# 配置数据在 data/config.json，通过 ./data 卷在运行时提供（data/ 已在上面排除）。
+# config.legacy.py 含旧业务配置(可能有密钥)，迁移参照用，不进镜像。
+config/config.legacy.py
+
+# ── 系统 ──
+.DS_Store
+Thumbs.db
+
+# 保留前端源码与构建配置（不被上面的规则误伤）
+!webui/frontend/package.json
+!webui/frontend/vite.config.js

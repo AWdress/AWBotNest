@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "AWBotHub"
+version = "2.2.4"
+description = "Telegram 自动化工具（六边形架构重构版）"
+requires-python = ">=3.13"
+
+dependencies = [
+    # Telegram 框架
+    "kurigram",
+    "tgcrypto",
+    # 配置管理（新架构核心）
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.3.0",
+    # 依赖注入
+    "dependency-injector>=4.41.0",
+    # 数据库
+    "sqlalchemy[asyncio]>=2.0.30",
+    "aiomysql>=0.2.0",
+    "aiosqlite>=0.20.0",
+    # 结构化日志
+    "structlog>=24.2.0",
+    # 任务管理
+    "anyio>=4.4.0",
+    # 图像处理（OCR 预处理）
+    "Pillow",
+    # OCR
+    "ddddocr>=1.4.11",
+    # 现有依赖（保留兼容）
+    "APScheduler",
+    "aiohttp",
+    "jinja2",
+    "beautifulsoup4",
+    "pytz",
+    "openai",
+    "cryptography",
+    "emoji",
+    "sqlitedict",
+    "httpx",
+    "bs4",
+    "requests",
+    "lxml",
+    "imgkit",
+    "wkhtmltopdf",
+    "openpyxl",
+    "pandas",
+    "numpy",
+    "pymysql",
+    "toml",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-asyncio>=0.23.7",
+    "pytest-cov>=5.0.0",
+    "mypy>=1.10.0",
+    "ruff>=0.4.5",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+

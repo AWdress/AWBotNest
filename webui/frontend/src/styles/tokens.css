@@ -1,0 +1,174 @@
+/* =============================================================
+   AWbotHub 设计 token —— 取色自 web 示例.png
+   所有颜色统一走变量，禁止散落硬编码（见 SPEC.md §6）
+   ============================================================= */
+:root {
+  /* 背景层次（由深到浅） */
+  --bg-base: #0a0e17;        /* 主背景 */
+  --bg-sidebar: #0b0c12;     /* 侧边栏 */
+  --bg-card: #11131a;        /* 卡片 */
+  --bg-elevated: #20222e;    /* 悬浮/输入框/激活态 */
+  --bg-hover: #1a1d28;       /* hover 态 */
+
+  /* 强调色 */
+  --accent: #3080f0;         /* 主强调（蓝） */
+  --accent-hover: #4a90ff;
+  --accent-dim: rgba(48, 128, 240, 0.15);
+  --accent-2: #10b080;       /* 次强调（绿，用于成功/启用） */
+  --accent-2-dim: rgba(16, 176, 128, 0.15);
+
+  /* 状态色 */
+  --danger: #e0484f;
+  --danger-dim: rgba(224, 72, 79, 0.15);
+  --warning: #e0a020;
+  --success: #10b080;
+
+  /* 文字 */
+  --text-primary: #eef1f7;
+  --text-secondary: #9aa3b5;
+  --text-muted: #5d6577;
+
+  /* 边框 */
+  --border: #1f2330;
+  --border-light: #2a2f3d;
+
+  /* 圆角 */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+
+  /* 间距 */
+  --gap: 16px;
+  --gap-lg: 24px;
+
+  /* 阴影 */
+  --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+
+  --sidebar-width: 248px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body, #app {
+  height: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; text-decoration: none; }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+/* ── 通用按钮 ── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+.btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.btn-primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.btn-primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.btn-danger { color: var(--danger); border-color: var(--danger-dim); }
+.btn-danger:hover { background: var(--danger-dim); border-color: var(--danger); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── 卡片 ── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--gap-lg);
+}
+
+/* ── 开关 toggle ── */
+.toggle {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  cursor: pointer;
+  transition: background 0.2s ease;
+  flex-shrink: 0;
+}
+.toggle.on { background: var(--accent); border-color: var(--accent); }
+.toggle::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s ease;
+}
+.toggle.on::after { transform: translateX(20px); }
+.toggle.disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── 输入框 ── */
+.input, .select, .textarea {
+  width: 100%;
+  padding: 9px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+.input:focus, .select:focus, .textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.textarea { resize: vertical; min-height: 80px; }
+
+/* ── 徽章 ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.badge-on { background: var(--accent-2-dim); color: var(--accent-2); }
+.badge-off { background: var(--bg-elevated); color: var(--text-muted); }
+.badge-err { background: var(--danger-dim); color: var(--danger); }
+
+/* ── 工具类 ── */
+.row { display: flex; align-items: center; }
+.between { justify-content: space-between; }
+.gap { gap: var(--gap); }
+.muted { color: var(--text-secondary); }
+.mono { font-family: 'SFMono-Regular', Consolas, monospace; }
