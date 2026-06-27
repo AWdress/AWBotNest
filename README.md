@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="assets/logo.png" alt="AWBotNest" width="120" />
+  <img src="webui/frontend/src/assets/logo.png" alt="AWBotNest" width="120" />
 
   # AWBotNest
 
