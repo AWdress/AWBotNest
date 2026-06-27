@@ -1,0 +1,69 @@
+# =============================================================================
+# Docker 构建与推送（CI）
+#   - push 到 main：构建多阶段镜像并推送到 Docker Hub
+#   - 手动触发（workflow_dispatch）亦可
+#   说明：版本发布（打 tag）的镜像由 release.yml 负责，这里只产出 main 镜像。
+# =============================================================================
+name: docker-build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # 仅在影响镜像的文件变动时构建，文档/纯文案改动不触发
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - 'pyproject.toml'
+      - '**/*.py'
+      - 'webui/frontend/**'
+      - '.github/workflows/docker-build.yml'
+  workflow_dispatch:
+
+# 同一分支的新提交取消尚在跑的旧构建，省额度
+concurrency:
+  group: docker-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # 镜像名 = Docker Hub 用户名/awbotnest（用户名取自仓库变量）
+  IMAGE_NAME: ${{ vars.DOCKER_HUB_USERNAME }}/awbotnest
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: 生成镜像标签与元数据
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/${{ env.IMAGE_NAME }}
+          tags: |
+            # main 分支打 latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # 短 commit SHA，便于精确回滚
+            type=sha,format=short
+
+      - name: 构建并推送镜像
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 用 GitHub Actions 缓存加速重复构建
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

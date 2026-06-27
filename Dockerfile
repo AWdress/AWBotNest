@@ -11,7 +11,7 @@ WORKDIR /webui/frontend
 
 # 先拷依赖清单，利用层缓存
 COPY webui/frontend/package.json webui/frontend/package-lock.json* ./
-RUN npm install
+RUN npm ci
 
 # 拷前端源码并构建（vite.config outDir=../static → /webui/static）
 COPY webui/frontend/ ./
