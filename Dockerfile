@@ -11,7 +11,10 @@ WORKDIR /webui/frontend
 
 # 先拷依赖清单，利用层缓存
 COPY webui/frontend/package.json webui/frontend/package-lock.json* ./
-RUN npm ci
+# 用 npm install 而非 npm ci：package-lock.json 在 Windows 生成，
+# 缺 Linux 平台的可选原生依赖（rollup/esbuild），npm ci 严格按 lockfile 装会失败；
+# npm install 会按当前平台重新解析可选依赖，跨平台构建更稳。
+RUN npm install
 
 # 拷前端源码并构建（vite.config outDir=../static → /webui/static）
 COPY webui/frontend/ ./
