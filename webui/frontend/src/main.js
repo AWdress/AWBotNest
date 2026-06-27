@@ -13,7 +13,7 @@ const router = createRouter({
   // 用 hash 模式，避免后端路由配置；FastAPI 只需托管 index.html
   history: createWebHashHistory(),
   routes: [
-    { path: '/', redirect: '/plugins' },
+    { path: '/', redirect: '/status' },
     { path: '/plugins', component: Plugins, meta: { title: '插件管理' } },
     { path: '/accounts', component: Accounts, meta: { title: '账号管理' } },
     { path: '/logs', component: Logs, meta: { title: '运行日志' } },

@@ -3,6 +3,7 @@ import { ref, onMounted, computed } from 'vue'
 import { api } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import { confirm } from '../composables/confirm'
+import { toast } from '../composables/toast'
 import logo from '../assets/logo.png'
 
 const tab = ref('mine')   // mine | store
@@ -110,8 +111,10 @@ async function onFile(e) {
   try {
     await api.uploadPlugin(file)
     await load()
+    toast.success(`插件「${file.name}」安装完成`)
   } catch (err) {
     error.value = `上传失败: ${err.message}`
+    toast.error('插件上传失败')
   } finally {
     e.target.value = ''
   }
@@ -130,8 +133,10 @@ async function onDrop(e) {
   try {
     await api.uploadPlugin(file)
     await load()
+    toast.success(`插件「${file.name}」安装完成`)
   } catch (err) {
     error.value = `上传失败: ${err.message}`
+    toast.error('插件上传失败')
   }
 }
 
@@ -175,12 +180,15 @@ async function download(p) {
     const res = r.result || {}
     if (res.errors && res.errors.length) {
       storeErr.value = res.errors.join('；')
+      toast.error(`${p.name} 安装失败`)
     } else {
       p.installed = true
       await load()
+      toast.success(`插件「${p.name}」安装完成`)
     }
   } catch (e) {
     storeErr.value = `${p.name}: ${e.message}`
+    toast.error(`${p.name} 安装失败`)
   } finally {
     dlBusy.value[p.id] = false
   }
@@ -302,7 +310,6 @@ onMounted(() => { load(); loadStore(false) })
             <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item">v{{ p.version }}</span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
-            <span class="meta-item mono">{{ p.file }}</span>
           </div>
 
           <div class="card-actions">
@@ -336,7 +343,6 @@ onMounted(() => { load(); loadStore(false) })
                 <span class="badge badge-off" v-if="p.version">v{{ p.version }}</span>
               </div>
             </div>
-            <span v-if="p.is_folder" class="gh-badge">文件夹</span>
           </div>
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
@@ -486,7 +492,6 @@ onMounted(() => { load(); loadStore(false) })
   font-size: 11px; color: var(--text-muted);
   background: var(--bg-elevated); padding: 2px 8px; border-radius: 4px;
 }
-.gh-badge { font-size: 11px; background: var(--accent-2-dim); color: var(--accent-2); padding: 1px 8px; border-radius: 10px; font-weight: 500; height: fit-content; }
 
 .card-actions { display: flex; gap: 8px; margin-top: 4px; }
 .btn.sm { padding: 6px 12px; font-size: 12px; }

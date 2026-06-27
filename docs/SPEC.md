@@ -154,6 +154,7 @@ async def setup(ctx):
    - 用 `section` 把「功能开关」与「参数」分块；用 `show_if` 做联动（如某开关打开才显示相关参数），实现「打开插件 = 一个带分区、会联动的设置面板」。
 3. **数据隔离**：插件用 `ctx.kv` 存键值，每插件独立 sqlite 命名空间（`data/kv/<id>.sqlite`）。需要关系型存储时，表名/键名必须带 `plugin_id` 前缀，禁止污染他人数据。
 4. 平台级敏感配置（API_ID/HASH/BOT_TOKEN 等）存 `data/config.json`，**`data/` 禁止提交 Git**，禁止在日志/响应中回显明文（`/api/settings` 读取时打码）。
+5. **可写数据目录 `ctx.data_dir`**：需要存实际文件（如头像图片池、下载的素材）的插件用 `ctx.data_dir` 拿一个**每插件独立**的可写目录 `data/plugin_data/<id>/`（`Path`，首次访问自动建）。`ctx.kv` 只存键值，文件存这里。
 
 ---
 
@@ -284,7 +285,8 @@ async def setup(ctx):
 | 通知所有者 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给主人，回退主账号收藏夹） |
 | 所有者 ID | `ctx.owner_id`（平台主人 Telegram 数字 ID，无主账号为 0） |
 | 配置 | `ctx.config`（dict） |
-| 键值存储 | `ctx.kv.get/set/delete/keys` |
+| 键值存储 | `ctx.kv.get/set/delete/keys`（每插件私有） |
+| 可写目录 | `ctx.data_dir`（`Path`，每插件独立 `data/plugin_data/<id>/`） |
 | 日志 | `ctx.log.info/debug/warning/error`（自动带 `[插件id]` 前缀，前端日志页可见） |
 | 定时任务 | `ctx.schedule(fn, "interval", seconds=60)`（可传 `id="名称"`，自动归属本插件并显示在系统状态页） |
 | 清理回调 | `ctx.add_cleanup(fn)` |

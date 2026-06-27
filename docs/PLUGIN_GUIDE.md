@@ -145,6 +145,18 @@ ctx.kv.delete("count")
 ctx.kv.keys()
 ```
 
+### 存文件（图片、素材等实际文件）
+
+`ctx.kv` 只存键值。要存实际文件（如自动换头像的图片池），用 `ctx.data_dir`——一个**你独享**的可写目录：
+
+```python
+p = ctx.data_dir / "avatars" / "a.jpg"   # data/plugin_data/<你的id>/avatars/a.jpg
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_bytes(img_bytes)
+```
+
+`ctx.data_dir` 是 `Path`，首次访问自动建好目录，每个插件一份，互不干扰。
+
 ### 写日志（别用 print）
 
 ```python
@@ -240,7 +252,7 @@ ctx.schedule(daily_report, "cron", hour=9, id="每日早报")
 不会。单个插件加载失败只标红它自己，其它插件和平台照常运行。
 
 **Q：我的数据存哪了？**
-`ctx.kv` 的数据在 `data/kv/<你的插件id>.sqlite`，每个插件一份，互不干扰。
+`ctx.kv` 的数据在 `data/kv/<你的插件id>.sqlite`，文件在 `data/plugin_data/<你的插件id>/`，每个插件一份，互不干扰。
 
 ---
 

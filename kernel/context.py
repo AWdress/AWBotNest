@@ -83,14 +83,13 @@ class _ClientProxy:
 
 class _KVStore:
     """
-    插件专属键值存储，基于 sqlitedict，每插件独立命名空间。
-    用法：ctx.kv.get(key, default) / ctx.kv.set(key, value) / ctx.kv.delete(key)
+    插件专属键值存储，基于 sqlitedict，每插件独立命名空间（data/kv/<plugin_id>.sqlite）。
+    用法：ctx.kv.get(key, default) / ctx.kv.set(key, value) / ctx.kv.delete(key) / ctx.kv.keys()
     """
 
-    def __init__(self, plugin_id: str, base_dir: Path):
-        self._plugin_id = plugin_id
-        base_dir.mkdir(parents=True, exist_ok=True)
-        self._path = base_dir / f"{plugin_id}.sqlite"
+    def __init__(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = path
 
     def _open(self):
         from sqlitedict import SqliteDict
@@ -129,10 +128,12 @@ class PlatformContext:
         accounts: "AccountManager",
         registry: "PluginRegistry",
         kv_dir: Path = Path("data/kv"),
+        data_root: Path = Path("data/plugin_data"),
     ):
         self.plugin_id = plugin_id
         self._accounts = accounts
         self._registry = registry
+        self._data_root = data_root
 
         # 已注册的处理器句柄列表：(client, handler, group)
         self._handles: list[tuple[object, object, int]] = []
@@ -142,7 +143,7 @@ class PlatformContext:
         # 暴露给插件的能力
         self.filters = _filters
         self.log = _make_plugin_logger(plugin_id)
-        self.kv = _KVStore(plugin_id, kv_dir)
+        self.kv = _KVStore(kv_dir / f"{plugin_id}.sqlite")
 
     # ──────────────────────────────────────────────
     # 账号能力
@@ -201,6 +202,19 @@ class PlatformContext:
     def config(self) -> dict[str, Any]:
         """本插件当前配置（config_schema 默认值叠加用户保存值）"""
         return self._registry.get_config(self.plugin_id)
+
+    # ──────────────────────────────────────────────
+    # 可写目录（SPEC §5.5）
+    # ──────────────────────────────────────────────
+    @property
+    def data_dir(self) -> Path:
+        """
+        本插件独立的可写数据目录 data/plugin_data/<id>/（Path，首次访问自动建）。
+        存实际文件（头像图片池、下载素材等）用它；ctx.kv 只存键值。
+        """
+        d = self._data_root / self.plugin_id
+        d.mkdir(parents=True, exist_ok=True)
+        return d
 
     # ──────────────────────────────────────────────
     # 处理器注册（核心：自动登记句柄以支持热卸载）

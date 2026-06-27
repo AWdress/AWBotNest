@@ -4,6 +4,7 @@ import { ref, onMounted } from 'vue'
 import { api, getToken, setToken, setUnauthorizedHandler } from './api'
 import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
+import Toast from './components/Toast.vue'
 import logoWhite from './assets/logo-white.png'
 
 const route = useRoute()
@@ -113,6 +114,9 @@ onMounted(() => {
 
   <!-- 全局确认弹窗 -->
   <ConfirmDialog />
+
+  <!-- 全局悬浮提示 -->
+  <Toast />
 </template>
 
 <style scoped>
