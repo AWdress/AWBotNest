@@ -100,7 +100,7 @@ async def favicon():
 # 根级静态资源（PWA 相关：图标 / manifest / service worker）
 _ROOT_STATIC = {
     "apple-touch-icon.png", "manifest.webmanifest", "sw.js",
-    "pwa-192.png", "pwa-512.png",
+    "pwa-192.png", "pwa-512.png", "favicon-16.png", "favicon-32.png",
 }
 
 
