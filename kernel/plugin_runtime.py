@@ -72,9 +72,9 @@ class PluginRuntime:
             if meta is None:
                 raise FileNotFoundError(f"插件不存在: {plugin_id}")
             if meta.error:
-                # 元数据本身有问题，拒绝加载
-                registry.set_enabled(plugin_id, False)
-                meta.enabled = False
+                # 元数据有静态错误：不加载，但不抹掉用户的启用意图
+                # （保持 enabled 持久值，修好后重启/重载自动恢复，UI 显示错误徽章）
+                meta.enabled = registry.is_enabled(plugin_id)
                 return meta
             if plugin_id in self._loaded:
                 meta.loaded = True
@@ -111,9 +111,11 @@ class PluginRuntime:
                     except Exception as ce:  # noqa: BLE001
                         logger.warning("清理失败插件句柄异常 [%s]: %r", plugin_id, ce)
                 self._cleanup_module(plugin_id)
-                registry.set_enabled(plugin_id, False)
+                # 不持久化 enabled=False：加载失败属运行态问题，不应抹掉用户"要启用"的意图。
+                # 保留持久启用状态，下次重启/重载自动重试；UI 显示错误徽章。
+                # 仅"显式点停用"(disable) 才会真正关闭。
                 meta.loaded = False
-                meta.enabled = False
+                meta.enabled = registry.is_enabled(plugin_id)
                 meta.error = f"{e.__class__.__name__}: {e}"
                 return meta
 
