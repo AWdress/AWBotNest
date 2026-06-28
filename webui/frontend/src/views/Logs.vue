@@ -127,4 +127,11 @@ onUnmounted(() => {
 .lv-err { color: var(--danger); }
 .source { color: var(--accent-2); flex-shrink: 0; }
 .msg { color: var(--text-primary); }
+
+/* 手机适配 */
+@media (max-width: 768px) {
+  .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .toolbar .row { flex-wrap: wrap; }
+  .input.sm { width: 100%; }
+}
 </style>

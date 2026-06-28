@@ -219,4 +219,12 @@ onMounted(() => { load(); loadUsername() })
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* 手机适配 */
+@media (max-width: 768px) {
+  .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
+  .tab { white-space: nowrap; flex-shrink: 0; }
+  .panel { max-width: 100%; }
+}
 </style>

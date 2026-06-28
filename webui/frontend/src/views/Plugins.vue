@@ -597,4 +597,14 @@ onMounted(() => { load(); loadStore(false) })
 .acct-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
 .acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .acct-item .small { margin-left: auto; }
+
+/* 手机适配 */
+@media (max-width: 768px) {
+  .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .tabs { width: 100%; }
+  .tab { flex: 1; justify-content: center; padding: 9px 8px; }
+  .grid { grid-template-columns: 1fr; }
+  .repo-row { flex-wrap: wrap; }
+  .repo-row .repo-token { max-width: none; flex: 1 1 100%; }
+}
 </style>

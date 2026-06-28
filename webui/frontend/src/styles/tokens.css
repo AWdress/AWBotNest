@@ -172,3 +172,14 @@ a { color: inherit; text-decoration: none; }
 .gap { gap: var(--gap); }
 .muted { color: var(--text-secondary); }
 .mono { font-family: 'SFMono-Regular', Consolas, monospace; }
+
+/* ───────── 手机端全局适配（≤768px）───────── */
+@media (max-width: 768px) {
+  .card { padding: 14px; }
+  /* 全局表单控件在手机上更易点 */
+  .input, .select { font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
+  /* 弹窗在手机上接近全宽 */
+  .modal, .modal.card { width: 94vw !important; max-width: 94vw !important; max-height: 88vh; }
+  /* 双列网格在窄屏统一单列 */
+  .grid2 { grid-template-columns: 1fr !important; }
+}

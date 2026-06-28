@@ -271,4 +271,9 @@ onMounted(load)
 .done { text-align: center; padding: 20px 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .done-icon { width: 48px; height: 48px; border-radius: 50%; background: var(--accent-2-dim); color: var(--accent-2); display: flex; align-items: center; justify-content: center; font-size: 24px; }
 .done .btn { margin-top: 12px; }
+
+/* 手机适配 */
+@media (max-width: 768px) {
+  .grid { grid-template-columns: 1fr; }
+}
 </style>

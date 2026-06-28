@@ -392,4 +392,16 @@ const donut = computed(() => {
 .tbl tr:last-child td { border-bottom: none; }
 .empty { padding: 12px 0; }
 .alert { background: var(--danger-dim); color: var(--danger); padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 16px; }
+
+/* 手机适配 */
+@media (max-width: 768px) {
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .stat { padding: 12px; gap: 10px; }
+  .stat-icon { width: 38px; height: 38px; }
+  .stat-value { font-size: 18px; }
+  /* 账号表格：超宽时容器内横向滚动，不撑破布局 */
+  .tbl { display: block; overflow-x: auto; white-space: nowrap; }
+  .info-bar { gap: 10px 0; }
+  .ib { flex-basis: 50%; }
+}
 </style>
