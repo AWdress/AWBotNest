@@ -81,18 +81,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          generate_release_notes: true     # 末尾追加自动汇总的提交/PR 记录
+          generate_release_notes: false    # 只用 CHANGELOG，不追加提交记录
           draft: false
           prerelease: false
           body: |
-            ## AWBotNest ${{ github.ref_name }}
-
-            ### Docker 镜像
-            ```bash
-            docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest:${{ github.ref_name }}
-            # 或使用 latest
-            docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest:latest
-            ```
-
-            ### 更新内容
             ${{ steps.changelog.outputs.notes }}
