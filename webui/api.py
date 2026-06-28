@@ -22,7 +22,7 @@ from webui.auth import require_auth as _auth
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.0.2"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -95,11 +95,21 @@ async def favicon():
     raise HTTPException(status_code=404, detail="favicon 不存在")
 
 
-@app.get("/apple-touch-icon.png")
-async def apple_icon():
-    png = STATIC_DIR / "apple-touch-icon.png"
-    if png.exists():
-        return FileResponse(str(png))
+# 根级静态资源（PWA 相关：图标 / manifest / service worker）
+_ROOT_STATIC = {
+    "apple-touch-icon.png", "manifest.webmanifest", "sw.js",
+    "pwa-192.png", "pwa-512.png",
+}
+
+
+@app.get("/{filename}")
+async def root_static(filename: str):
+    """服务 static 根目录下的 PWA 资源；其它路径交给前端路由（hash 模式不会到这）。"""
+    if filename not in _ROOT_STATIC:
+        raise HTTPException(status_code=404, detail="not found")
+    f = STATIC_DIR / filename
+    if f.exists():
+        return FileResponse(str(f))
     raise HTTPException(status_code=404, detail="not found")
 
 

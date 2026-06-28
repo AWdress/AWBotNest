@@ -23,3 +23,10 @@ const router = createRouter({
 })
 
 createApp(App).use(router).mount('#app')
+
+// 注册 PWA Service Worker（支持手机"添加到主屏幕"独立运行）
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {})
+  })
+}

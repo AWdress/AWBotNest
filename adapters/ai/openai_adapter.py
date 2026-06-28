@@ -7,13 +7,45 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _platform_proxy():
+    """读取平台代理 URL（启用时），供 AI 客户端使用。"""
+    try:
+        import config.config as _cfg
+        _cfg.reload()
+        ps = getattr(_cfg, "proxy_set", {}) or {}
+        if not ps.get("proxy_enable"):
+            return None
+        url = (ps.get("PROXY_URL") or "").strip()
+        if url:
+            return url
+        px = ps.get("proxy", {}) or {}
+        host, port = px.get("hostname"), px.get("port")
+        if host and port:
+            scheme = px.get("scheme", "http")
+            user, pwd = px.get("username", ""), px.get("password", "")
+            auth = f"{user}:{pwd}@" if user else ""
+            return f"{scheme}://{auth}{host}:{port}"
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
 class OpenAIAdapter(AiEnginePort):
     """OpenAI 兼容接口适配器"""
 
     def __init__(self, api_key: str, base_url: str = None):
         self.api_key = api_key
         self.base_url = base_url
-        self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
+        # AI 接口走平台代理（启用时）：墙内访问 OpenAI/第三方需要
+        http_client = None
+        try:
+            proxy_url = _platform_proxy()
+            if proxy_url:
+                import httpx
+                http_client = httpx.AsyncClient(proxy=proxy_url, timeout=60)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("AI 代理初始化失败，将直连: %r", e)
+        self.client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url, http_client=http_client)
 
     async def generate_response(
         self,
