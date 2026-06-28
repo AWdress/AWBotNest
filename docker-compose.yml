@@ -27,8 +27,6 @@ services:
     ports:
       - '18001:18001'                 # Web 控制台（与 config.WEB_UI_PORT 对齐）
 
-    tty: true
-
   # ── 可选：MySQL（默认用 SQLite，不需要）──
   # mysql:
   # image: mysql:8.3.0
