@@ -82,7 +82,9 @@ def _make_token(data: dict) -> str:
 def login(username: str, password: str) -> str:
     """校验用户名+密码，返回令牌"""
     data = _ensure_default()
-    if (username or "").strip() != data["username"] or _hash_pwd(password or "", data["salt"]) != data["pwd_hash"]:
+    user_ok = hmac.compare_digest((username or "").strip(), data["username"])
+    pwd_ok = hmac.compare_digest(_hash_pwd(password or "", data["salt"]), data["pwd_hash"])
+    if not (user_ok and pwd_ok):
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     return _make_token(data)
 
@@ -90,7 +92,7 @@ def login(username: str, password: str) -> str:
 def change_credentials(old_password: str, new_username: str, new_password: str) -> None:
     """修改用户名/密码（需校验旧密码）。新密码留空则只改用户名。"""
     data = _ensure_default()
-    if _hash_pwd(old_password or "", data["salt"]) != data["pwd_hash"]:
+    if not hmac.compare_digest(_hash_pwd(old_password or "", data["salt"]), data["pwd_hash"]):
         raise HTTPException(status_code=403, detail="当前密码不正确")
     new_username = (new_username or "").strip() or data["username"]
     if new_password:

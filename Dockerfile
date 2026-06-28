@@ -58,6 +58,11 @@ COPY --from=frontend /webui/static ./webui/static
 # 运行时目录
 RUN mkdir -p logs sessions db_file/SQLite db_file/dbflag data/kv
 
+# 降权：创建非 root 用户运行，缩小插件(任意代码)被植入后的影响面
+RUN useradd -r -u 10001 -d /app awbot \
+    && chown -R awbot:awbot /app
+USER awbot
+
 # Web 控制台端口（与 config.WEB_UI_PORT 对齐，默认 18001）
 EXPOSE 18001
 

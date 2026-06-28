@@ -49,8 +49,10 @@ def _save_state(state: dict[str, Any]) -> None:
 # ──────────────────────────────────────────────
 def _safe_target(target: str) -> str:
     """校验下载目标相对路径，防路径穿越 / 覆盖模板辅助文件。非法则抛 ValueError。"""
+    import os as _os
     t = target.replace("\\", "/")
-    if t.startswith("/") or ".." in t.split("/") or t.startswith("_"):
+    if (t.startswith("/") or ".." in t.split("/") or t.startswith("_")
+            or _os.path.splitdrive(t)[0] or _os.path.isabs(t)):
         raise ValueError(f"非法目标路径: {target}")
     return t
 
@@ -171,9 +173,13 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
             if not files:
                 result["errors"].append(f"{pid}: 无可下载文件")
                 continue
+            # 先全部下载到内存，全部成功后再落盘——避免文件夹插件中途失败留半截文件
+            staged = []
             for f in files:
                 target = _safe_target(f["target"])
                 content = await github_import.fetch_file(f["download_url"], token)
+                staged.append((target, content))
+            for target, content in staged:
                 dest = PLUGINS_DIR / target
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 dest.write_bytes(content)
@@ -224,8 +230,15 @@ async def sync_once() -> dict[str, Any]:
             continue  # 只更新已安装的
         if not p.get("from_manifest"):
             continue  # 无版本信号不动
+        pid = p["id"]
+        prev = versions.get(pid)
+        # 关键：只有「确实从仓库下载过」(versions 里有记录) 的插件才自动更新。
+        # 本地上传 / 手动 GitHub 导入 / 与仓库撞 id 的本地插件没有版本记录，
+        # 绝不自动覆盖——否则用户的本地改动会被官方仓库同名插件静默冲掉。
+        if prev is None:
+            continue
         remote_ver = str(p.get("version") or "")
-        if remote_ver and versions.get(p["id"]) != remote_ver:
+        if remote_ver and prev != remote_ver:
             to_update.append(p)
 
     if to_update:

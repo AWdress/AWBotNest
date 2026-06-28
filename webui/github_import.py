@@ -73,8 +73,12 @@ def _headers(token: Optional[str]) -> dict:
 def parse_source(src: str) -> dict:
     """解析用户输入 → {kind, ...}"""
     src = src.strip()
-    if RAW_HOST in src and src.endswith(".py"):
-        return {"kind": "raw", "url": src}
+    # raw 链接：用 urlparse 精确校验 host == raw.githubusercontent.com，
+    # 防 https://raw.githubusercontent.com.evil.com/x.py 这类子串伪造 SSRF
+    if src.lower().startswith(("http://", "https://")) and src.endswith(".py"):
+        from urllib.parse import urlparse
+        if urlparse(src).hostname == RAW_HOST:
+            return {"kind": "raw", "url": src}
     # GitHub 网页 blob 文件链接：https://github.com/owner/repo/blob/<branch>/<path>
     # 用户常直接复制地址栏，转成 raw 链接（.py）或带子目录的 repo 形态
     mb = re.match(r"https?://github\.com/([^/]+)/([^/]+?)/blob/([^/]+)/(.+)$", src)
@@ -233,11 +237,20 @@ async def _list_dir_files(client, owner, repo, branch, dir_path, token) -> list[
 
 
 async def fetch_file(download_url: str, token: Optional[str] = None) -> bytes:
-    """下载单个文件内容"""
+    """下载单个文件内容。限制最大体积，防超大文件耗尽内存。"""
+    max_bytes = 8 * 1024 * 1024  # 单文件上限 8MB（插件源码足够）
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
-        r = await client.get(download_url, headers=_headers(token))
-        r.raise_for_status()
-        return r.content
+        async with client.stream("GET", download_url, headers=_headers(token)) as r:
+            r.raise_for_status()
+            cl = r.headers.get("content-length")
+            if cl and int(cl) > max_bytes:
+                raise ValueError(f"文件过大（{int(cl)} 字节，上限 {max_bytes}）")
+            chunks = bytearray()
+            async for chunk in r.aiter_bytes():
+                chunks.extend(chunk)
+                if len(chunks) > max_bytes:
+                    raise ValueError(f"文件超过大小上限 {max_bytes} 字节")
+            return bytes(chunks)
 
 
 async def resolve_files(plugin: dict, token: Optional[str] = None) -> list[dict]:

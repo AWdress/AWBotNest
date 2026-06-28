@@ -283,8 +283,9 @@ class PlatformContext:
                 user_apps = [a for a in user_apps if getattr(a, "name", None) in scope_sessions]
             clients.extend(user_apps)
         if target in ("bot", "both"):
-            if self._accounts.bot_app:
-                clients.append(self._accounts.bot_app)
+            bot = self._accounts.bot_app
+            if bot and getattr(bot, "is_connected", False):
+                clients.append(bot)
         return clients
 
     # ──────────────────────────────────────────────

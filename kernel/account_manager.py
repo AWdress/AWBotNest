@@ -104,6 +104,8 @@ class AccountManager:
                 if attempt < 3:
                     await asyncio.sleep(2 * attempt)
         if last_error is not None:
+            # 启动失败：清掉未连接的残留实例，避免插件 handler 被挂到死 client
+            self.bot_app = None
             raise RuntimeError(f"Bot App 无法启动: {last_error}")
 
     async def start_users(self) -> None:
