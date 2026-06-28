@@ -198,8 +198,12 @@ onMounted(() => {
           <span class="ver" v-if="version">
             v{{ version }}
             <a v-if="hasUpdate" :href="RELEASE_URL" target="_blank" rel="noopener"
-               class="update-badge" :title="`有新版本 v${latestVersion}，点击查看`">
-              新版 v{{ latestVersion }}
+               class="update-arrow" :title="`有新版本 v${latestVersion}，点击查看`">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 19V5M5 12l7-7 7 7" />
+              </svg>
+              <span class="ua-ver">v{{ latestVersion }}</span>
             </a>
           </span>
         </div>
@@ -316,14 +320,15 @@ onMounted(() => {
 .foot-row { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
 .footer-status { display: flex; align-items: center; gap: 8px; }
 .ver { color: var(--text-muted); font-size: 11px; font-family: monospace; display: inline-flex; align-items: center; gap: 6px; }
-.update-badge {
-  font-family: inherit; font-size: 10px; font-weight: 600; text-decoration: none;
-  padding: 1px 7px; border-radius: 10px; white-space: nowrap;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+.update-arrow {
+  display: inline-flex; align-items: center; gap: 3px; text-decoration: none;
+  color: var(--success); font-size: 10px; font-weight: 600;
   animation: update-pulse 2s ease-in-out infinite;
 }
-.update-badge:hover { opacity: 0.88; }
-@keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+.update-arrow svg { width: 13px; height: 13px; }
+.update-arrow:hover { opacity: 0.8; }
+.ua-ver { font-family: monospace; }
+@keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .logout-btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   width: 100%; padding: 9px; cursor: pointer;
