@@ -5,8 +5,8 @@
 # =============================================================================
 services:
   awbotnest:
-    build: .
-    image: awbotnest:latest
+    # 最终用户直接拉发布镜像；本地开发/自构建可改回 build: .
+    image: awdress/awbotnest:latest
     container_name: AWBotNest
     working_dir: /app
     restart: always
@@ -21,8 +21,6 @@ services:
 
     environment:
       - TZ=Asia/Shanghai
-      # 生产环境务必保持鉴权开启（不要设为 true）
-      - AWBOTNEST_DEV_NO_AUTH=false
       # 如需代理可在此设置
       # - http_proxy=http://host:port
       # - https_proxy=http://host:port
