@@ -45,6 +45,7 @@ class PluginMeta:
     file: str = ""            # 相对 plugins/ 的文件名
     enabled: bool = False     # 当前是否启用
     loaded: bool = False      # 当前是否已加载到运行时
+    accounts: list[str] = field(default_factory=list)  # 应用到哪些账号(session名)；空=全部用户账号
     error: Optional[str] = None  # 加载/解析错误信息（前端标红用）
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,6 +61,7 @@ class PluginRegistry:
         self._lock = threading.RLock()
         self._enabled_state: dict[str, bool] = {}
         self._config_state: dict[str, dict[str, Any]] = {}
+        self._account_scope: dict[str, list[str]] = {}  # 插件id -> [session名]，空/缺失=全部
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -72,20 +74,24 @@ class PluginRegistry:
         if not self.state_file.exists():
             self._enabled_state = {}
             self._config_state = {}
+            self._account_scope = {}
             return
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
             self._enabled_state = data.get("enabled", {})
             self._config_state = data.get("config", {})
+            self._account_scope = data.get("account_scope", {})
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("读取插件状态文件失败，将重置：%s", e)
             self._enabled_state = {}
             self._config_state = {}
+            self._account_scope = {}
 
     def _save_state(self) -> None:
         """写回磁盘"""
         try:
-            payload = {"enabled": self._enabled_state, "config": self._config_state}
+            payload = {"enabled": self._enabled_state, "config": self._config_state,
+                       "account_scope": self._account_scope}
             self.state_file.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -176,6 +182,7 @@ class PluginRegistry:
         )
         # 填充启用状态：已有记录优先，否则用 default_enabled
         meta.enabled = self._enabled_state.get(plugin_id, meta.default_enabled)
+        meta.accounts = list(self._account_scope.get(plugin_id, []))
         return meta
 
     @staticmethod
@@ -274,6 +281,20 @@ class PluginRegistry:
         with self._lock:
             return [pid for pid, on in self._enabled_state.items() if on]
 
+    def get_account_scope(self, plugin_id: str) -> list[str]:
+        """返回插件应用到的账号 session 列表；空列表表示全部用户账号。"""
+        with self._lock:
+            return list(self._account_scope.get(plugin_id, []))
+
+    def set_account_scope(self, plugin_id: str, sessions: list[str]) -> None:
+        """设置插件应用到的账号；空列表=全部用户账号（删除该记录）。"""
+        with self._lock:
+            if sessions:
+                self._account_scope[plugin_id] = list(sessions)
+            else:
+                self._account_scope.pop(plugin_id, None)
+            self._save_state()
+
     # ──────────────────────────────────────────────
     # 插件配置读写（对应 config_schema）
     # ──────────────────────────────────────────────
@@ -301,6 +322,7 @@ class PluginRegistry:
         with self._lock:
             self._enabled_state.pop(plugin_id, None)
             self._config_state.pop(plugin_id, None)
+            self._account_scope.pop(plugin_id, None)
             self._save_state()
 
 

@@ -292,3 +292,5 @@ async def setup(ctx):
 | 清理回调 | `ctx.add_cleanup(fn)` |
 
 `target`: `"user"` / `"bot"` / `"both"` / `"auto"`（按插件 scope 自动选择）。
+
+**多账号下的账号范围**：`scope=user`/`both` 的插件默认挂到**所有**已连接用户账号；用户可在插件卡片「账号」按钮里选择只应用到部分账号（前端 `PUT /api/plugins/<id>/accounts`，空数组=全部）。范围存于 `data/plugins_state.json` 的 `account_scope`，由 `ctx._resolve_targets` 按 client 的 session 名过滤。改动后自动重载重挂 handler。

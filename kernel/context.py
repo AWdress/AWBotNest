@@ -265,7 +265,8 @@ class PlatformContext:
         return wrapper
 
     def _resolve_targets(self, target: str) -> list[object]:
-        """根据 target / 插件 scope 决定把 handler 注册到哪些 client"""
+        """根据 target / 插件 scope 决定把 handler 注册到哪些 client。
+        user/both 插件会按「应用账号范围」过滤用户账号（空范围=全部）。"""
         meta = self._registry.get_meta(self.plugin_id)
         scope = meta.scope if meta else "user"
         if target == "auto":
@@ -273,7 +274,12 @@ class PlatformContext:
 
         clients: list[object] = []
         if target in ("user", "both"):
-            clients.extend(self._accounts.connected_user_apps)
+            user_apps = self._accounts.connected_user_apps
+            scope_sessions = self._registry.get_account_scope(self.plugin_id)
+            if scope_sessions:
+                # 仅挂到勾选的账号（按 session 名匹配）
+                user_apps = [a for a in user_apps if getattr(a, "name", None) in scope_sessions]
+            clients.extend(user_apps)
         if target in ("bot", "both"):
             if self._accounts.bot_app:
                 clients.append(self._accounts.bot_app)

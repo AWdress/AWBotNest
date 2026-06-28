@@ -264,6 +264,33 @@ async def set_plugin_config(plugin_id: str, values: Dict[str, Any], user=Depends
     return {"status": "success", "values": registry.get_config(plugin_id)}
 
 
+@app.get("/api/plugins/{plugin_id}/accounts")
+async def get_plugin_accounts(plugin_id: str, user=Depends(_auth)):
+    """读取插件的「应用账号范围」：可选账号列表 + 当前已选（空=全部用户账号）"""
+    meta = registry.get_meta(plugin_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    accounts = _get_accounts()
+    options = [{"session": a["session"], "name": a.get("name") or a["session"]}
+               for a in await accounts.list_accounts()]
+    return {"accounts": options, "selected": registry.get_account_scope(plugin_id), "scope": meta.scope}
+
+
+@app.put("/api/plugins/{plugin_id}/accounts")
+async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends(_auth)):
+    """设置插件应用到哪些账号（空数组=全部用户账号）；已加载则重载重挂 handler"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    sessions = body.get("sessions") or []
+    if not isinstance(sessions, list):
+        raise HTTPException(status_code=400, detail="sessions 必须是数组")
+    registry.set_account_scope(plugin_id, [str(x) for x in sessions])
+    runtime = _get_runtime()
+    if runtime.is_loaded(plugin_id):
+        await runtime.reload(plugin_id)
+    return {"status": "success", "selected": registry.get_account_scope(plugin_id)}
+
+
 # ──────────────────────────────────────────────
 # 账号管理 API
 # ──────────────────────────────────────────────

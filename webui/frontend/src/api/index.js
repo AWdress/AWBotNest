@@ -48,6 +48,8 @@ export const api = {
   deletePlugin: (id) => request('DELETE', `/api/plugins/${id}`),
   getPluginConfig: (id) => request('GET', `/api/plugins/${id}/config`),
   setPluginConfig: (id, values) => request('PUT', `/api/plugins/${id}/config`, values),
+  getPluginAccounts: (id) => request('GET', `/api/plugins/${id}/accounts`),
+  setPluginAccounts: (id, sessions) => request('PUT', `/api/plugins/${id}/accounts`, { sessions }),
 
   // GitHub 导入
   githubList: (source, token) => request('POST', '/api/plugins/github/list', { source, token }),

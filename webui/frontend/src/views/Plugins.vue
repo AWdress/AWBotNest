@@ -21,6 +21,14 @@ const configSchema = ref({})
 const configValues = ref({})
 const configSaving = ref(false)
 
+// 应用账号弹窗（多账号下按账号选择插件）
+const acctOpen = ref(false)
+const acctTarget = ref(null)
+const acctOptions = ref([])    // [{session,name}]
+const acctSelected = ref([])   // 勾选的 session
+const acctAllMode = ref(true)  // 应用到全部账号
+const acctSaving = ref(false)
+
 const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号' }
 
 async function load() {
@@ -102,6 +110,30 @@ async function saveConfig() {
   } finally {
     configSaving.value = false
   }
+}
+
+async function openAccounts(p) {
+  acctTarget.value = p
+  try {
+    const data = await api.getPluginAccounts(p.id)
+    acctOptions.value = data.accounts || []
+    acctSelected.value = [...(data.selected || [])]
+    acctAllMode.value = acctSelected.value.length === 0
+    acctOpen.value = true
+  } catch (e) { error.value = e.message }
+}
+function toggleAcct(session) {
+  const i = acctSelected.value.indexOf(session)
+  if (i >= 0) acctSelected.value.splice(i, 1)
+  else acctSelected.value.push(session)
+}
+async function saveAccounts() {
+  acctSaving.value = true
+  try {
+    const sessions = acctAllMode.value ? [] : acctSelected.value
+    await api.setPluginAccounts(acctTarget.value.id, sessions)
+    acctOpen.value = false
+  } catch (e) { error.value = e.message } finally { acctSaving.value = false }
 }
 
 function triggerUpload() { fileInput.value?.click() }
@@ -315,6 +347,8 @@ onMounted(() => { load(); loadStore(false) })
           <div class="card-actions">
             <button class="btn sm" @click="openConfig(p)"
                     :disabled="Object.keys(p.config_schema || {}).length === 0">配置</button>
+            <button class="btn sm" v-if="p.scope === 'user' || p.scope === 'both'"
+                    @click="openAccounts(p)">账号</button>
             <button class="btn sm" @click="reload(p)" :disabled="busy[p.id]">重载</button>
             <button class="btn sm btn-danger" @click="remove(p)" :disabled="busy[p.id]">删除</button>
           </div>
@@ -381,6 +415,41 @@ onMounted(() => { load(); loadStore(false) })
     </div>
 
     <!-- 设置仓库地址弹窗 -->
+    <!-- 应用账号弹窗 -->
+    <div v-if="acctOpen" class="modal-mask" @click.self="acctOpen=false">
+      <div class="modal card">
+        <div class="modal-head">
+          <h2>{{ acctTarget?.name }} · 应用账号</h2>
+          <span class="close" @click="acctOpen=false">×</span>
+        </div>
+        <div class="form">
+          <div class="hint muted">选择这个插件在哪些账号上生效。多账号时可让不同号开不同插件。</div>
+          <label class="acct-row">
+            <input type="radio" :checked="acctAllMode" @change="acctAllMode = true" />
+            <span>全部账号（默认）</span>
+          </label>
+          <label class="acct-row">
+            <input type="radio" :checked="!acctAllMode" @change="acctAllMode = false" />
+            <span>仅指定账号</span>
+          </label>
+          <div v-if="!acctAllMode" class="acct-list">
+            <div v-if="acctOptions.length === 0" class="muted small">还没有账号，去「账号管理」登录。</div>
+            <label v-for="a in acctOptions" :key="a.session" class="acct-item">
+              <input type="checkbox" :checked="acctSelected.includes(a.session)" @change="toggleAcct(a.session)" />
+              <span>{{ a.name }}</span>
+              <span class="muted mono small">{{ a.session }}</span>
+            </label>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" @click="acctOpen=false">取消</button>
+          <button class="btn btn-primary" @click="saveAccounts" :disabled="acctSaving">
+            {{ acctSaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div v-if="repoOpen" class="modal-mask" @click.self="repoOpen=false">
       <div class="modal card">
         <div class="modal-head">
@@ -524,4 +593,8 @@ onMounted(() => { load(); loadStore(false) })
 .repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .repo-row .input { flex: 1; }
 .repo-row .repo-token { max-width: 180px; flex: 0 0 auto; }
+.acct-row { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
+.acct-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
+.acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.acct-item .small { margin-left: auto; }
 </style>
