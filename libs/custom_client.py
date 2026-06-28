@@ -65,7 +65,11 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
                 last_error = e
                 err_msg = str(e).lower()
                 is_db_locked = "database is locked" in err_msg
-                logger.error(f"客户端启动失败（第 {attempt}/{max_start_retries} 次）: {e!r}", exc_info=True)
+                # 仅对可重试错误(数据库锁)打完整 traceback；其它(如缺凭据)由上层处理，简洁记录
+                logger.error(
+                    f"客户端启动失败（第 {attempt}/{max_start_retries} 次）: {e!r}",
+                    exc_info=is_db_locked,
+                )
                 await self._cleanup_session()
                 if is_db_locked and attempt < max_start_retries:
                     await asyncio.sleep(attempt)

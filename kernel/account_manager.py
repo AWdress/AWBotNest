@@ -85,7 +85,11 @@ class AccountManager:
     # 启动 / 停止
     # ──────────────────────────────────────────────
     async def start_bot(self) -> None:
-        """启动 Bot 账号（带重试）"""
+        """启动 Bot 账号（带重试）。未配置凭据时直接跳过，不进重试循环、不打 traceback。"""
+        import config.config as _cfg
+        _cfg.reload()
+        if not (getattr(_cfg, "API_ID", 0) and getattr(_cfg, "API_HASH", "") and getattr(_cfg, "BOT_TOKEN", "")):
+            raise RuntimeError("未配置 Telegram 凭据（API_ID/API_HASH/BOT_TOKEN），请在系统设置填写后重启")
         self.bot_app = self._build_bot_client()
         last_error = None
         for attempt in range(1, 4):
