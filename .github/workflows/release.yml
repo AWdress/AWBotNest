@@ -2,7 +2,7 @@
 # 版本发布（Release）
 # 触发：推送形如 v1.0.0 的 tag
 # 动作：
-# 1) 构建多阶段镜像，推送到 Docker Hub，打上版本号系列标签（vX.Y.Z / X.Y / latest）
+# 1) 构建多阶段镜像，推送到 Docker Hub，打上版本号系列标签（vX.Y.Z / latest）
 # 2) 创建 GitHub Release，自动生成更新日志（与上一个 tag 的提交差异）
 # =============================================================================
 name: release
@@ -42,8 +42,6 @@ jobs:
           tags: |
             # 完整版本号：v1.0.0
             type=semver,pattern=v{{version}}
-            # 主次版本：v1.0
-            type=semver,pattern=v{{major}}.{{minor}}
             # 发布即最新
             type=raw,value=latest
 

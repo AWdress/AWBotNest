@@ -1,7 +1,7 @@
 # =============================================================================
 # Docker 构建校验（CI）
 # - push 到 main：只构建镜像验证 Dockerfile 可用，【不推送】到 Docker Hub
-# - 镜像发布（vX.Y.Z / v X.Y / latest）只由 release.yml 在打 tag 时负责
+# - 镜像发布（vX.Y.Z / latest）只由 release.yml 在打 tag 时负责
 #   这样 Docker Hub 只有版本号标签 + latest，不会有一堆 sha- 标签。
 # =============================================================================
 name: docker-build
