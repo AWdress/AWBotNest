@@ -48,3 +48,9 @@ mysql/
 *.swp
 .DS_Store
 Thumbs.db
+
+# ── 临时文件 ──
+# CI 发布流程产生的 GitHub API 返回临时文件等
+rel_tmp.json
+*.tmp
+*_tmp.json
