@@ -179,12 +179,40 @@ onMounted(() => {
     <!-- 主区 -->
     <main class="main">
       <header class="topbar">
+        <img :src="logoWhite" class="topbar-logo" alt="" />
         <h1>{{ route.meta.title || '控制台' }}</h1>
+        <div class="topbar-actions">
+          <button class="icon-btn" @click="restart" :disabled="restarting" title="重启平台">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 4v6h-6M1 20v-6h6" />
+              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+            </svg>
+          </button>
+          <button class="icon-btn" @click="logout" title="退出登录">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
+            </svg>
+          </button>
+        </div>
       </header>
       <div class="content">
         <RouterView />
       </div>
     </main>
+
+    <!-- 手机底部标签栏（仅窄屏显示） -->
+    <nav class="tabbar">
+      <RouterLink v-for="item in nav" :key="item.to" :to="item.to"
+                  class="tab-item" :class="{ active: route.path === item.to }">
+        <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path :d="icons[item.icon]" />
+        </svg>
+        <span>{{ item.label }}</span>
+      </RouterLink>
+    </nav>
   </div>
 
   <!-- 全局确认弹窗 -->
@@ -283,4 +311,52 @@ onMounted(() => {
 }
 .topbar h1 { font-size: 18px; font-weight: 600; }
 .content { flex: 1; overflow-y: auto; padding: 32px; }
+
+/* 顶栏 logo / 操作按钮：默认(桌面)隐藏，手机显示 */
+.topbar-logo { display: none; width: 28px; height: 28px; object-fit: contain; }
+.topbar-actions { display: none; gap: 8px; margin-left: auto; }
+.icon-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 36px; height: 36px; border-radius: var(--radius-sm);
+  background: transparent; border: 1px solid var(--border-light);
+  color: var(--text-secondary); cursor: pointer;
+}
+.icon-btn svg { width: 18px; height: 18px; }
+.icon-btn:disabled { opacity: 0.5; }
+
+/* 手机底部标签栏：默认隐藏 */
+.tabbar { display: none; }
+
+/* ───────── 手机版（窄屏）───────── */
+@media (max-width: 768px) {
+  .layout { flex-direction: column; height: 100vh; height: 100dvh; }
+  /* 侧边栏隐藏，导航走底部标签栏 */
+  .sidebar { display: none; }
+  .main { flex: 1; min-height: 0; }
+  /* 顶栏:logo + 标题 + 右侧操作 */
+  .topbar {
+    height: 54px; padding: 0 16px; gap: 10px;
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg-sidebar);
+  }
+  .topbar-logo { display: block; }
+  .topbar h1 { font-size: 16px; }
+  .topbar-actions { display: flex; }
+  /* 内容区留出底部标签栏高度，避免被遮 */
+  .content { padding: 16px 14px calc(72px + env(safe-area-inset-bottom)); }
+  /* 底部标签栏 */
+  .tabbar {
+    display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
+    background: var(--bg-sidebar);
+    border-top: 1px solid var(--border);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .tab-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 9px 0 7px; color: var(--text-muted);
+    font-size: 11px; font-weight: 600; transition: color 0.15s;
+  }
+  .tab-item.active { color: var(--accent); }
+  .tab-icon { width: 22px; height: 22px; }
+}
 </style>
