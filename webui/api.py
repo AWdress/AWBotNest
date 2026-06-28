@@ -127,7 +127,9 @@ async def upload_plugin(file: UploadFile = File(...), user=Depends(_auth)):
 def _safe_target(target: str) -> str:
     """校验下载目标相对路径安全性（防路径穿越）"""
     t = target.replace("\\", "/")
-    if t.startswith("/") or ".." in t.split("/") or t.startswith("_"):
+    import os as _os
+    if (t.startswith("/") or ".." in t.split("/") or t.startswith("_")
+            or _os.path.splitdrive(t)[0] or _os.path.isabs(t)):
         raise HTTPException(status_code=400, detail=f"非法目标路径: {target}")
     return t
 
@@ -257,6 +259,8 @@ async def get_plugin_config(plugin_id: str, user=Depends(_auth)):
 @app.put("/api/plugins/{plugin_id}/config")
 async def set_plugin_config(plugin_id: str, values: Dict[str, Any], user=Depends(_auth)):
     """保存插件配置；若插件已加载则重载以生效"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
     registry.set_config(plugin_id, values)
     if runtime.is_loaded(plugin_id):
@@ -284,7 +288,11 @@ async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends
     sessions = body.get("sessions") or []
     if not isinstance(sessions, list):
         raise HTTPException(status_code=400, detail="sessions 必须是数组")
-    registry.set_account_scope(plugin_id, [str(x) for x in sessions])
+    # 只接受真实存在的用户账号 session，剔除不存在的，避免 scope 指向死 session 静默失效
+    accounts = _get_accounts()
+    valid = {a["session"] for a in await accounts.list_accounts()}
+    cleaned = [str(x) for x in sessions if str(x) in valid]
+    registry.set_account_scope(plugin_id, cleaned)
     runtime = _get_runtime()
     if runtime.is_loaded(plugin_id):
         await runtime.reload(plugin_id)
@@ -318,7 +326,9 @@ async def account_online(session_name: str, user=Depends(_auth)):
 async def account_offline(session_name: str, user=Depends(_auth)):
     """下线账号"""
     accounts = _get_accounts()
+    runtime = _get_runtime()
     await accounts.set_offline(session_name)
+    await runtime.resync()
     return {"status": "success"}
 
 
@@ -326,7 +336,9 @@ async def account_offline(session_name: str, user=Depends(_auth)):
 async def account_delete(session_name: str, user=Depends(_auth)):
     """彻底删除账号（停连接 + 删 session + 移出 config）"""
     accounts = _get_accounts()
+    runtime = _get_runtime()
     await accounts.remove_account(session_name)
+    await runtime.resync()
     return {"status": "success"}
 
 
@@ -389,8 +401,8 @@ _MASK = "********"
 def _mask(val: str) -> str:
     if not val:
         return ""
-    s = str(val)
-    return _MASK if len(s) <= 8 else s[:3] + _MASK + s[-2:]
+    # 敏感字段一律全打码，不回显任何明文片段
+    return _MASK
 
 
 @app.get("/api/settings")
@@ -610,10 +622,11 @@ async def logs_ws(ws: WebSocket):
         await ws.close(code=1008)  # Policy Violation
         return
     await ws.accept()
+    # 先取历史快照，再订阅：避免「快照」与「新增队列」之间的窗口造成重复推送
+    history = log_stream.recent_logs()
     q = log_stream.subscribe()
     try:
-        # 先发历史
-        for item in log_stream.recent_logs():
+        for item in history:
             await ws.send_json(item)
         # 再持续推送
         while True:

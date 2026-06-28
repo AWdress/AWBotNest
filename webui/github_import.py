@@ -51,6 +51,16 @@ def parse_source(src: str) -> dict:
     src = src.strip()
     if RAW_HOST in src and src.endswith(".py"):
         return {"kind": "raw", "url": src}
+    # GitHub 网页 blob 文件链接：https://github.com/owner/repo/blob/<branch>/<path>
+    # 用户常直接复制地址栏，转成 raw 链接（.py）或带子目录的 repo 形态
+    mb = re.match(r"https?://github\.com/([^/]+)/([^/]+?)/blob/([^/]+)/(.+)$", src)
+    if mb:
+        owner, repo, branch, path = mb.groups()
+        if path.endswith(".py"):
+            return {"kind": "raw", "url": _raw_url(owner, repo, branch, path)}
+        # 非 .py（如指向目录里的文件）→ 当作 repo + 子目录
+        subdir = path.rsplit("/", 1)[0] if "/" in path else ""
+        return {"kind": "repo", "owner": owner, "repo": repo, "branch": branch, "subdir": subdir}
     m = re.match(
         r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?(?:/tree/([^/]+)(?:/(.+))?)?/?$",
         src,

@@ -295,6 +295,24 @@ class PluginRegistry:
                 self._account_scope.pop(plugin_id, None)
             self._save_state()
 
+    def purge_account(self, session_name: str) -> list[str]:
+        """从所有插件的账号范围里移除某个 session（账号被删除时调用）。
+        返回受影响（范围发生变化）的插件 id 列表，供调用方决定是否 resync。"""
+        affected: list[str] = []
+        with self._lock:
+            for pid, sessions in list(self._account_scope.items()):
+                if session_name in sessions:
+                    rest = [x for x in sessions if x != session_name]
+                    if rest:
+                        self._account_scope[pid] = rest
+                    else:
+                        # 范围清空=回退到「全部账号」，删除该记录
+                        self._account_scope.pop(pid, None)
+                    affected.append(pid)
+            if affected:
+                self._save_state()
+        return affected
+
     # ──────────────────────────────────────────────
     # 插件配置读写（对应 config_schema）
     # ──────────────────────────────────────────────

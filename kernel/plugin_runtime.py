@@ -60,12 +60,14 @@ class PluginRuntime:
     # 加载（启用）
     # ──────────────────────────────────────────────
     async def enable(self, plugin_id: str) -> PluginMeta:
-        """
-        启用插件：导入文件 → setup → 登记。
-        返回更新后的 PluginMeta（含 loaded / error 状态）。
-        幂等：已加载则直接返回。
-        """
+        """启用插件（对外，自带锁）。"""
         async with self._lock:
+            return await self._enable_locked(plugin_id)
+
+    async def _enable_locked(self, plugin_id: str) -> PluginMeta:
+        """启用插件内部实现：调用方须已持有 self._lock。
+        导入文件 → setup → 登记；幂等：已加载则直接返回。"""
+        if True:
             meta = registry.get_meta(plugin_id)
             if meta is None:
                 raise FileNotFoundError(f"插件不存在: {plugin_id}")
@@ -119,11 +121,14 @@ class PluginRuntime:
     # 卸载（停用）
     # ──────────────────────────────────────────────
     async def disable(self, plugin_id: str) -> PluginMeta:
-        """
-        停用插件：注销所有 handler → teardown → 卸载模块。
-        幂等：未加载则只更新状态。
-        """
+        """停用插件（对外，自带锁）。"""
         async with self._lock:
+            return await self._disable_locked(plugin_id)
+
+    async def _disable_locked(self, plugin_id: str) -> PluginMeta:
+        """停用插件内部实现：调用方须已持有 self._lock。
+        注销所有 handler → teardown → 卸载模块；幂等。"""
+        if True:
             loaded = self._loaded.pop(plugin_id, None)
             if loaded is not None:
                 # 1) 注销所有 handler / 定时任务
@@ -151,9 +156,15 @@ class PluginRuntime:
     # 重载（改了插件文件后）
     # ──────────────────────────────────────────────
     async def reload(self, plugin_id: str) -> PluginMeta:
-        """先停用再启用，用于插件文件更新后刷新"""
-        await self.disable(plugin_id)
-        return await self.enable(plugin_id)
+        """先停用再启用，用于插件文件更新后刷新。整体持锁，保证原子。"""
+        async with self._lock:
+            was_enabled = registry.is_enabled(plugin_id)
+            await self._disable_locked(plugin_id)
+            meta = await self._enable_locked(plugin_id)
+            # reload 失败不应把原本启用的插件留在停用态：保留启用意图待重试
+            if was_enabled and plugin_id not in self._loaded:
+                registry.set_enabled(plugin_id, True)
+            return meta
 
     # ──────────────────────────────────────────────
     # 启动时按持久化状态恢复
@@ -179,19 +190,20 @@ class PluginRuntime:
         这些 handler 不在新 client 上。最简单可靠的做法是把已加载插件全部重挂一遍：
         disable 会从所有旧 client 注销，enable 会按「当前已连接」的 client 重新注册。
         """
-        ids = list(self._loaded.keys())
-        if not ids:
-            return
-        logger.info("账号状态变化，重新挂载 %d 个插件...", len(ids))
-        for plugin_id in ids:
-            await self.disable(plugin_id)
-            await self.enable(plugin_id)
-            # resync 只是「重挂 handler」，不应改变用户的启用意图：
-            # 若重挂时 enable 瞬时失败，disable 已把 enabled 持久化为 False，
-            # 这里强制恢复为 True（保留 error 可见），使重启后能重试，不会永久禁用。
-            if plugin_id not in self._loaded:
-                registry.set_enabled(plugin_id, True)
-                logger.warning("插件 [%s] 重挂失败，已保留启用意图待重试", plugin_id)
+        async with self._lock:
+            ids = list(self._loaded.keys())
+            if not ids:
+                return
+            logger.info("账号状态变化，重新挂载 %d 个插件...", len(ids))
+            for plugin_id in ids:
+                await self._disable_locked(plugin_id)
+                await self._enable_locked(plugin_id)
+                # resync 只是「重挂 handler」，不应改变用户的启用意图：
+                # 若重挂时 enable 瞬时失败，disable 已把 enabled 持久化为 False，
+                # 这里强制恢复为 True（保留 error 可见），使重启后能重试，不会永久禁用。
+                if plugin_id not in self._loaded:
+                    registry.set_enabled(plugin_id, True)
+                    logger.warning("插件 [%s] 重挂失败，已保留启用意图待重试", plugin_id)
 
     # ──────────────────────────────────────────────
     # 内部
