@@ -7,7 +7,6 @@ services:
   awbotnest:
     image: awdress/awbotnest:latest
     container_name: AWBotNest
-    working_dir: /app
     restart: always
 
     volumes:
