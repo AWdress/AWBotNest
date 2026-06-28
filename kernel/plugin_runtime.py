@@ -127,9 +127,11 @@ class PluginRuntime:
         async with self._lock:
             return await self._disable_locked(plugin_id)
 
-    async def _disable_locked(self, plugin_id: str) -> PluginMeta:
+    async def _disable_locked(self, plugin_id: str, persist: bool = True) -> PluginMeta:
         """停用插件内部实现：调用方须已持有 self._lock。
-        注销所有 handler → teardown → 卸载模块；幂等。"""
+        注销所有 handler → teardown → 卸载模块；幂等。
+        persist=True 时把 enabled 持久化为 False（用户显式停用）；
+        persist=False 仅运行态卸载，不动持久启用意图（进程退出/重挂场景）。"""
         if True:
             loaded = self._loaded.pop(plugin_id, None)
             if loaded is not None:
@@ -148,10 +150,11 @@ class PluginRuntime:
                 self._cleanup_module(plugin_id)
                 logger.info("插件已停用: %s", plugin_id)
 
-            registry.set_enabled(plugin_id, False)
+            if persist:
+                registry.set_enabled(plugin_id, False)
             meta = registry.get_meta(plugin_id) or PluginMeta(id=plugin_id, name=plugin_id)
             meta.loaded = False
-            meta.enabled = False
+            meta.enabled = registry.is_enabled(plugin_id)
             return meta
 
     # ──────────────────────────────────────────────
@@ -160,12 +163,9 @@ class PluginRuntime:
     async def reload(self, plugin_id: str) -> PluginMeta:
         """先停用再启用，用于插件文件更新后刷新。整体持锁，保证原子。"""
         async with self._lock:
-            was_enabled = registry.is_enabled(plugin_id)
-            await self._disable_locked(plugin_id)
+            # persist=False：reload 不是用户要停用，卸载不动持久启用意图
+            await self._disable_locked(plugin_id, persist=False)
             meta = await self._enable_locked(plugin_id)
-            # reload 失败不应把原本启用的插件留在停用态：保留启用意图待重试
-            if was_enabled and plugin_id not in self._loaded:
-                registry.set_enabled(plugin_id, True)
             return meta
 
     # ──────────────────────────────────────────────
@@ -180,9 +180,11 @@ class PluginRuntime:
         logger.info("插件恢复完成，已加载 %d 个", len(self._loaded))
 
     async def shutdown(self) -> None:
-        """停用所有已加载插件（进程退出时调用）"""
+        """停用所有已加载插件（进程退出时调用）。
+        仅运行态卸载，绝不持久化 enabled=False——否则重启/更新镜像后插件会全部变未启用。"""
         for plugin_id in list(self._loaded.keys()):
-            await self.disable(plugin_id)
+            async with self._lock:
+                await self._disable_locked(plugin_id, persist=False)
 
     async def resync(self) -> None:
         """
@@ -198,14 +200,11 @@ class PluginRuntime:
                 return
             logger.info("账号状态变化，重新挂载 %d 个插件...", len(ids))
             for plugin_id in ids:
-                await self._disable_locked(plugin_id)
+                # persist=False：重挂只是运行态操作，不动持久启用意图
+                await self._disable_locked(plugin_id, persist=False)
                 await self._enable_locked(plugin_id)
-                # resync 只是「重挂 handler」，不应改变用户的启用意图：
-                # 若重挂时 enable 瞬时失败，disable 已把 enabled 持久化为 False，
-                # 这里强制恢复为 True（保留 error 可见），使重启后能重试，不会永久禁用。
                 if plugin_id not in self._loaded:
-                    registry.set_enabled(plugin_id, True)
-                    logger.warning("插件 [%s] 重挂失败，已保留启用意图待重试", plugin_id)
+                    logger.warning("插件 [%s] 重挂失败，启用意图保留待重试", plugin_id)
 
     # ──────────────────────────────────────────────
     # 内部
