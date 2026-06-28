@@ -190,6 +190,17 @@ const storeAvailable = computed(() => store.value.filter((p) => !p.installed))
 const officialSet = computed(() => new Set(officialIds.value))
 function isOfficial(p) { return p.official || officialSet.value.has(p.id) }
 
+// 仓库来源只显示 owner/repo（去掉 https://github.com/、.git、/tree/分支/子目录 等）
+function shortRepo(url) {
+  if (!url) return ''
+  let s = String(url).trim()
+  s = s.replace(/^https?:\/\/(www\.)?github\.com\//i, '')  // 去协议+域名
+  s = s.replace(/^https?:\/\/[^/]+\//i, '')                 // 其它主机也去掉
+  s = s.replace(/\.git$/i, '')
+  const parts = s.split('/').filter(Boolean)
+  return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : s
+}
+
 async function loadStore(refresh = false) {
   storeBusy.value = true; storeErr.value = ''
   try {
@@ -382,7 +393,7 @@ onMounted(() => { load(); loadStore(false) })
           <p class="desc">{{ p.description || '（无描述）' }}</p>
           <div class="card-meta">
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
-            <span class="meta-item mono">{{ p.repo_url }}</span>
+            <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
           </div>
 
           <div class="card-actions">

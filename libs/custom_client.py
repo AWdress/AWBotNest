@@ -55,6 +55,10 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
                 self._session_invoke = self.session.invoke
                 self.session.invoke = self._custom_invoke
 
+                # 统计「插件出站动作」：包裹常用发送方法，
+                # 在当前 handler 归属的插件上记一次活跃（仅插件真正发消息/回复/编辑时）。
+                self._install_activity_hooks()
+
                 # 注册交互式 ask 处理器
                 self.add_handler(
                     MessageHandler(self._ask_handler, tg_filters.private),
@@ -78,6 +82,41 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
 
         if last_error:
             raise last_error
+
+    def _install_activity_hooks(self) -> None:
+        """包裹常用出站发送方法，调用时给「当前插件」记一次活跃。
+        覆盖 ctx.bot.send / ctx.user.send 与 message.reply/edit（它们内部都走这些方法）。
+        幂等：重复 start 不会重复包裹。"""
+        if getattr(self, "_activity_hooked", False):
+            return
+        self._activity_hooked = True
+        import functools
+        try:
+            from kernel import activity
+        except Exception:  # noqa: BLE001 - 无内核(裸用)时跳过
+            return
+
+        methods = [
+            "send_message", "send_photo", "send_document", "send_video",
+            "send_animation", "send_audio", "send_voice", "send_sticker",
+            "edit_message_text", "edit_message_caption", "send_media_group",
+        ]
+        for name in methods:
+            orig = getattr(self, name, None)
+            if orig is None or not callable(orig):
+                continue
+
+            def make(fn):
+                @functools.wraps(fn)
+                async def wrapped(*args, **kwargs):
+                    try:
+                        activity.record_current()
+                    except Exception:  # noqa: BLE001 - 统计绝不影响发送
+                        pass
+                    return await fn(*args, **kwargs)
+                return wrapped
+
+            setattr(self, name, make(orig))
 
     async def resolve_peer(self, peer_id: Union[int, str]):
         """

@@ -248,19 +248,21 @@ class PlatformContext:
         return decorator
 
     def _track(self, func: Callable) -> Callable:
-        """包一层：处理器每次被触发时记一次插件活跃（用于状态页时间线）。"""
+        """包一层：进入 handler 时把「当前插件」设进 contextvar，
+        使该 handler 内部的出站发送（send/reply/edit）能归属到本插件并计入活跃。
+        注意：不再对「每条收到的消息」计数——只统计插件真正发出的动作。"""
         import functools
 
         pid = self.plugin_id
 
         @functools.wraps(func)
         async def wrapper(client, update, *args, **kwargs):
+            from kernel import activity
+            token = activity.set_current(pid)
             try:
-                from kernel import activity
-                activity.record(pid)
-            except Exception:  # noqa: BLE001 - 统计失败绝不影响业务
-                pass
-            return await func(client, update, *args, **kwargs)
+                return await func(client, update, *args, **kwargs)
+            finally:
+                activity.reset_current(token)
 
         return wrapper
 

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 import threading
+import contextvars
 from pathlib import Path
 from collections import OrderedDict, Counter
 
@@ -25,6 +26,32 @@ _lock = threading.Lock()
 # bucket_start_epoch -> Counter(plugin_id -> count)
 _data: "OrderedDict[int, Counter]" = OrderedDict()
 _last_save = 0.0
+
+# 当前正在执行 handler 的插件 id（contextvar，随 async 任务上下文传播）。
+# 由 ctx._track 在进入插件 handler 前设置，使该 handler 内部的出站发送能归属到本插件。
+_current_plugin: "contextvars.ContextVar[str | None]" = contextvars.ContextVar(
+    "current_plugin", default=None
+)
+
+
+def set_current(plugin_id: str):
+    """进入插件 handler 前调用，返回 token 供 reset。"""
+    return _current_plugin.set(plugin_id)
+
+
+def reset_current(token) -> None:
+    try:
+        _current_plugin.reset(token)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def record_current(n: int = 1) -> None:
+    """记一次「当前插件的出站动作」（发消息/回复/编辑时调用）。无当前插件则忽略。"""
+    pid = _current_plugin.get()
+    if pid:
+        record(pid, n)
+
 
 
 def _bucket_of(ts: float) -> int:
