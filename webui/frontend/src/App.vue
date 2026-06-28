@@ -11,6 +11,9 @@ const route = useRoute()
 const router = useRouter()
 const online = ref(false)
 const version = ref('')
+const latestVersion = ref('')   // GitHub 最新发布版本
+const hasUpdate = ref(false)    // 是否有新版本
+const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
@@ -27,7 +30,38 @@ async function ping() {
     const s = await api.status()
     online.value = true
     version.value = s.version || ''
+    checkUpdate()
   } catch { online.value = false }
+}
+
+// 把 "v1.2.3"/"1.2.3" 转成可比较的数字数组
+function parseVer(v) {
+  return String(v).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0)
+}
+function isNewer(remote, local) {
+  const a = parseVer(remote), b = parseVer(local)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] || 0) > (b[i] || 0)) return true
+    if ((a[i] || 0) < (b[i] || 0)) return false
+  }
+  return false
+}
+
+// 查 GitHub 最新发布版本，与当前对比（失败静默，不影响使用）
+async function checkUpdate() {
+  if (!version.value) return
+  try {
+    const r = await fetch('https://api.github.com/repos/AWdress/AWBotNest/releases/latest', {
+      headers: { Accept: 'application/vnd.github+json' },
+    })
+    if (!r.ok) return
+    const data = await r.json()
+    const tag = data.tag_name || ''
+    if (tag) {
+      latestVersion.value = tag.replace(/^v/i, '')
+      hasUpdate.value = isNewer(latestVersion.value, version.value)
+    }
+  } catch { /* 离线/限流忽略 */ }
 }
 
 // 导航项：内联 SVG 图标 + 文字
@@ -89,7 +123,13 @@ onMounted(() => {
             <div class="status-dot" :class="{ online }"></div>
             <span class="muted">{{ online ? '平台在线' : '连接中…' }}</span>
           </div>
-          <span class="ver" v-if="version">v{{ version }}</span>
+          <span class="ver" v-if="version">
+            v{{ version }}
+            <a v-if="hasUpdate" :href="RELEASE_URL" target="_blank" rel="noopener"
+               class="update-badge" :title="`有新版本 v${latestVersion}，点击查看`">
+              新版 v{{ latestVersion }}
+            </a>
+          </span>
         </div>
         <button class="logout-btn" @click="logout">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -167,7 +207,15 @@ onMounted(() => {
 }
 .foot-row { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
 .footer-status { display: flex; align-items: center; gap: 8px; }
-.ver { color: var(--text-muted); font-size: 11px; font-family: monospace; }
+.ver { color: var(--text-muted); font-size: 11px; font-family: monospace; display: inline-flex; align-items: center; gap: 6px; }
+.update-badge {
+  font-family: inherit; font-size: 10px; font-weight: 600; text-decoration: none;
+  padding: 1px 7px; border-radius: 10px; white-space: nowrap;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+  animation: update-pulse 2s ease-in-out infinite;
+}
+.update-badge:hover { opacity: 0.88; }
+@keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
 .logout-btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   width: 100%; padding: 9px; cursor: pointer;

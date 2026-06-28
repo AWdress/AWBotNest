@@ -57,11 +57,31 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: 从 CHANGELOG 提取本版本更新日志
+        id: changelog
+        run: |
+          VER="${{ github.ref_name }}"           # 形如 v1.0.0
+          # 提取 CHANGELOG.md 中 "## v1.0.0" 到下一个 "## " 之间的内容
+          NOTES=$(awk -v ver="## $VER" '
+            $0 == ver {flag=1; next}
+            /^## / && flag {flag=0}
+            flag {print}
+          ' CHANGELOG.md)
+          if [ -z "$NOTES" ]; then
+            NOTES="（本版本未在 CHANGELOG.md 中找到对应条目）"
+          fi
+          # 写入多行输出
+          {
+            echo "notes<<__EOF__"
+            echo "$NOTES"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
+
       - name: 创建 GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          generate_release_notes: true     # 自动汇总自上个 tag 以来的提交/PR
+          generate_release_notes: true     # 末尾追加自动汇总的提交/PR 记录
           draft: false
           prerelease: false
           body: |
@@ -75,4 +95,4 @@ jobs:
             ```
 
             ### 更新内容
-            （以下为自动生成的提交记录）
+            ${{ steps.changelog.outputs.notes }}
