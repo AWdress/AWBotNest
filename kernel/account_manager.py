@@ -160,7 +160,10 @@ class AccountManager:
         clean_corrupted_sessions(str(self.workdir))
         await asyncio.sleep(1)  # 给上次异常退出的 SQLite 锁释放留时间
 
-        await self.start_bot()
+        try:
+            await self.start_bot()
+        except RuntimeError as e:
+            logger.warning("Bot 启动跳过（可在 WebUI 配置凭据后重启）: %s", e)
         await self.start_users()
 
         # 同步到全局 manager，保持旧代码（services/adapters）可用
