@@ -5,7 +5,10 @@
 
 # --- Telegram 框架 ---
 kurigram==2.2.22
-tgcrypto==1.2.5; sys_platform != 'win32'
+# 加密加速（kurigram 的可选 fast extra）。原 tgcrypto==1.2.5 无 Python 3.13 的
+# Linux 预编译 wheel，会在无编译器的 slim 镜像里从源码编译失败；改用维护中的
+# 同名 drop-in 分叉 TgCrypto-pyrofork（提供 cp313 Linux wheel，import 名仍是 tgcrypto）。
+TgCrypto-pyrofork==1.2.8; sys_platform != 'win32'
 
 # --- 异步事件循环加速（非 Windows）---
 uvloop==0.21.0; sys_platform != 'win32'
