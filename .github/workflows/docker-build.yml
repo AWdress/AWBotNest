@@ -1,8 +1,8 @@
 # =============================================================================
-# Docker 构建与推送（CI）
-# - push 到 main：构建多阶段镜像并推送到 Docker Hub
-# - 手动触发（workflow_dispatch）亦可
-# 说明：版本发布（打 tag）的镜像由 release.yml 负责，这里只产出 main 镜像。
+# Docker 构建校验（CI）
+# - push 到 main：只构建镜像验证 Dockerfile 可用，【不推送】到 Docker Hub
+# - 镜像发布（vX.Y.Z / v X.Y / latest）只由 release.yml 在打 tag 时负责
+#   这样 Docker Hub 只有版本号标签 + latest，不会有一堆 sha- 标签。
 # =============================================================================
 name: docker-build
 
@@ -36,31 +36,12 @@ jobs:
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: 登录 Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_HUB_USERNAME }}
-          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-
-      - name: 生成镜像标签与元数据
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          # 镜像名 = Docker Hub 用户名/awbotnest（用户名与令牌均存于 Secrets）
-          images: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest
-          tags: |
-            # main 分支打 latest
-            type=raw,value=latest,enable={{is_default_branch}}
-            # 短 commit SHA，便于精确回滚
-            type=sha,format=short
-
-      - name: 构建并推送镜像
+      - name: 构建镜像（仅验证，不推送）
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          push: false
+          tags: awbotnest:ci
           # 用 GitHub Actions 缓存加速重复构建
           cache-from: type=gha
           cache-to: type=gha,mode=max
