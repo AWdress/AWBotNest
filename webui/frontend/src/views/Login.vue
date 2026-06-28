@@ -10,10 +10,12 @@ const pwd = ref('')
 const err = ref('')
 const busy = ref(false)
 const loading = ref(true)
+const version = ref('')
 
 onMounted(async () => {
   try {
     const st = await api.authStatus()
+    version.value = st.version || ''
     if (st.dev_no_auth) { emit('authed'); return }
   } catch (e) { /* 网络异常也展示登录页 */ }
   finally { loading.value = false }
@@ -57,7 +59,7 @@ async function submit() {
         {{ busy ? '登录中…' : '登 录' }}
       </button>
 
-      <div class="lc-hint">默认账号 admin / password，登录后可在「系统设置」修改</div>
+      <div class="lc-hint">© 2026 AWBotNest<span v-if="version"> · v{{ version }}</span></div>
     </div>
   </div>
 </template>

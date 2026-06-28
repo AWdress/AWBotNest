@@ -332,7 +332,7 @@ const donut = computed(() => {
 .bar-seg { width: 100%; }
 .bars-axis { display: flex; gap: 3px; margin-top: 6px; }
 .axis-tick { flex: 1; font-size: 10px; color: var(--text-muted); text-align: left; white-space: nowrap; }
-.legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; max-height: 88px; overflow-y: auto; }
 .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
 .dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
 
@@ -348,8 +348,8 @@ const donut = computed(() => {
 }
 .donut-num { font-size: 24px; font-weight: 700; }
 .donut-cap { font-size: 11px; color: var(--text-muted); }
-.donut-legend { width: 100%; display: flex; flex-direction: column; gap: 8px; }
-.dl-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.donut-legend { width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 14px; max-height: 132px; overflow-y: auto; }
+.dl-row { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
 .dl-name { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl-pct { color: var(--text-primary); }
 

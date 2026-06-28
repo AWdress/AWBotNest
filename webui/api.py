@@ -37,7 +37,7 @@ PLUGINS_DIR = Path("plugins")
 @app.get("/api/auth/status")
 async def auth_status():
     """前端启动时调用：是否免鉴权"""
-    return {"dev_no_auth": _authmod.DEV_NO_AUTH, "username": _authmod.get_username()}
+    return {"dev_no_auth": _authmod.DEV_NO_AUTH, "username": _authmod.get_username(), "version": APP_VERSION}
 
 
 @app.post("/api/auth/login")

@@ -19,6 +19,8 @@ import hashlib
 import secrets
 from pathlib import Path
 
+from libs.log import logger
+
 from fastapi import HTTPException, Header
 
 _AUTH_FILE = Path("data") / "auth.json"   # {"username","salt","pwd_hash","secret"}
@@ -60,6 +62,10 @@ def _ensure_default() -> dict:
             "secret": secrets.token_hex(32),
         }
         _save(data)
+        logger.warning(
+            "已生成默认控制台账号：用户名=%s 密码=%s（请登录后在「系统设置」尽快修改）",
+            DEFAULT_USERNAME, DEFAULT_PASSWORD,
+        )
     return data
 
 
