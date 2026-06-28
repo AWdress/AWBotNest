@@ -33,9 +33,8 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai
 
 # 系统依赖：ddddocr(onnxruntime/opencv 需 libgl/libglib)、wkhtmltopdf(imgkit)、CJK 字体、mysql 客户端
-# gosu：入口脚本用它从 root 降权到 awbot
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget ca-certificates curl gosu \
+    wget ca-certificates curl \
     libgl1 libglib2.0-0 libgomp1 \
     fontconfig libfontconfig1 libfreetype6 \
     libx11-6 libxext6 libxrender1 \
@@ -59,19 +58,10 @@ COPY --from=frontend /webui/static ./webui/static
 # 运行时目录
 RUN mkdir -p logs sessions db_file/SQLite db_file/dbflag data/kv
 
-# 创建非 root 用户 awbot；入口脚本会在运行时把进程降权到它。
-#   注意：不在此处 USER awbot。bind-mount 进来的宿主目录属主会覆盖镜像里的
-#   chown，挂载点权限只能在容器启动后(运行时)修正，因此容器以 root 启动，
-#   由 docker-entrypoint.sh 先 chown 挂载目录、再 gosu 降权到 awbot 运行 python。
-RUN useradd -r -u 10001 -d /app awbot \
-    && chown -R awbot:awbot /app
-
-# 入口脚本：修正挂载目录属主后降权运行
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+# 以 root 运行：bind-mount 进来的宿主目录(logs/sessions/db_file/data/plugins)
+# 属主通常是 root，降权用户无写权限会崩溃，故直接以 root 运行容器。
 
 # Web 控制台端口（与 config.WEB_UI_PORT 对齐，默认 18001）
 EXPOSE 18001
 
-ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["python", "main.py"]
