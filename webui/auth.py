@@ -112,6 +112,14 @@ def _verify_token(token: str) -> bool:
     return hmac.compare_digest(token, _make_token(data))
 
 
+def is_default_password() -> bool:
+    """当前密码是否仍是出厂默认 password（用当前 salt 比对默认口令哈希）。"""
+    data = _load()
+    if not data.get("pwd_hash") or not data.get("salt"):
+        return True
+    return hmac.compare_digest(_hash_pwd(DEFAULT_PASSWORD, data["salt"]), data["pwd_hash"])
+
+
 async def require_auth(authorization: str = Header(default="")):
     """FastAPI 依赖：校验 Bearer 令牌。DEV_NO_AUTH 时放行。"""
     if DEV_NO_AUTH:
@@ -121,4 +129,21 @@ async def require_auth(authorization: str = Header(default="")):
         token = authorization[7:].strip()
     if not _verify_token(token):
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    return {"auth": True}
+
+
+async def require_password_changed(authorization: str = Header(default="")):
+    """更严格的依赖：在 require_auth 基础上，若仍是默认密码则拒绝。
+    用于高危写操作（上传/导入/启用/配置/设置），强制首次改密后才能用。
+    DEV_NO_AUTH 时仍放行（本地开发）。"""
+    if DEV_NO_AUTH:
+        return {"dev": True}
+    token = ""
+    if authorization.lower().startswith("bearer "):
+        token = authorization[7:].strip()
+    if not _verify_token(token):
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    if is_default_password():
+        # 428 Precondition Required：前端据此引导强制改密
+        raise HTTPException(status_code=428, detail="请先修改默认密码后再操作")
     return {"auth": True}

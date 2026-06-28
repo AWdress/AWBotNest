@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from core import config, logger
 from webui import auth as _authmod
 from webui.auth import require_auth as _auth
+from webui.auth import require_password_changed as _auth_pwc
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
@@ -37,7 +38,8 @@ PLUGINS_DIR = Path("plugins")
 @app.get("/api/auth/status")
 async def auth_status():
     """前端启动时调用：是否免鉴权"""
-    return {"dev_no_auth": _authmod.DEV_NO_AUTH, "username": _authmod.get_username(), "version": APP_VERSION}
+    return {"dev_no_auth": _authmod.DEV_NO_AUTH, "username": _authmod.get_username(),
+            "version": APP_VERSION, "must_change_password": _authmod.is_default_password()}
 
 
 @app.post("/api/auth/login")
@@ -127,7 +129,7 @@ async def list_plugins(user=Depends(_auth)):
 
 
 @app.post("/api/plugins/upload")
-async def upload_plugin(file: UploadFile = File(...), user=Depends(_auth)):
+async def upload_plugin(file: UploadFile = File(...), user=Depends(_auth_pwc)):
     """
     上传插件 .py 文件。仅落盘 + 静态校验元数据，不自动启用。
     """
@@ -185,7 +187,7 @@ async def github_list(body: Dict[str, Any], user=Depends(_auth)):
 
 
 @app.post("/api/plugins/github/import")
-async def github_import_files(body: Dict[str, Any], user=Depends(_auth)):
+async def github_import_files(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """
     下载并保存选定插件。body: {plugins: [<list返回的plugin对象>], token?}
     单文件与文件夹插件都支持；仅落盘 + 静态校验，不自动启用。
@@ -227,7 +229,7 @@ async def github_import_files(body: Dict[str, Any], user=Depends(_auth)):
 
 
 @app.post("/api/plugins/{plugin_id}/enable")
-async def enable_plugin(plugin_id: str, user=Depends(_auth)):
+async def enable_plugin(plugin_id: str, user=Depends(_auth_pwc)):
     """启用插件（热加载）"""
     runtime = _get_runtime()
     meta = await runtime.enable(plugin_id)
@@ -245,7 +247,7 @@ async def disable_plugin(plugin_id: str, user=Depends(_auth)):
 
 
 @app.post("/api/plugins/{plugin_id}/reload")
-async def reload_plugin(plugin_id: str, user=Depends(_auth)):
+async def reload_plugin(plugin_id: str, user=Depends(_auth_pwc)):
     """重载插件（改文件后刷新）"""
     runtime = _get_runtime()
     meta = await runtime.reload(plugin_id)
@@ -284,7 +286,7 @@ async def get_plugin_config(plugin_id: str, user=Depends(_auth)):
 
 
 @app.put("/api/plugins/{plugin_id}/config")
-async def set_plugin_config(plugin_id: str, values: Dict[str, Any], user=Depends(_auth)):
+async def set_plugin_config(plugin_id: str, values: Dict[str, Any], user=Depends(_auth_pwc)):
     """保存插件配置；若插件已加载则重载以生效"""
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
@@ -308,7 +310,7 @@ async def get_plugin_accounts(plugin_id: str, user=Depends(_auth)):
 
 
 @app.put("/api/plugins/{plugin_id}/accounts")
-async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends(_auth)):
+async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends(_auth_pwc)):
     """设置插件应用到哪些账号（空数组=全部用户账号）；已加载则重载重挂 handler"""
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
@@ -463,7 +465,7 @@ async def get_settings_api(user=Depends(_auth)):
 
 
 @app.put("/api/settings")
-async def put_settings_api(body: Dict[str, Any], user=Depends(_auth)):
+async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """
     保存平台设置到 config.json。打码值（未改动）保留原值。
     敏感凭据变更需重启平台生效，返回 restart_required。
@@ -514,7 +516,7 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth)):
 
 
 @app.post("/api/system/restart")
-async def restart_platform(user=Depends(_auth)):
+async def restart_platform(user=Depends(_auth_pwc)):
     """重启平台。容器(restart:always)下进程退出会被自动拉起；
     裸跑需外部进程守护(systemd/supervisor)才能自动重启。"""
     import asyncio as _aio
@@ -540,7 +542,7 @@ async def plugin_store(refresh: bool = True, user=Depends(_auth)):
 
 
 @app.post("/api/plugins/store/download")
-async def plugin_store_download(body: Dict[str, Any], user=Depends(_auth)):
+async def plugin_store_download(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """下载选定插件到本地（不启用）。body: {plugins: [<商店列表里的插件对象>]}。"""
     from webui import repo_sync
     plugins = body.get("plugins") or []

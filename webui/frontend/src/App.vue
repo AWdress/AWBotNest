@@ -19,8 +19,38 @@ const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
-function onAuthed() { authed.value = true; ping() }
-function logout() { setToken(''); authed.value = false }
+const mustChangePwd = ref(false)   // 仍是默认密码：强制改密后才放进主界面
+const npwd = ref('')
+const npwd2 = ref('')
+const pwdBusy = ref(false)
+const pwdErr = ref('')
+
+async function onAuthed() {
+  authed.value = true
+  try {
+    const st = await api.authStatus()
+    mustChangePwd.value = !!st.must_change_password
+  } catch { /* ignore */ }
+  ping()
+}
+function logout() { setToken(''); authed.value = false; mustChangePwd.value = false }
+
+async function submitNewPwd() {
+  pwdErr.value = ''
+  if (!npwd.value || npwd.value.length < 4) { pwdErr.value = '新密码至少 4 位'; return }
+  if (npwd.value !== npwd2.value) { pwdErr.value = '两次输入不一致'; return }
+  pwdBusy.value = true
+  try {
+    // 首次强制改密：旧密码就是默认 password，用户名保持不变
+    await api.changeCredentials('password', '', npwd.value)
+    // 改密后令牌失效，需重新登录
+    setToken('')
+    mustChangePwd.value = false
+    authed.value = false
+    toast.success('密码已修改，请用新密码重新登录')
+  } catch (e) { pwdErr.value = e.message }
+  finally { pwdBusy.value = false }
+}
 
 const restarting = ref(false)
 async function restart() {
@@ -116,6 +146,21 @@ onMounted(() => {
 
 <template>
   <Login v-if="!authed" @authed="onAuthed" />
+
+  <!-- 强制首次改密：仍是默认密码时，必须改密才能进主界面 -->
+  <div v-else-if="mustChangePwd" class="force-bg">
+    <div class="force-card">
+      <img :src="logoWhite" class="force-logo" alt="" />
+      <div class="force-title">首次使用，请修改默认密码</div>
+      <div class="force-sub">为安全起见，必须先设置新密码才能使用控制台。</div>
+      <div v-if="pwdErr" class="force-alert">{{ pwdErr }}</div>
+      <input class="force-input" type="password" v-model="npwd" placeholder="新密码（至少 4 位）" @keyup.enter="submitNewPwd" />
+      <input class="force-input" type="password" v-model="npwd2" placeholder="再次输入新密码" @keyup.enter="submitNewPwd" />
+      <button class="force-btn" @click="submitNewPwd" :disabled="pwdBusy">{{ pwdBusy ? '提交中…' : '设置新密码' }}</button>
+      <div class="force-foot" @click="logout">退出登录</div>
+    </div>
+  </div>
+
   <div v-else class="layout">
     <!-- 侧边栏 -->
     <aside class="sidebar">
@@ -359,4 +404,24 @@ onMounted(() => {
   .tab-item.active { color: var(--accent); }
   .tab-icon { width: 22px; height: 22px; }
 }
+
+/* 强制首次改密界面 */
+.force-bg { height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(1200px 600px at 50% 0%, #0d1426 0%, #0a0e17 55%, #07090f 100%); }
+.force-card { width: 360px; max-width: 90vw; background: rgba(17,19,26,0.95);
+  border: 1px solid var(--border-light); border-radius: 16px; padding: 36px 32px;
+  display: flex; flex-direction: column; align-items: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
+.force-logo { width: 52px; height: 52px; object-fit: contain; margin-bottom: 14px; }
+.force-title { font-size: 18px; font-weight: 700; color: #fff; }
+.force-sub { font-size: 12px; color: var(--text-muted); margin: 8px 0 18px; text-align: center; }
+.force-alert { width: 100%; background: var(--danger-dim); color: var(--danger); padding: 8px 12px;
+  border-radius: 8px; font-size: 13px; margin-bottom: 12px; text-align: center; }
+.force-input { width: 100%; padding: 11px 14px; margin-bottom: 12px; font-size: 16px;
+  background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: 10px; color: var(--text-primary); }
+.force-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.force-btn { width: 100%; padding: 12px; cursor: pointer; background: linear-gradient(135deg,#3080f0,#2566d8);
+  color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; }
+.force-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.force-foot { margin-top: 16px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
+.force-foot:hover { color: var(--danger); }
 </style>
