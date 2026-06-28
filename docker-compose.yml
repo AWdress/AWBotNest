@@ -5,7 +5,6 @@
 # =============================================================================
 services:
   awbotnest:
-    # 最终用户直接拉发布镜像；本地开发/自构建可改回 build: .
     image: awdress/awbotnest:latest
     container_name: AWBotNest
     working_dir: /app
