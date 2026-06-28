@@ -288,6 +288,14 @@ class AccountManager:
 
         # 4) 清暂停标记
         _unpause_account(session_name, self.workdir)
+        # 清理该账号在所有插件里的「应用账号范围」，避免 scope 指向死 session
+        try:
+            from kernel.registry import registry
+            _aff = registry.purge_account(session_name)
+            if _aff:
+                logger.info("已从 %d 个插件的账号范围移除 [%s]", len(_aff), session_name)
+        except Exception as _e:  # noqa: BLE001
+            logger.warning("清理插件账号范围失败 [%s]: %r", session_name, _e)
         logger.info("账号 [%s] 已删除", session_name)
         return True
 
