@@ -1,0 +1,4 @@
+# Shell 脚本强制 LF：docker-entrypoint.sh 在 Windows 编辑后若被转成 CRLF，
+# Linux 下 `#!/bin/sh\r` 会被当成解释器路径的一部分，导致 "no such file"。
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf

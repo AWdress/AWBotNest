@@ -89,24 +89,34 @@ ch.addFilter(PyrogramErrorFilter())
 # 文件处理器
 # 使用 RotatingFileHandler，并强制 UTF-8 编码
 # 必须设 maxBytes 才会轮转（默认 0 = 永不轮转，backupCount 失效）
-fh = RotatingFileHandler(
-    log_file,
-    maxBytes=5 * 1024 * 1024,  # 单文件上限 5MB，超过滚动
-    backupCount=5,             # 最多保留 5 个历史文件
-    encoding="utf-8",          # 强制 UTF-8
-)
-fh.setFormatter(formatter)
-fh.addFilter(PyrogramErrorFilter())
-fh.addFilter(InfoAndAboveFilter())
+# 容错：文件不可写（如挂载目录权限问题）时退回纯控制台，不让日志拖垮整个应用
+fh = None
+try:
+    fh = RotatingFileHandler(
+        log_file,
+        maxBytes=5 * 1024 * 1024,  # 单文件上限 5MB，超过滚动
+        backupCount=5,             # 最多保留 5 个历史文件
+        encoding="utf-8",          # 强制 UTF-8
+    )
+    fh.setFormatter(formatter)
+    fh.addFilter(PyrogramErrorFilter())
+    fh.addFilter(InfoAndAboveFilter())
+except OSError as e:
+    # 常见于 /app/logs 由 root 挂载、降权用户无写权限。
+    # 打到 stderr 提示，但保证程序继续以控制台日志运行。
+    print(f"[log] 文件日志不可用，退回控制台输出: {e}", file=sys.stderr)
+    fh = None
 
 # 检查是否已有处理器，避免重复添加
 if not logger.handlers:
     logger.addHandler(ch)
-    logger.addHandler(fh)
+    if fh is not None:
+        logger.addHandler(fh)
 
 if not error_logger.handlers:
     error_logger.addHandler(ch)
-    error_logger.addHandler(fh)
+    if fh is not None:
+        error_logger.addHandler(fh)
 
 
 def log_group_error(group_id, error_msg, extra_info=""):
