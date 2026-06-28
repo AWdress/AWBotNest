@@ -300,7 +300,7 @@ onMounted(() => { load(); loadStore(false) })
         </template>
         <template v-else>
           <span class="stats muted small" v-if="storeLastSync">上次刷新 {{ storeLastSync }}</span>
-          <button class="btn" @click="openRepos">⚙ 设置仓库地址</button>
+          <button class="btn" @click="openRepos">设置仓库地址</button>
           <button class="btn btn-primary" @click="loadStore(true)" :disabled="storeBusy">
             {{ storeBusy ? '刷新中…' : '刷新市场' }}
           </button>

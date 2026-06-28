@@ -10,7 +10,7 @@ class AiConversation(BaseModel):
     """AI 对话上下文"""
     chat_id: int
     messages: List[AiMessage] = Field(default_factory=list)
-    
+
     def add_message(self, role: str, content: str, max_history: int = 10):
         self.messages.append(AiMessage(role=role, content=content))
         # 裁剪历史记录，保留系统提示词和最近的对话

@@ -1,7 +1,7 @@
 # =============================================================================
 # AWBotNest 平台 docker-compose
-#   默认 SQLite（config.DB_INFO.dbset=SQLite），无需额外数据库容器。
-#   如需 MySQL，取消下方 mysql 服务注释，并把 config.py 的 DB_INFO 改为 mySQL。
+# 默认 SQLite（config.DB_INFO.dbset=SQLite），无需额外数据库容器。
+# 如需 MySQL，取消下方 mysql 服务注释，并把 config.py 的 DB_INFO 改为 mySQL。
 # =============================================================================
 services:
   awbotnest:
@@ -34,16 +34,16 @@ services:
 
   # ── 可选：MySQL（默认用 SQLite，不需要）──
   # mysql:
-  #   image: mysql:8.3.0
-  #   container_name: AWBotNest-mysql
-  #   restart: always
-  #   volumes:
-  #     - ./mysql:/var/lib/mysql
-  #   environment:
-  #     - TZ=Asia/Shanghai
-  #     - MYSQL_DATABASE=tgbot
-  #     - MYSQL_USER=awbotnest
-  #     - MYSQL_PASSWORD=change_me
-  #     - MYSQL_ROOT_PASSWORD=change_me_root
-  #   ports:
-  #     - '33306:3306'
+  # image: mysql:8.3.0
+  # container_name: AWBotNest-mysql
+  # restart: always
+  # volumes:
+  # - ./mysql:/var/lib/mysql
+  # environment:
+  # - TZ=Asia/Shanghai
+  # - MYSQL_DATABASE=tgbot
+  # - MYSQL_USER=awbotnest
+  # - MYSQL_PASSWORD=change_me
+  # - MYSQL_ROOT_PASSWORD=change_me_root
+  # ports:
+  # - '33306:3306'

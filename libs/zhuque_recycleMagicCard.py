@@ -25,9 +25,9 @@ card_counts = {k: 0 for k in prizes2.keys()}
 re_number = 0
 re_card_id = 4
 
-async def recycleMagicCard(card_id,number):    
+async def recycleMagicCard(card_id,number):
     async with aiohttp.ClientSession() as session:
-        tasks = []  
+        tasks = []
         share = 4
         base_value = number // share
         remainder = number % share
@@ -36,7 +36,7 @@ async def recycleMagicCard(card_id,number):
             numbers[i] += 1
         for i in range(share):
             tasks.append(fetch_prize(card_id,numbers[i],session))
-        #  并发执行所有协程
+        # 并发执行所有协程
         await asyncio.gather(*tasks)
 
 async def fetch_prize(card_id,number,session):
@@ -54,8 +54,8 @@ async def fetch_prize(card_id,number,session):
         async with session.post(url, headers=headers,json={"id":card_id}) as response:
             if response.status == 200:
                 json_response = await response.json()
-                if json_response:                    
-                    code_commade = json_response.get("code", {})                    
+                if json_response:
+                    code_commade = json_response.get("code", {})
                     if code_commade:
                         async with lock:
                             card_counts[card_id] += 1
@@ -66,15 +66,15 @@ async def fetch_prize(card_id,number,session):
                 return None
 
 # 主函数
-async def main(card_id,number): 
+async def main(card_id,number):
     global cost
     global card_counts
     await recycleMagicCard(card_id,number)
     bonus_back = BONUS_VALUES[card_id] * int(number) * 0.8
-    
+
     re_msg = f"已成功回收 ：\n  {prizes2[card_id]}: {card_counts[card_id]} 张 \n    获得 {bonus_back:,.2f} 灵石 "
     card_counts_re = card_counts
-    card_counts = {k: 0 for k in prizes2.keys()} 
+    card_counts = {k: 0 for k in prizes2.keys()}
     return re_msg
 
 
@@ -82,4 +82,3 @@ async def main(card_id,number):
 if __name__ == "__main__":
     asyncio.run(main(re_card_id,re_number))
 
-  

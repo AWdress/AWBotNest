@@ -25,13 +25,13 @@ class InvokeMixin:
                 return None
         except Exception:
             pass
-        
+
         retries = 0
         while retries < self._invoke_retries:
             async with self._pool_semaphore:
                 try:
                     return await self._session_invoke(query, *args, **kwargs)
-                
+
                 except FloodWait as e:
                     await asyncio.sleep(e.value)
                     retries += 1
@@ -45,7 +45,7 @@ class InvokeMixin:
                 except RPCError as e:
                     if await self._handle_rpc_error(query, e):
                         return None # 错误已处理（如已拉黑），不再重试
-                    
+
                     await asyncio.sleep(1)
                     retries += 1
 
@@ -61,7 +61,7 @@ class InvokeMixin:
                         return None
                     await asyncio.sleep(1)
                     retries += 1
-        
+
         return None
 
     def _extract_peer_id(self, query):
@@ -83,12 +83,12 @@ class InvokeMixin:
         """返回 True 表示错误已处理且无需重试"""
         msg = str(e)
         extracted_id = self._extract_id_from_exception(e)
-        
+
         if "CHANNEL_INVALID" in msg or "CHANNEL_PRIVATE" in msg:
             if extracted_id: self._add_invalid_peer(extracted_id)
             return True
-        
+
         if any(x in msg for x in ["STICKERSET_INVALID", "MESSAGE_IDS_EMPTY", "MESSAGE_NOT_FOUND", "MESSAGE_ID_INVALID"]):
             return True
-            
+
         return False

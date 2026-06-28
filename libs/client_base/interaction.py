@@ -14,9 +14,9 @@ class InteractionMixin:
         self._waiting_for_answers = {}  # {chat_id: list[Future]}
 
     async def ask(
-        self, 
-        chat_id: Union[int, str], 
-        text: str, 
+        self,
+        chat_id: Union[int, str],
+        text: str,
         reply_markup: Union[InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove, ForceReply] = None,
         timeout: int = 120
     ) -> Optional[Message]:
@@ -24,14 +24,14 @@ class InteractionMixin:
         发送消息并等待用户的下一次回复。
         """
         await self.send_message(chat_id, text, reply_markup=reply_markup)
-        
+
         # 统一将 chat_id 转为 int 处理，确保匹配
         key = int(chat_id) if isinstance(chat_id, (int, str)) and str(chat_id).replace("-", "").isdigit() else chat_id
-        
+
         future = asyncio.get_event_loop().create_future()
         wait_queue = self._waiting_for_answers.setdefault(key, [])
         wait_queue.append(future)
-        
+
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
@@ -63,5 +63,5 @@ class InteractionMixin:
                 return # 拦截，不传播给其他插件
             if wait_queue == []:
                 self._waiting_for_answers.pop(chat_id, None)
-        
+
         return

@@ -105,11 +105,11 @@ async def zhuque_autofire():
                 f"释放成功：共得 {total_bonus} 灵石，下次时间：{next_time.isoformat()}"
             )
             await get_container().redpocket_record_service().record(SITE_NAME, "firegenshin", total_bonus)
-            await bot_app.send_message(PT_GROUP_ID["BOT_MESSAGE_CHAT"], f"{now.replace(microsecond=0)} {SITE_NAME} 释放获得 {total_bonus} {BONUS_NAME} " )            
-            
+            await bot_app.send_message(PT_GROUP_ID["BOT_MESSAGE_CHAT"], f"{now.replace(microsecond=0)} {SITE_NAME} 释放获得 {total_bonus} {BONUS_NAME} " )
+
         else:
             next_time = now + timedelta(minutes=20)  # 适度增加重试间隔
-            logger.warning(f"释放失败或无奖励，20分钟后重试：{next_time.isoformat()}")                     
+            logger.warning(f"释放失败或无奖励，20分钟后重试：{next_time.isoformat()}")
         scheduler.add_job(
             zhuque_autofire,
             "date",

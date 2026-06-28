@@ -18,12 +18,12 @@ from libs.log import logger
 
 
 MEDAL_EMOJIS = {
-    1: "🥇",
-    2: "🥈",
-    3: "🥉"
+    1: "",
+    2: "",
+    3: ""
 }
 
-MEDAL_EMOJI_OTHERS = "🪙"
+MEDAL_EMOJI_OTHERS = ""
 
 
 class ImgkitLeaderboardGenerator:
@@ -67,26 +67,26 @@ class ImgkitLeaderboardGenerator:
 
         website = entries[0].website
         bonus_name = entries[0].bonus_name or "点数"
-        
+
         # 构造表格行
         rows = ""
         table_title = "打赏" if direction != "pay" else "赏赐"
-        
+
         for e in entries:
             rank = e.rank
             # 内部类名，用于区分前三名
             rank_row_class = f"rank-{rank}" if rank <= 3 else "rank-normal"
-            
+
             display_uid = self._mask_tgid(e.user_id)
-            
+
             # 对过长的昵称进行截断处理
             display_name = e.user_name
             if not display_name or display_name.lower() in ["untitled", "none", "null"]:
                 display_name = f"用户{display_uid}"
-                
+
             if len(display_name) > 12:
                 display_name = display_name[:12] + "..."
-            
+
             rows += f"""
             <tr class="{rank_row_class}">
                 <td class="rank-cell"><span class="rank-num">{rank}</span></td>
@@ -100,16 +100,16 @@ class ImgkitLeaderboardGenerator:
             """
 
         html_str = self._get_html_template(website.upper(), table_title, bonus_name, rows, owner_name)
-        
+
         temp_dir = Path("temp_file/leaderboard")
         temp_dir.mkdir(parents=True, exist_ok=True)
         file_path = temp_dir / f"leaderboard_{uuid.uuid4().hex}.png"
-        
+
         try:
             # 渲染图片
             imgkit.from_string(
-                html_str, 
-                str(file_path), 
+                html_str,
+                str(file_path),
                 config=self._config,
                 options={
                     "format": "png",
@@ -164,7 +164,7 @@ class ImgkitLeaderboardGenerator:
                 }}
                 .title {{ font-size: 20px; font-weight: bold; margin-bottom: 4px; text-shadow: 1px 1px 2px rgba(0,0,0,0.3); }}
                 .subtitle {{ font-size: 13px; opacity: 0.9; letter-spacing: 1px; }}
-                
+
                 table {{
                     width: 100%;
                     border-collapse: collapse;
@@ -191,7 +191,7 @@ class ImgkitLeaderboardGenerator:
                     text-overflow: ellipsis;
                     white-space: nowrap;
                 }}
-                
+
                 .rank-cell {{ width: 50px; text-align: center; }}
                 .username-cell {{ width: 180px; }} /* 固定用户名宽度 */
                 .count-cell {{ width: 80px; text-align: center; }}
@@ -209,15 +209,15 @@ class ImgkitLeaderboardGenerator:
                     font-weight: bold;
                     font-size: 14px;
                 }}
-                
+
                 /* 前三名奖章配色 */
                 .rank-1 .rank-num {{ background: #FFD700; color: #856404; box-shadow: 0 0 5px rgba(255,215,0,0.4); }}
                 .rank-2 .rank-num {{ background: #C0C0C0; color: #383d41; }}
                 .rank-3 .rank-num {{ background: #CD7F32; color: #ffffff; }}
-                
-                .username {{ 
-                    font-weight: bold; 
-                    font-size: 15px; 
+
+                .username {{
+                    font-weight: bold;
+                    font-size: 15px;
                     color: #0366d6;
                     display: block;
                     width: 100%;
@@ -227,13 +227,13 @@ class ImgkitLeaderboardGenerator:
                 }}
                 .userid {{ font-weight: normal; color: #6a737d; font-size: 11px; }}
                 .count {{ font-size: 13px; color: #28a745; font-weight: bold; }}
-                .amount {{ 
-                    color: #d73a49; 
+                .amount {{
+                    color: #d73a49;
                     font-weight: bold;
                     font-size: 16px;
                     font-family: "Courier New", Courier, monospace;
                 }}
-                
+
                 .footer {{
                     padding: 12px;
                     background: #f8f9fa;
@@ -247,7 +247,7 @@ class ImgkitLeaderboardGenerator:
         <body>
             <div class="card">
                 <div class="header">
-                    <div class="title">🌟 {display_name} 的数据终端</div>
+                    <div class="title">{display_name} 的数据终端</div>
                     <div class="subtitle">>>> {site} {title}排行榜 TOP {count} <<<</div>
                 </div>
                 <table>
@@ -264,7 +264,7 @@ class ImgkitLeaderboardGenerator:
                     </tbody>
                 </table>
                 <div class="footer">
-                    📊 数据实时同步更新 · 祝您好运连连 ☘️
+                    数据实时同步更新 · 祝您好运连连
                 </div>
             </div>
         </body>

@@ -25,7 +25,7 @@ url = "https://zhuque.in/api/mall/listBackpack"
 
 
 async def listBackpack():
-        
+
     cookie = state_manager.get_item(SITE_NAME.upper(),"cookie","")
     xcsrf = state_manager.get_item(SITE_NAME.upper(),"xcsrf","")
 
@@ -42,7 +42,7 @@ async def listBackpack():
                     card_data = json_response.get("data", {})
                     for i in range(len(card_data)):
                         prize_index = card_data[i].get("card_id")
-                        card_amount = card_data[i].get("amount")                             
+                        card_amount = card_data[i].get("amount")
                         if prize_index is not None:
                             prize_index = int(prize_index)
                             card_counts[prize_index] = card_amount

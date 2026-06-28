@@ -22,10 +22,10 @@ scheduler_jobs = {
     "custom_auto_reply": custom_auto_reply_init,
 }
 
-async def start_scheduler():    
+async def start_scheduler():
     for job in (schedulers := state_manager.get_section("SCHEDULER", {})):
         logger.debug(f"Checking scheduler job: {job}")
-        
+
         # 处理自定义定时回复任务（格式：custom_auto_reply_任务ID）
         if job.startswith("custom_auto_reply_") and schedulers[job] == "on":
             task_id = job.replace("custom_auto_reply_", "")
@@ -35,7 +35,7 @@ async def start_scheduler():
                 await init_custom_auto_reply_task(task_id)
             except Exception as e:
                 logger.error(f"Failed to start custom auto reply task '{task_id}': {e}")
-        
+
         # 处理其他标准调度任务
         elif schedulers[job] == "on" and job in scheduler_jobs:
             logger.debug(f"Starting scheduler job: {job}")

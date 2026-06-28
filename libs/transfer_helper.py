@@ -103,7 +103,7 @@ async def do_transfer(
         if parts
         else (fu.username if fu and fu.username else str(user_id))
     )
-    
+
     # 额外保护：防止显示 Untitled 或空名字
     if not user_name or user_name.lower() in ["untitled", "none", "null"]:
         if fu and fu.username:

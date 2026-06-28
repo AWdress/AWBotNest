@@ -196,25 +196,25 @@ class YdxStock(Base):
 
     # @classmethod
     # async def init(cls):
-    #     # 获取Zhuqueydx表中最新记录的id
-    #     n = 2
-    #     base_value = 1000
-    #     async with async_session_maker() as session, session.begin():
-    #         stmt = select(Zhuqueydx).order_by(desc(Zhuqueydx.create_time))
-    #         result = (await session.execute(stmt)).scalar()
+    # # 获取Zhuqueydx表中最新记录的id
+    # n = 2
+    # base_value = 1000
+    # async with async_session_maker() as session, session.begin():
+    # stmt = select(Zhuqueydx).order_by(desc(Zhuqueydx.create_time))
+    # result = (await session.execute(stmt)).scalar()
 
-    #         cumulative_data = np.zeros_like(_data, dtype=float)
-    #         cumulative_data[0] = base_value + _data[0]
-    #         for i in range(1, len(_data)):
-    #             cumulative_data[i] = cumulative_data[i - 1] + _data[i]
-    #         num_windows = len(_data) // n
-    #         windows = cumulative_data[: num_windows * n].reshape(-1, n)
-    #         window_data = pd.DataFrame(
-    #             {
-    #                 "close": windows[:, -1],  # Last cumulative value in each window
-    #                 "high": np.max(windows, axis=1),  # Max in each window
-    #                 "low": np.min(windows, axis=1),  # Min in each window
-    #             }
-    #         )
-    #         macd = make_MACD(window_data)
-    #         kdj = make_KDJ(window_data)
+    # cumulative_data = np.zeros_like(_data, dtype=float)
+    # cumulative_data[0] = base_value + _data[0]
+    # for i in range(1, len(_data)):
+    # cumulative_data[i] = cumulative_data[i - 1] + _data[i]
+    # num_windows = len(_data) // n
+    # windows = cumulative_data[: num_windows * n].reshape(-1, n)
+    # window_data = pd.DataFrame(
+    # {
+    # "close": windows[:, -1],  # Last cumulative value in each window
+    # "high": np.max(windows, axis=1),  # Max in each window
+    # "low": np.min(windows, axis=1),  # Min in each window
+    # }
+    # )
+    # macd = make_MACD(window_data)
+    # kdj = make_KDJ(window_data)

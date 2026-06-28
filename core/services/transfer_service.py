@@ -164,9 +164,9 @@ class TransferService:
     ) -> None:
         from libs.log import logger
         try:
-            direction_emoji = "📥" if record.direction == TransferDirection.IN else "📤"
+            direction_emoji = "" if record.direction == TransferDirection.IN else ""
             direction_label = "收到转账" if record.direction == TransferDirection.IN else "发出转账"
-            
+
             # 获取用户的总转账金额和次数
             sum_total = await self._transfer_repo.get_user_total(record.website, record.user_id, record.direction.value)
             sum_count = await self._transfer_repo.get_user_count(record.website, record.user_id, record.direction.value)
@@ -177,28 +177,28 @@ class TransferService:
             masked_id = uid_str
             if len(uid_str) > 4:
                 masked_id = uid_str[:2] + '*' * (len(uid_str) - 4) + uid_str[-2:]
-            
+
             from config.config import MY_NAME
             _owner = me_name or MY_NAME
 
             user_display = others.build_user_html_link(record.user_id, record.user_name or f'用户{masked_id}')
             amount_display = f"<b>{abs(record.amount):,} {bonus_name}</b>"
-            
+
             if record.direction == TransferDirection.IN:
                 text = (
-                    f"👤 {user_display} 大佬，感谢打赏！\n"
-                    f"💰 本次收到：{amount_display}\n"
-                    f"<blockquote>📊 累计打赏：{sum_count} 次，共 {sum_total} {bonus_name}\n"
-                    f"🏆 打赏总榜：第 {user_rank} 名</blockquote>"
+                    f"{user_display} 大佬，感谢打赏！\n"
+                    f"本次收到：{amount_display}\n"
+                    f"<blockquote>累计打赏：{sum_count} 次，共 {sum_total} {bonus_name}\n"
+                    f"打赏总榜：第 {user_rank} 名</blockquote>"
                 )
             else:
                 text = (
-                    f"👤 {user_display}\n"
-                    f"🎁 这是赏赐你的 {amount_display}，拿去花！\n"
-                    f"<blockquote>📊 累计赏赐：{sum_count} 次，共 {sum_total} {bonus_name}\n"
-                    f"🏆 赏赐总榜：第 {user_rank} 名</blockquote>"
+                    f"{user_display}\n"
+                    f"这是赏赐你的 {amount_display}，拿去花！\n"
+                    f"<blockquote>累计赏赐：{sum_count} 次，共 {sum_total} {bonus_name}\n"
+                    f"赏赐总榜：第 {user_rank} 名</blockquote>"
                 )
-            
+
             # 基础文字
             reply_text = text
 
@@ -209,48 +209,48 @@ class TransferService:
                 if entries:
                     lb_size = len(entries)
                     table_title = "打赏" if record.direction == TransferDirection.IN else "赏赐"
-                    extra = f"\n<i>✨ 当前 {_owner} 个人{table_title}总榜 TOP{lb_size} 如图所示</i>"
+                    extra = f"\n<i>当前 {_owner} 个人{table_title}总榜 TOP{lb_size} 如图所示</i>"
 
                     for e in entries:
                         e.bonus_name = bonus_name
 
                     photo_path = await self._leaderboard_generator.generate(entries, record.direction.value, _owner)
-                    
+
                     caption = text + extra
 
                     if photo_path:
                         logger.debug(f"[TransferService] 排行榜图片已生成: {photo_path}")
-                        
+
                         # 发送带图片的合并通知
                         sent_id = await self._sender.send_photo(
-                            group_id, 
-                            photo_path, 
-                            caption=caption, 
+                            group_id,
+                            photo_path,
+                            caption=caption,
                             reply_to_message_id=record.message_id
                         )
-                        
+
                         if sent_id > 0:
                             import asyncio
                             asyncio.create_task(self._sender.delete_message(group_id, sent_id, delay=15))
-                        
+
                         if os.path.exists(photo_path):
                             os.unlink(photo_path)
                         return
                     else:
                         # 改进文字排行榜排版 - 更加美观整齐，标题与图片版对齐
                         table_title = "打赏" if record.direction == TransferDirection.IN else "赏赐"
-                        title = f"🌟 {_owner} 的{table_title}数据终端 🌟"
+                        title = f"{_owner} 的{table_title}数据终端 "
                         subtitle = f">>> TOP{len(entries)} 排行榜 <<<"
                         border = "━" * 25
-                        
+
                         lines = [
                             border,
                             title.center(22),
                             subtitle.center(22),
                             border
                         ]
-                        
-                        medals = ["🥇", "🥈", "🥉"]
+
+                        medals = ["", "", ""]
                         for i, e in enumerate(entries):
                             medal = medals[i] if i < 3 else f"{i+1:2d}."
                             # 格式化金额：加逗号，对齐
@@ -258,10 +258,10 @@ class TransferService:
                             # 名字截断处理，防止撑破排版
                             display_name = (e.user_name[:10] + "..") if len(e.user_name) > 10 else e.user_name.ljust(10)
                             lines.append(f"{medal} {display_name} {amt_str} {bonus_name}")
-                        
+
                         lines.append(border)
-                        lines.append(f"💡 {extra.strip()}")
-                        
+                        lines.append(f"{extra.strip()}")
+
                         text_lb = chr(10).join(lines)
                         reply_text = f"{text}\n<blockquote>{text_lb}</blockquote>"
                         logger.info(f"[TransferService] 图片生成失败，发送精修版文字排行榜到 {group_id}")

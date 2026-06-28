@@ -118,10 +118,10 @@ await ctx.notify("任务失败", level="error", category="备份")  # 带级别 
 # 多账号场景：在 handler 里把 client 传进来，平台会标明是哪个账号的消息
 @ctx.on_message(ctx.filters.text)
 async def h(client, message):
-    await ctx.notify("抢到红包", account=client)         # 通知里会带「👤 账号：xxx」
+    await ctx.notify("抢到红包", account=client)         # 通知里会带「账号：xxx」
 ```
 
-- `level`：`info` / `success` / `warning` / `error`，平台按级别打图标（ℹ️✅⚠️❌）。
+- `level`：`info` / `success` / `warning` / `error`，平台按级别打图标（）。
 - `category`：可选业务分类（如「订单」「签到」），显示在标签里。
 - `account`：多账号时传 handler 收到的 `client`，平台自动显示该账号名——你不用自己查账号是谁。
 - 平台优先用 Bot 私聊主人（需主人事先 /start 过 Bot），Bot 不可用就发到主账号收藏夹；每条通知也会进运行日志。

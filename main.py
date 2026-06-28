@@ -100,7 +100,7 @@ async def _init_container() -> None:
         settings=get_settings(),
     )
     _infra_container._container_instance = _container
-    logger.info("✅ DI 容器初始化完成")
+    logger.info("DI 容器初始化完成")
 
 
 async def start_platform() -> None:
@@ -135,18 +135,18 @@ async def start_platform() -> None:
     except Exception as e:  # noqa: BLE001 - 同步失败不影响平台启动
         logger.error("插件仓库轮询初始化失败: %r", e)
 
-    logger.info("✅ AWBotNest 平台启动完成")
+    logger.info("AWBotNest 平台启动完成")
 
     # 6) idle 等待
     from core import idle
     try:
         await idle()
     finally:
-        logger.debug("🔄 平台关闭中...")
+        logger.debug("平台关闭中...")
         await runtime.shutdown()
         await accounts.stop_all()
         await async_engine.dispose()
-        logger.info("✅ 平台已关闭")
+        logger.info("平台已关闭")
 
 
 async def main() -> None:
@@ -168,7 +168,7 @@ async def main() -> None:
         for t in done:
             exc = t.exception()
             if exc is not None:
-                logger.error("❌ 后台任务异常: %r", exc)
+                logger.error("后台任务异常: %r", exc)
                 raise exc
     except KeyboardInterrupt:
         logger.warning("程序被用户中断")

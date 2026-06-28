@@ -8,13 +8,13 @@ logger = logging.getLogger(__name__)
 
 class AiService:
     """AI 业务逻辑服务"""
-    
+
     def __init__(self, engine: AiEnginePort, state_repo: StateRepository, ai_repo: AiRepository):
         self.engine = engine
         self.state_repo = state_repo
         self.ai_repo = ai_repo
         self._sessions: Dict[int, AiConversation] = {}
-        
+
     def _get_config(self) -> AiConfig:
         """从状态仓库读取配置"""
         data = self.state_repo.get_section("ai")
@@ -56,14 +56,14 @@ class AiService:
             raw = raw[:300] + "..."
 
         if info.get("is_model_not_found"):
-            return f"❌ AI 模型不可用（model_not_found）：{raw}"
+            return f"AI 模型不可用（model_not_found）：{raw}"
         if info.get("is_auth"):
-            return f"❌ AI 鉴权失败（401/403）：{raw}"
+            return f"AI 鉴权失败（401/403）：{raw}"
         if info.get("is_rate_limited"):
-            return f"❌ AI 请求过于频繁（429）：{raw}"
+            return f"AI 请求过于频繁（429）：{raw}"
         if info.get("is_503"):
-            return f"❌ AI 服务暂时不可用（503）：{raw}"
-        return f"❌ AI 调用失败：{raw}"
+            return f"AI 服务暂时不可用（503）：{raw}"
+        return f"AI 调用失败：{raw}"
 
     async def chat(self, chat_id: int, user_content: str, bypass_dispatch_and_whitelist: bool = False) -> Optional[str]:
         """处理对话并返回 AI 回复"""
@@ -93,13 +93,13 @@ class AiService:
                 if role != "system":
                     session.add_message(role, content)
             self._sessions[chat_id] = session
-            
+
         session = self._sessions[chat_id]
-        
+
         # 保存用户消息到数据库
         await self.ai_repo.save_message(chat_id, "user", user_content)
         session.add_message("user", user_content, max_history=config.max_history)
-        
+
         try:
             response = await self.engine.generate_response(
                 messages=session.messages,
@@ -115,7 +115,7 @@ class AiService:
             # 记录完整异常，返回值交由上层按“失败”处理
             logger.exception("AI 对话生成失败: %s", info["message"])
             return self._public_error_message(info)
-            
+
         return None
 
     async def chat_with_image(

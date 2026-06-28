@@ -667,7 +667,7 @@ async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):
             tunnel = ngrok.connect(port, "http")
             public_url = tunnel.public_url.replace("http://", "https://")
             config.telegram.web_ui_url = public_url
-            logger.info("🚀 [自动映射] 公网访问地址: %s", public_url)
+            logger.info("[自动映射] 公网访问地址: %s", public_url)
         except ImportError:
             logger.error("未安装 pyngrok，无法开启自动映射")
         except Exception as e:  # noqa: BLE001
@@ -679,10 +679,10 @@ async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):
         logger.info("本地 Web 服务启动于 http://%s:%s", host, port)
         await server.serve()
         if not getattr(server, "started", False):
-            logger.error("❌ Web 服务启动失败: 端口 %s 可能被占用", port)
+            logger.error("Web 服务启动失败: 端口 %s 可能被占用", port)
             while True:
                 await asyncio.sleep(360)
     except OSError as e:
-        logger.error("❌ Web 服务 OSError: %s（端口 %s 可能被占用）", e, port)
+        logger.error("Web 服务 OSError: %s（端口 %s 可能被占用）", e, port)
         while True:
             await asyncio.sleep(3600)

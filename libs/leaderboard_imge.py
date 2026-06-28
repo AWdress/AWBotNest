@@ -12,12 +12,12 @@ from libs.log import logger
 
 
 medal_emojis = {
-    1: "🥇",
-    2: "🥈",
-    3: "🥉"
+    1: "",
+    2: "",
+    3: ""
 }
 
-medal_emoji_others = "🪙"
+medal_emoji_others = ""
 
 async def get_leaderboard(data, direction, owner_name: str = ""):
     # 配置 wkhtmltoimage 路径
@@ -47,19 +47,19 @@ async def get_leaderboard(data, direction, owner_name: str = ""):
 
     rows = ""
     table_title = "打赏" if direction != "pay" else "孝敬"
-    
+
 
     for rank, uid, username, count, amount in data:
         emoji = medal_emojis.get(rank, medal_emoji_others)
         medal_img = f'{emoji} TOP{rank}'
         rank_class = f"rank top{rank}" if rank <= 3 else "rank"
-        
+
         # 处理用户ID为None的情况
         if uid is None or uid == "None":
             display_uid = "未知"
         else:
             display_uid = mask_tgid(uid)
-            
+
         rows += f"""
         <tr>
             <td class="{rank_class}">{medal_img}</td>
@@ -170,16 +170,16 @@ async def get_leaderboard(data, direction, owner_name: str = ""):
     </head>
     <body>
         <div class="container">
-            <div class="title">🌟 {owner_name or config.MY_NAME} 的赏赐数据终端 🌟</div>
+            <div class="title">{owner_name or config.MY_NAME} 的赏赐数据终端 </div>
             <div class="subtitle">>>> TOP5 排行榜 <<<</div>
             <table>
                 <thead>
                     <tr>
-                        <th>⚡ 排名</th>
-                        <th>🆔 用户ID</th>
-                        <th>👤 用户名</th>
-                        <th>📊 次数</th>
-                        <th>💰 金额</th>
+                        <th>排名</th>
+                        <th>用户ID</th>
+                        <th>用户名</th>
+                        <th>次数</th>
+                        <th>金额</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -215,28 +215,28 @@ async def get_leaderboard(data, direction, owner_name: str = ""):
             Path(html_file).unlink()
         return None
 
-    Path(html_file).unlink()    
+    Path(html_file).unlink()
     return img_file
-    
+
 
 
 def mask_tgid(tgid):
     """
     对Telegram用户ID进行掩码处理，保护隐私
-    
+
     Args:
         tgid: Telegram用户ID
-        
+
     Returns:
         str: 掩码后的用户ID
     """
     if tgid is None:
         return "未知"
-    
+
     tgid_str = str(tgid)
     if len(tgid_str) <= 4:
         return tgid_str  # 长度不足 5，直接返回原样
-    
+
     # 对于较长的ID，显示前3位和后2位，中间用*代替
     if len(tgid_str) > 6:
         return f"{tgid_str[:3]}***{tgid_str[-2:]}"

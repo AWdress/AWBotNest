@@ -17,12 +17,6 @@ from typing import Any, Optional
 from core import logger
 
 # 级别 → 图标标签（分类的可视化）
-_LEVEL_ICON = {
-    "info": "ℹ️",
-    "success": "✅",
-    "warning": "⚠️",
-    "error": "❌",
-}
 _LEVEL_CN = {
     "info": "通知",
     "success": "成功",
@@ -56,14 +50,13 @@ def _account_label(account: Any) -> Optional[str]:
 def _format(plugin_name: str, text: str, level: str, category: Optional[str],
             account_label: Optional[str]) -> str:
     """统一格式：【图标 插件名 · 级别(· 分类)】(换行 账号)换行正文。"""
-    icon = _LEVEL_ICON.get(level, "ℹ️")
     level_cn = _LEVEL_CN.get(level, level)
-    head = f"{icon} {plugin_name} · {level_cn}"
+    head = f"【{level_cn}】{plugin_name}"
     if category:
         head += f" · {category}"
     lines = [head]
     if account_label:
-        lines.append(f"👤 账号：{account_label}")
+        lines.append(f"账号：{account_label}")
     lines.append(text)
     return "\n".join(lines)
 
@@ -96,7 +89,7 @@ async def submit(
              用它标明「这条是哪个账号的」——插件在 handler 里把 client 传进来即可。
     返回投递结果；无可用账号时抛 RuntimeError。
     """
-    level = level if level in _LEVEL_ICON else "info"
+    level = level if level in _LEVEL_CN else "info"
     account_label = _account_label(account)
     body = _format(plugin_name, text, level, category, account_label)
 

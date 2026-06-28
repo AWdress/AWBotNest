@@ -15,7 +15,7 @@ class SessionManagerMixin:
                         self.session.storage.conn.close()
                     except Exception as e:
                         logger.warning(f"关闭存储连接时出错: {e}")
-                
+
                 if hasattr(self.session.storage, 'init'):
                     try:
                         await self.session.storage.init()
@@ -23,7 +23,7 @@ class SessionManagerMixin:
                         logger.warning(f"重新初始化存储时出错: {e}")
         except Exception as e:
             logger.warning(f"清理会话文件时出错: {e}")
-    
+
     async def _force_cleanup_session(self):
         """强制清理会话文件，用于处理严重的数据库连接问题"""
         try:
@@ -32,7 +32,7 @@ class SessionManagerMixin:
                     await self.stop()
                 except Exception:
                     pass
-            
+
             if hasattr(self, 'session') and hasattr(self.session, 'storage'):
                 try:
                     if hasattr(self.session.storage, 'conn') and self.session.storage.conn:

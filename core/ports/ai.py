@@ -5,8 +5,8 @@ from core.domain.ai import AiMessage
 class AiEnginePort(Protocol):
     """AI 引擎接口定义"""
     async def generate_response(
-        self, 
-        messages: List[AiMessage], 
+        self,
+        messages: List[AiMessage],
         model: str,
         temperature: float = 0.7,
         image_bytes: bytes | None = None

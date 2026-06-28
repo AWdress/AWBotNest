@@ -111,7 +111,7 @@ async def toml_file_to_image(toml_file_path: Path):
 
     try:
         imgkit.from_file(str(html_file), str(img_file), options=options, config=wkhtml_config)
-        
+
         # 检查图片文件是否成功生成
         if Path(img_file).exists():
             file_size = Path(img_file).stat().st_size
@@ -119,7 +119,7 @@ async def toml_file_to_image(toml_file_path: Path):
         else:
             logger.error(f"图片文件不存在: {img_file}")
             return None
-            
+
     except Exception as e:
         logger.error(f"TOML图片生成失败: {e}")
         # 如果图片生成失败，返回None而不是抛出异常
@@ -128,5 +128,5 @@ async def toml_file_to_image(toml_file_path: Path):
         return None
 
     # 返回图片路径
-    Path(html_file).unlink() 
+    Path(html_file).unlink()
     return img_file

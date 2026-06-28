@@ -91,7 +91,6 @@ onUnmounted(() => {
       <div v-for="(l, i) in filtered" :key="i" class="log-line">
         <span class="time">{{ l.time }}</span>
         <span class="level" :class="levelClass(l.level)">{{ l.level }}</span>
-        <span class="source">{{ l.source }}</span>
         <span class="msg">{{ l.msg }}</span>
       </div>
     </div>

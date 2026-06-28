@@ -32,11 +32,11 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
     """
     def __init__(self, *args, skip_invalid_peer_replies=True, **kwargs):
         super().__init__(*args, **kwargs)
-        
+
         # 初始化 Mixins 中的状态变量
         self.__init_peer_manager__()
         self.__init_interaction__()
-        
+
         self._skip_invalid_peer_replies = skip_invalid_peer_replies
 
     async def start(self, *args, invoke_retries: int = 5, max_pool: int = 10, **kargs):
@@ -85,14 +85,14 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
                 peer_id_int = int(peer_id)
             elif isinstance(peer_id, int):
                 peer_id_int = peer_id
-            
+
             if self._skip_invalid_peer_replies and peer_id_int and self._is_peer_invalid(peer_id_int):
                 raise PeerIdInvalid()
         except PeerIdInvalid:
             raise
         except Exception:
             pass
-        
+
         try:
             return await super().resolve_peer(peer_id)
         except PeerIdInvalid:

@@ -30,7 +30,7 @@ class CSTFormatter(logging.Formatter):
         return time_utc8.strftime(datefmt or "%Y-%m-%d %H:%M:%S(%Z)")
 
 
-formatter = CSTFormatter("[%(levelname)s] %(asctime)s - %(filename)s - %(message)s")
+formatter = CSTFormatter("[%(levelname)s] %(asctime)s - %(message)s")
 logger = logging.getLogger("main")
 # INFO 起步：DEBUG 是开发噪音，不进文件/控制台/前端日志页
 logger.setLevel(logging.INFO)
@@ -45,7 +45,7 @@ class PyrogramErrorFilter(logging.Filter):
     def filter(self, record):
         msg_str = str(record.msg)
         exc_text = str(record.exc_text) if record.exc_text else ""
-        
+
         # 过滤掉 PeerIdInvalid 相关的错误堆栈
         if "PEER_ID_INVALID" in msg_str or "PEER_ID_INVALID" in exc_text:
             return False
@@ -112,7 +112,7 @@ if not error_logger.handlers:
 def log_group_error(group_id, error_msg, extra_info=""):
     """
     记录群组相关错误的便捷函数
-    
+
     Args:
         group_id: 群组ID
         error_msg: 错误信息
@@ -123,7 +123,7 @@ def log_group_error(group_id, error_msg, extra_info=""):
     full_msg = f"群组错误 - ID: {group_id} ({group_name}) - {error_msg}"
     if extra_info:
         full_msg += f" - 额外信息: {extra_info}"
-    
+
     # 所有日志统一到主日志
     logger.error(full_msg)
 
@@ -143,7 +143,7 @@ def get_group_name(group_id):
             return group_names[str(group_id)]
     except Exception:
         pass
-    
+
     # 2. 尝试从配置文件中获取群组名称
     try:
         from config.config import PT_GROUP_ID
@@ -153,7 +153,7 @@ def get_group_name(group_id):
                 # 智能转换配置键为友好名称
                 # 例如: "ZHUQUE_ID" -> "朱雀", "SSD_ID" -> "SSD", "BOT_MESSAGE_CHAT" -> "Bot消息"
                 name = key.replace("_ID", "").replace("_CHAT", "")
-                
+
                 # 特殊处理一些常见名称
                 name_mapping = {
                     "BOT_MESSAGE": "Bot消息",
@@ -169,11 +169,11 @@ def get_group_name(group_id):
                     "FRDS": "FRDS",
                     "HDKYIN": "HDKyin",
                 }
-                
+
                 # 如果有映射就用映射，否则直接用原名
                 return name_mapping.get(name, name)
     except Exception:
         pass
-    
+
     # 3. 如果都找不到，返回群组ID
     return f"群组 {group_id}"

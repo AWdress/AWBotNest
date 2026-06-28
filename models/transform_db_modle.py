@@ -88,9 +88,9 @@ class Transform(Base):
         """
         async with async_session_maker() as session, session.begin():
             if Direction == "pay":
-                flag = Transform.bonus < 0               
+                flag = Transform.bonus < 0
             else:
-                flag = Transform.bonus > 0 
+                flag = Transform.bonus > 0
 
             stmt = (
                 select(cls.create_time)
@@ -119,14 +119,14 @@ class User(TimeBase):
             float: bonus 总和
         """
         async with async_session_maker() as session, session.begin():
- 
+
             stmt = select(func.sum(Transform.bonus)).where(
                 Transform.user_id == self.user_id, Transform.website == site_name
             )
             bonus_sum = (await session.execute(stmt)).scalar_one_or_none()
             return bonus_sum if bonus_sum is not None else 0
 
-    
+
     async def get_pay_bonus_count_sum_for_website(self, site_name: str, Direction: str) -> tuple[str, str]:
         """
         获取当前用户在指定站点的我发送的 bonus 总和。
@@ -137,9 +137,9 @@ class User(TimeBase):
         """
         async with async_session_maker() as session, session.begin():
             if Direction == "pay":
-                flag = Transform.bonus < 0               
+                flag = Transform.bonus < 0
             else:
-                flag = Transform.bonus > 0               
+                flag = Transform.bonus > 0
             stmt = select(func.sum(Transform.bonus), func.count()).where(
                 Transform.user_id == self.user_id,
                 Transform.website == site_name,
@@ -243,22 +243,22 @@ class User(TimeBase):
         async with async_session_maker() as session, session.begin():
             if isinstance(transform_message, Message) and transform_message.from_user:
                 tg_user = transform_message.from_user
-                
+
                 # 改进用户名构建逻辑，确保英文用户名也能正确显示
                 name_parts = []
                 if tg_user.first_name and tg_user.first_name != 'None':
                     name_parts.append(tg_user.first_name)
                 if tg_user.last_name and tg_user.last_name != 'None':
                     name_parts.append(tg_user.last_name)
-                
+
                 if name_parts:
                     username = " ".join(name_parts).strip()
                 else:
                     # 如果first_name和last_name都为空，尝试使用username
                     username = getattr(tg_user, 'username', None) or "未知用户"
-                
+
                 user_id = tg_user.id
-                
+
                 # 检查用户ID是否为None
                 if user_id is None:
                     user_id = generate_user_id_from_username(username)

@@ -141,7 +141,7 @@ class AppSettings(BaseSettings):
         """将部分可变配置持久化到 config/state.toml"""
         import toml # noqa: PLC0415
         state_path = DATA_DIR / "state.toml"
-        
+
         # 只保存允许通过 WebUI 修改的字段
         state_data = {
             "prize_list": self.prize_list,
@@ -150,7 +150,7 @@ class AppSettings(BaseSettings):
             "trap_lottery_detection": self.trap_lottery_detection,
             "ai": self.ai.model_dump(exclude={"api_key"}),
         }
-        
+
         try:
             with open(state_path, "w", encoding="utf-8") as f:
                 toml.dump(state_data, f)
@@ -165,10 +165,10 @@ class AppSettings(BaseSettings):
     # 抽奖配置
     lottery_target_groups: list[int] = Field(default_factory=list)
     prize_list: dict[str, list[str]] = Field(default_factory=dict)
-    
+
     # 奖品匹配规则
     prize_match_rules: dict[str, Any] = Field(default_factory=lambda: {"case_sensitive": False})
-    
+
     # 陷阱检测配置
     trap_lottery_detection: dict[str, Any] = Field(default_factory=dict)
 
@@ -212,7 +212,7 @@ def _load_state_toml(settings: AppSettings) -> None:
     try:
         with open(state_path, "r", encoding="utf-8") as f:
             state_data = toml.load(f)
-            
+
         # 覆盖可变字段
         for key in ["prize_list", "lottery_target_groups", "prize_match_rules", "trap_lottery_detection", "ai"]:
             if key in state_data:
@@ -344,7 +344,7 @@ def _load_legacy_config(settings: AppSettings) -> None:
         # 抽奖群组
         lottery_groups: list = getattr(cfg, "LOTTERY_TARGET_GROUP", [])
         settings.lottery_target_groups = [int(g) for g in lottery_groups]
-        
+
         # 新增：匹配规则与陷阱检测
         settings.prize_match_rules = getattr(cfg, "PRIZE_MATCH_RULES", {"case_sensitive": False})
         settings.trap_lottery_detection = getattr(cfg, "TRAP_LOTTERY_DETECTION", {})
@@ -387,7 +387,7 @@ def _patch_legacy_config_file() -> None:
         # 定义 必须存在的配置项 及其 默认值/注释格式
         # 格式: (变量名, 追加内容)
         # 注意：平台化后此处只补全「平台级」配置。业务配置（AI/抽奖/奖品/陷阱等）
-        #       一律由各自插件自带，不再写入 config.py（见 SPEC.md）。
+        # 一律由各自插件自带，不再写入 config.py（见 SPEC.md）。
         patches = [
             ("API_ID", 'API_ID = 0  # Telegram API ID'),
             ("API_HASH", 'API_HASH = ""  # Telegram API Hash'),

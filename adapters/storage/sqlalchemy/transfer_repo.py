@@ -31,12 +31,12 @@ class SqlAlchemyTransferRepository:
 
     async def save(self, record: TransferRecord) -> TransferRecord:
         from models.transform_db_modle import Transform, User  # noqa: PLC0415
-        
+
         # 预处理：截断超长用户名，防止数据库写入失败 (User.name 限制为 String(32))
         safe_name = record.user_name or f"用户{record.user_id}"
         if len(safe_name) > 30:
             safe_name = safe_name[:27] + "..."
-            
+
         async with self._session_maker() as session, session.begin():
             # 1. 保存转账记录
             row = Transform(
@@ -187,7 +187,7 @@ class SqlAlchemyTransferRepository:
                 .order_by(desc(func.abs(func.sum(Transform.bonus))))
             )
             rows = (await session.execute(stmt)).all()
-            
+
         for i, row in enumerate(rows):
             if row.user_id == user_id:
                 return i + 1

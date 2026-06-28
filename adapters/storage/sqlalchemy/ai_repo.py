@@ -6,7 +6,7 @@ from models.ai_db_model import AiMessageModel
 
 class SqlAlchemyAiRepository(AiRepository):
     """AI 存储的 SQLAlchemy 实现"""
-    
+
     def __init__(self, session_maker: async_sessionmaker):
         self.session_maker = session_maker
 

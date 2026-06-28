@@ -34,7 +34,7 @@ def _find_wkhtmltoimage() -> str | None:
     return None
 
 
-async def generate_command_table_image(data, title="📘 命令一览表"):
+async def generate_command_table_image(data, title="命令一览表"):
     # 查找 wkhtmltoimage，找不到时直接返回 None（调用方会自动降级为文本）
     wkhtmltoimage_path = _find_wkhtmltoimage()
     if wkhtmltoimage_path:
@@ -127,14 +127,14 @@ async def generate_command_table_image(data, title="📘 命令一览表"):
     </head>
     <body>
         <div class="container">
-            <div class="title">📘 {title}</div>
+            <div class="title">{title}</div>
             <table>
                 <thead>
                     <tr>
-                        <th>⚡ 命令</th>
-                        <th>🎯 作用</th>
-                        <th>💡 举例</th>
-                        <th>📝 说明</th>
+                        <th>命令</th>
+                        <th>作用</th>
+                        <th>举例</th>
+                        <th>说明</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -145,9 +145,9 @@ async def generate_command_table_image(data, title="📘 命令一览表"):
     </body>
     </html>
     """
-    
+
     # 写入临时 HTML 文件
-    #  
+    #
     unique_id = uuid.uuid4().hex
     html_file = Path(f"temp_file/command_temp_{unique_id}.html")
     img_file = Path(f"temp_file/command_table_{unique_id}.png")
@@ -156,7 +156,7 @@ async def generate_command_table_image(data, title="📘 命令一览表"):
     with open(html_file, "w", encoding="utf-8") as f:
         f.write(html_str)
 
-        
+
     options = {
         'encoding': "UTF-8",
         'format': 'png',
@@ -176,5 +176,5 @@ async def generate_command_table_image(data, title="📘 命令一览表"):
             Path(html_file).unlink()
         return None
 
-    Path(html_file).unlink()    
+    Path(html_file).unlink()
     return img_file

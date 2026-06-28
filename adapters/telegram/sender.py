@@ -192,39 +192,39 @@ def _format_snatch_result(result: SnatchResult) -> str:
 
     if status == SnatchStatus.SENT:
         return (
-            f"🧧 抢红包成功\n\n"
-            f"🏠 群组 ID：{packet.group_id}\n"
-            f"🔑 发送口令：{keyword}"
+            f"抢红包成功\n\n"
+            f"群组 ID：{packet.group_id}\n"
+            f"发送口令：{keyword}"
         )
     if status == SnatchStatus.BLOCKED:
         return (
-            f"🛡️ 抢红包已拦截（陷阱）\n\n"
-            f"🏠 群组 ID：{packet.group_id}\n"
-            f"⚠️ 原因：{result.reason}"
+            f"抢红包已拦截（陷阱）\n\n"
+            f"群组 ID：{packet.group_id}\n"
+            f"原因：{result.reason}"
         )
     if status == SnatchStatus.CONFIRMED:
         return (
-            f"✅ 抢红包已确认\n\n"
-            f"🏠 群组 ID：{packet.group_id}\n"
-            f"🔑 口令：{keyword}"
+            f"抢红包已确认\n\n"
+            f"群组 ID：{packet.group_id}\n"
+            f"口令：{keyword}"
         )
     if status == SnatchStatus.FAILED:
         if "OCR口令" in (result.reason or ""):
             return (
-                f"🔍 OCR口令识别有误\n\n"
-                f"🏠 群组 ID：{packet.group_id}\n"
-                f"🔑 识别口令：{keyword}（有误）"
+                f"OCR口令识别有误\n\n"
+                f"群组 ID：{packet.group_id}\n"
+                f"识别口令：{keyword}（有误）"
             )
         return (
-            f"❌ 抢红包发送失败\n\n"
-            f"🏠 群组 ID：{packet.group_id}\n"
-            f"⚠️ 原因：{result.reason}"
+            f"抢红包发送失败\n\n"
+            f"群组 ID：{packet.group_id}\n"
+            f"原因：{result.reason}"
         )
     if status == SnatchStatus.OCR_FAILED:
         return (
-            f"⚠️ 口令红包 OCR 失败\n\n"
-            f"🏠 群组 ID：{packet.group_id}\n"
-            f"📋 已切换为复制模式"
+            f"口令红包 OCR 失败\n\n"
+            f"群组 ID：{packet.group_id}\n"
+            f"已切换为复制模式"
         )
     return ""
 
@@ -237,21 +237,21 @@ def _format_lottery_result(result: ParticipationResult) -> str:
 
     if status == LotteryStatus.JOINED:
         return (
-            f"✅ 抽奖参与成功\n\n"
-            f"🆔 抽奖 ID：{event.message_id}\n"
-            f"🎁 奖品：{event.prize_text}\n"
-            f"🏠 群组：{event.group_id}"
+            f"抽奖参与成功\n\n"
+            f"抽奖 ID：{event.message_id}\n"
+            f"奖品：{event.prize_text}\n"
+            f"群组：{event.group_id}"
         )
     if status == LotteryStatus.BLOCKED:
         return (
-            f"🛡️ 陷阱抽奖已拦截\n\n"
-            f"🆔 抽奖 ID：{event.message_id}\n"
-            f"⚠️ 原因：{result.reason}"
+            f"陷阱抽奖已拦截\n\n"
+            f"抽奖 ID：{event.message_id}\n"
+            f"原因：{result.reason}"
         )
     if status == LotteryStatus.FAILED:
         return (
-            f"❌ 抽奖参与失败\n\n"
-            f"🆔 抽奖 ID：{event.message_id}\n"
-            f"⚠️ 原因：{result.reason}"
+            f"抽奖参与失败\n\n"
+            f"抽奖 ID：{event.message_id}\n"
+            f"原因：{result.reason}"
         )
     return ""

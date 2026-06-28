@@ -23,28 +23,28 @@ AWBotNest 是一个 **平台内核 + 单文件插件** 的机器人平台：
 
 ```
 AWBotNest/
-├── kernel/                  # ★ 内核（稳定，少改）
-│   ├── __init__.py          #   统一出口
-│   ├── account_manager.py   #   账号生命周期
-│   ├── plugin_runtime.py    #   插件加载/卸载/热插拔
-│   ├── context.py           #   PlatformContext（给插件的能力）
-│   └── registry.py          #   插件元数据 + 启用状态持久化
+├── kernel/                  # 内核（稳定，少改）
+│   ├── __init__.py          # 统一出口
+│   ├── account_manager.py   # 账号生命周期
+│   ├── plugin_runtime.py    # 插件加载/卸载/热插拔
+│   ├── context.py           # PlatformContext（给插件的能力）
+│   └── registry.py          # 插件元数据 + 启用状态持久化
 │
-├── plugins/                 # ★ 用户的单文件插件（业务都在这）
-│   ├── _TEMPLATE.py         #   插件模板（_ 开头不被识别为插件）
-│   └── *.py                 #   每个文件一个插件
+├── plugins/                 # 用户的单文件插件（业务都在这）
+│   ├── _TEMPLATE.py         # 插件模板（_ 开头不被识别为插件）
+│   └── *.py                 # 每个文件一个插件
 │
 ├── webui/                   # 前端 + API
-│   ├── api.py               #   FastAPI 后端
-│   ├── auth.py              #   鉴权
-│   ├── static/              #   前端构建产物（FastAPI 托管）
-│   └── frontend/            #   Vue3 + Vite 源码
+│   ├── api.py               # FastAPI 后端
+│   ├── auth.py              # 鉴权
+│   ├── static/              # 前端构建产物（FastAPI 托管）
+│   └── frontend/            # Vue3 + Vite 源码
 │
 ├── core/ infra/ adapters/ models/ libs/ schedulers/ filters/
 │                            # 复用自旧项目的底座（统一出口仍是 core/）
 ├── config/                  # 平台代码（垫片 config.py，不做卷映射）
-├── data/                    # ★ 运行时数据（卷映射）：config.json（唯一配置源）、
-│                            #   plugins_state.json、auth.json、state.toml、kv/、游戏状态等
+├── data/                    # 运行时数据（卷映射）：config.json（唯一配置源）、
+│                            # plugins_state.json、auth.json、state.toml、kv/、游戏状态等
 ├── sessions/                # Telegram 会话文件
 ├── db_file/                 # SQLite 数据库
 ├── docs/                    # 文档：SPEC.md（本文件）、PLUGIN_GUIDE.md、设计参照图

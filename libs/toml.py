@@ -42,7 +42,7 @@ def toml_write_state(data: dict, file_path) -> None:
 
     merged = deep_merge(original, data)
 
-    # ✅ 强制写入为 UTF-8，防止下次读取报错
+    # 强制写入为 UTF-8，防止下次读取报错
     with open(file_path, "w", encoding="utf-8") as f:
         toml.dump(merged, f)
 
@@ -54,6 +54,6 @@ def toml_write_section(section: str, section_data: dict, file_path) -> None:
     full_data = toml_read_state(file_path)
     full_data[section] = deep_merge(full_data.get(section, {}), section_data)
 
-    # ✅ 强制写入为 UTF-8
+    # 强制写入为 UTF-8
     with open(file_path, "w", encoding="utf-8") as f:
         toml.dump(full_data, f)

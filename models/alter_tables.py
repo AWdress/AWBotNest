@@ -15,7 +15,7 @@ from core import logger
 password = quote_plus(DB_INFO['password'])
 
 DB_CONFIG = {
-    "host": DB_INFO['address'],     
+    "host": DB_INFO['address'],
     "port": DB_INFO['port'],
     "user": DB_INFO['user'],
     "password": DB_INFO['password'],

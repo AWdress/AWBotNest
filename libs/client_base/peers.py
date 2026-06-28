@@ -19,24 +19,24 @@ class PeerManagerMixin:
 
     def _is_peer_invalid(self, peer_id: int) -> bool:
         return peer_id in self._invalid_peer_ids
-    
+
     def _add_invalid_peer(self, peer_id: int):
         if len(self._invalid_peer_ids) >= self._max_invalid_peers:
             invalid_list = list(self._invalid_peer_ids)
             self._invalid_peer_ids = set(invalid_list[self._max_invalid_peers // 2:])
-        
+
         self._invalid_peer_ids.add(peer_id)
         logger.debug(f"已将聊天ID {peer_id} 添加到黑名单，当前黑名单大小: {len(self._invalid_peer_ids)}")
-    
+
     def _remove_invalid_peer(self, peer_id: int):
         if peer_id in self._invalid_peer_ids:
             self._invalid_peer_ids.remove(peer_id)
             logger.info(f"已将聊天ID {peer_id} 从无效列表中移除")
-    
+
     def set_valid_group_ids(self, group_ids: List[int]):
         self._valid_group_ids = set(group_ids)
         logger.info(f"已设置 {len(self._valid_group_ids)} 个有效群组ID")
-    
+
     def is_valid_group_id(self, peer_id: int) -> bool:
         return peer_id in self._valid_group_ids
 

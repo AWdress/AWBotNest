@@ -137,29 +137,29 @@ def dot_command(commands):
     创建一个支持 . 前缀的命令过滤器
     用法: filters.command("start") | custom_filters.dot_command("start")
     这样既支持 /start 也支持 .start
-    
+
     参数:
         commands: 字符串或字符串列表，表示命令名称
     """
     if isinstance(commands, str):
         commands = [commands]
-    
+
     async def func(flt, client, message: Message):
         if not message.text:
             return False
-        
+
         text = message.text
         # 检查是否以 . 开头
         if not text.startswith("."):
             return False
-        
+
         # 提取命令部分（去掉 . 前缀）
         parts = text[1:].split(maxsplit=1)
         if not parts:
             return False
-        
+
         command = parts[0].lower()
-        
+
         # 检查命令是否匹配
         if command in [cmd.lower() for cmd in flt.commands]:
             # 设置 message.command 属性，与 filters.command 保持一致
@@ -170,9 +170,9 @@ def dot_command(commands):
             else:
                 message.command = [command]
             return True
-        
+
         return False
-    
+
     return create(func, commands=commands)
 
 
@@ -181,30 +181,30 @@ def command_with_dot(commands):
     创建一个同时支持 / 和 . 前缀的命令过滤器
     用法: custom_filters.command_with_dot("start")
     这样既支持 /start 也支持 .start
-    
+
     参数:
         commands: 字符串或字符串列表，表示命令名称
     """
     if isinstance(commands, str):
         commands = [commands]
-    
+
     async def func(flt, client, message: Message):
         if not message.text:
             return False
-        
+
         text = message.text.strip()
-        
+
         # 检查是否以 / 或 . 开头
         if not (text.startswith("/") or text.startswith(".")):
             return False
-        
+
         # 提取命令部分（去掉前缀）
         parts = text[1:].split(maxsplit=1)
         if not parts:
             return False
-        
+
         command = parts[0].lower()
-        
+
         # 检查命令是否匹配
         if command in [cmd.lower() for cmd in flt.commands]:
             # 设置 message.command 属性，与 filters.command 保持一致
@@ -214,7 +214,7 @@ def command_with_dot(commands):
             else:
                 message.command = [command]
             return True
-        
+
         return False
-    
+
     return create(func, commands=commands)

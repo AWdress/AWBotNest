@@ -5,19 +5,19 @@
 # 然后修改 __plugin__ 元数据与 setup 逻辑即可。
 #
 # 两种形态（二选一）：
-#   - 单文件：plugins/<id>.py        ← 本模板，简单插件用这个
-#   - 文件夹：plugins/<id>/__init__.py  ← 复杂插件（带辅助模块/资源），
-#             __plugin__ 与 setup 写在 __init__.py，目录内可 from .xxx import ...
+# - 单文件：plugins/<id>.py        ← 本模板，简单插件用这个
+# - 文件夹：plugins/<id>/__init__.py  ← 复杂插件（带辅助模块/资源），
+# __plugin__ 与 setup 写在 __init__.py，目录内可 from .xxx import ...
 #
 # 规则速记（完整规范见 SPEC.md / PLUGIN_GUIDE.md）：
-#   1. 一个插件 = 一个文件或一个文件夹，文件名/目录名 = 插件 id。
-#   2. 必须有 __plugin__ 字典，且 id 等于文件名/目录名。
-#   3. 注册处理器一律用 ctx.on_message / ctx.on_callback，禁止 @Client.on_message。
-#   4. 不要 import pyrogram / 全局 config / 内核内部模块；一切走 ctx。
-#   5. 不要用 print，用 ctx.log。
-#   6. 插件自带配置：所有参数写进 config_schema，前端「配置」按钮即生成 UI；
-#      禁止往平台的 config 写业务配置。
-#   7. 以 _ 开头的文件/目录不会被平台识别为插件（可用作私有辅助）。
+# 1. 一个插件 = 一个文件或一个文件夹，文件名/目录名 = 插件 id。
+# 2. 必须有 __plugin__ 字典，且 id 等于文件名/目录名。
+# 3. 注册处理器一律用 ctx.on_message / ctx.on_callback，禁止 @Client.on_message。
+# 4. 不要 import pyrogram / 全局 config / 内核内部模块；一切走 ctx。
+# 5. 不要用 print，用 ctx.log。
+# 6. 插件自带配置：所有参数写进 config_schema，前端「配置」按钮即生成 UI；
+# 禁止往平台的 config 写业务配置。
+# 7. 以 _ 开头的文件/目录不会被平台识别为插件（可用作私有辅助）。
 # =============================================================================
 
 # ① 元数据（平台静态解析此字典，必须是纯字面量）
@@ -34,14 +34,14 @@ __plugin__ = {
 
     # ── 配置项（前端「配置」按钮据此自动生成设置界面）──
     # 每个字段支持：
-    #   type:    string | password | number | boolean | select | multiselect | slider | text(多行)
-    #   default: 默认值（multiselect 用 list，slider/number 用数字）
-    #   label:   显示名
-    #   help:    字段下方说明文字（可选）
-    #   options: select/multiselect 的可选值，["a","b"] 或 [{"value":"a","label":"甲"}]
-    #   min/max/step: number / slider 用（可选）
-    #   section: 分区标题（同 section 归一组卡片）
-    #   show_if: 条件显示，如 {"enable_reply": True} —— 仅当该字段当前值匹配才显示本字段
+    # type:    string | password | number | boolean | select | multiselect | slider | text(多行)
+    # default: 默认值（multiselect 用 list，slider/number 用数字）
+    # label:   显示名
+    # help:    字段下方说明文字（可选）
+    # options: select/multiselect 的可选值，["a","b"] 或 [{"value":"a","label":"甲"}]
+    # min/max/step: number / slider 用（可选）
+    # section: 分区标题（同 section 归一组卡片）
+    # show_if: 条件显示，如 {"enable_reply": True} —— 仅当该字段当前值匹配才显示本字段
     "config_schema": {
         # —— 功能开关区 ——
         "enable_reply": {
@@ -106,6 +106,6 @@ async def setup(ctx):
 
 
 # ③ 停用时调用（可选）：释放自管理的资源。
-#    ctx.on_message / ctx.schedule 注册的东西由平台自动清理，无需手动处理。
+# ctx.on_message / ctx.schedule 注册的东西由平台自动清理，无需手动处理。
 async def teardown(ctx):
     ctx.log.info("示例插件已停用")

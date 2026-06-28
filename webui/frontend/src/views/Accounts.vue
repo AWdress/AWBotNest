@@ -226,7 +226,7 @@ onMounted(load)
 
         <!-- 完成 -->
         <div v-else-if="step==='done'" class="done">
-          <div class="done-icon">✓</div>
+          <div class="done-icon"></div>
           <p><b>{{ doneInfo?.name }}</b> 登录成功并已上线</p>
           <p class="muted mono">{{ doneInfo?.session }}<template v-if="doneInfo?.tgid"> · {{ doneInfo.tgid }}</template></p>
           <button class="btn btn-primary" @click="wizardOpen=false">完成</button>
