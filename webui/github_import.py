@@ -35,6 +35,30 @@ from typing import Optional
 import httpx
 
 GITHUB_API = "https://api.github.com"
+
+
+def _proxy() -> Optional[str]:
+    """读取平台代理（启用时返回 httpx 可用的代理 URL），用于访问 GitHub。"""
+    try:
+        import config.config as _cfg
+        _cfg.reload()
+        ps = getattr(_cfg, "proxy_set", {}) or {}
+        if not ps.get("proxy_enable"):
+            return None
+        url = (ps.get("PROXY_URL") or "").strip()
+        if url:
+            return url
+        # 无 PROXY_URL 时按 proxy 子项拼
+        px = ps.get("proxy", {}) or {}
+        host, port = px.get("hostname"), px.get("port")
+        if host and port:
+            scheme = px.get("scheme", "http")
+            user, pwd = px.get("username", ""), px.get("password", "")
+            auth = f"{user}:{pwd}@" if user else ""
+            return f"{scheme}://{auth}{host}:{port}"
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 RAW_HOST = "raw.githubusercontent.com"
 MANIFEST_NAMES = ("manifest.json", "manifest.v2.json")
 
@@ -168,7 +192,7 @@ async def list_plugins(src: str, token: Optional[str] = None) -> dict:
     每个 plugin 含 id/name/version/author/description/icon/is_folder/path 等。
     """
     info = parse_source(src)
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True, proxy=_proxy()) as client:
         if info["kind"] == "raw":
             name = info["url"].rstrip("/").split("/")[-1]
             return {"source_type": "raw", "plugins": [{
@@ -210,7 +234,7 @@ async def _list_dir_files(client, owner, repo, branch, dir_path, token) -> list[
 
 async def fetch_file(download_url: str, token: Optional[str] = None) -> bytes:
     """下载单个文件内容"""
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
         r = await client.get(download_url, headers=_headers(token))
         r.raise_for_status()
         return r.content
@@ -233,7 +257,7 @@ async def resolve_files(plugin: dict, token: Optional[str] = None) -> list[dict]
     # 文件夹插件：递归列出目录内所有文件，target 保留相对结构
     owner, repo, branch = plugin["owner"], plugin["repo"], plugin["branch"]
     dir_path = plugin["path"].rstrip("/")
-    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
         files = await _list_dir_files(client, owner, repo, branch, dir_path, token)
     out = []
     for f in files:

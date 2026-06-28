@@ -90,4 +90,5 @@ export const api = {
   // 平台设置（config.json）
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
+  restartPlatform: () => request('POST', '/api/system/restart'),
 }

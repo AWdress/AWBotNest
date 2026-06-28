@@ -6,6 +6,8 @@ import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import Toast from './components/Toast.vue'
 import logoWhite from './assets/logo-white.png'
+import { confirm } from './composables/confirm'
+import { toast } from './composables/toast'
 
 const route = useRoute()
 const router = useRouter()
@@ -19,6 +21,31 @@ const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 const authed = ref(false)
 function onAuthed() { authed.value = true; ping() }
 function logout() { setToken(''); authed.value = false }
+
+const restarting = ref(false)
+async function restart() {
+  const ok = await confirm({
+    title: '重启平台',
+    message: '确定重启平台？重启期间控制台会短暂不可用，约十几秒后自动恢复。',
+    confirmText: '重启', danger: true,
+  })
+  if (!ok) return
+  restarting.value = true
+  try {
+    await api.restartPlatform()
+    toast.success('平台正在重启，请稍候刷新页面')
+    // 轮询直到平台重新可用，自动刷新
+    let tries = 0
+    const timer = setInterval(async () => {
+      tries++
+      try { await api.status(); clearInterval(timer); location.reload() }
+      catch { if (tries > 30) clearInterval(timer) }
+    }, 2000)
+  } catch (e) {
+    toast.error('重启请求失败：' + e.message)
+    restarting.value = false
+  }
+}
 setUnauthorizedHandler(() => { authed.value = false })
 
 // 刷新后恢复登录态：localStorage 有令牌就乐观进主界面，
@@ -131,6 +158,14 @@ onMounted(() => {
             </a>
           </span>
         </div>
+        <button class="restart-btn" @click="restart" :disabled="restarting">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" class="logout-icon">
+            <path d="M23 4v6h-6M1 20v-6h6" />
+            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+          </svg>
+          {{ restarting ? '重启中…' : '重启平台' }}
+        </button>
         <button class="logout-btn" @click="logout">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round" class="logout-icon">
@@ -222,6 +257,14 @@ onMounted(() => {
   background: transparent; border: 1px solid var(--border-light); border-radius: var(--radius-sm);
   color: var(--text-secondary); font-size: 13px; transition: all 0.15s ease;
 }
+.restart-btn {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 9px; margin-bottom: 8px; cursor: pointer;
+  background: transparent; border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  color: var(--text-secondary); font-size: 13px; transition: all 0.15s ease;
+}
+.restart-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
+.restart-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .logout-btn:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-dim); }
 .logout-icon { width: 16px; height: 16px; }
 .status-dot {

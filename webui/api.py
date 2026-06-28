@@ -86,6 +86,23 @@ async def index():
     return {"message": "AWBotNest 平台运行中。前端尚未构建，请在 webui/frontend 执行 npm run build。"}
 
 
+@app.get("/favicon.ico")
+async def favicon():
+    """网站图标（构建时由 logo 生成，输出到 static 根）。"""
+    ico = STATIC_DIR / "favicon.ico"
+    if ico.exists():
+        return FileResponse(str(ico))
+    raise HTTPException(status_code=404, detail="favicon 不存在")
+
+
+@app.get("/apple-touch-icon.png")
+async def apple_icon():
+    png = STATIC_DIR / "apple-touch-icon.png"
+    if png.exists():
+        return FileResponse(str(png))
+    raise HTTPException(status_code=404, detail="not found")
+
+
 # ──────────────────────────────────────────────
 # 插件管理 API
 # ──────────────────────────────────────────────
@@ -484,6 +501,22 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth)):
 
     # 凭据/代理/DB 变更需重启才能完全生效
     return {"status": "success", "restart_required": True}
+
+
+@app.post("/api/system/restart")
+async def restart_platform(user=Depends(_auth)):
+    """重启平台。容器(restart:always)下进程退出会被自动拉起；
+    裸跑需外部进程守护(systemd/supervisor)才能自动重启。"""
+    import asyncio as _aio
+    import os as _os
+
+    async def _delayed_exit():
+        await _aio.sleep(0.5)   # 让本次 HTTP 响应先返回
+        logger.info("收到重启请求，进程即将退出由守护进程拉起…")
+        _os._exit(0)
+
+    _aio.create_task(_delayed_exit())
+    return {"status": "success", "message": "平台正在重启，请稍候刷新页面"}
 
 
 # ──────────────────────────────────────────────
