@@ -1,6 +1,6 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
-import { api } from '../api'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import { confirm } from '../composables/confirm'
 import { toast } from '../composables/toast'
@@ -21,11 +21,13 @@ const configSchema = ref({})
 const configValues = ref({})
 const configSaving = ref(false)
 
-// 插件详情面板（点开卡片）：应用账号 / 重载 / 删除
-const detailOpen = ref(false)
-const detailTarget = ref(null)
+// 三点下拉菜单：记录当前展开菜单的插件 id
+const menuFor = ref(null)
+function toggleMenu(p) { menuFor.value = menuFor.value === p.id ? null : p.id }
+function closeMenu() { menuFor.value = null }
 
-// 应用账号（多账号下按账号选择插件）——内嵌在详情面板里
+// 应用账号弹窗（多账号下按账号选择插件）
+const acctOpen = ref(false)
 const acctTarget = ref(null)
 const acctOptions = ref([])    // [{session,name}]
 const acctSelected = ref([])   // 勾选的 session
@@ -61,10 +63,12 @@ async function toggle(p) {
 }
 
 async function reload(p) {
+  closeMenu()
   busy.value[p.id] = true
   try {
     const data = await api.reloadPlugin(p.id)
     Object.assign(p, data.plugin)
+    toast.success(`插件「${p.name}」已重载`)
   } catch (e) {
     error.value = `${p.name}: ${e.message}`
   } finally {
@@ -73,6 +77,7 @@ async function reload(p) {
 }
 
 async function remove(p) {
+  closeMenu()
   const ok = await confirm({
     title: '删除插件',
     message: `确定删除插件「${p.name}」？\n此操作不可恢复。`,
@@ -83,7 +88,6 @@ async function remove(p) {
   try {
     await api.deletePlugin(p.id)
     plugins.value = plugins.value.filter((x) => x.id !== p.id)
-    detailOpen.value = false
     await loadStore(false)
   } catch (e) {
     error.value = `${p.name}: ${e.message}`
@@ -92,25 +96,24 @@ async function remove(p) {
   }
 }
 
-// 点开卡片：打开详情面板，并按需加载账号范围
-async function openDetail(p) {
-  detailTarget.value = p
+// ── 应用账号弹窗 ──
+async function openAccounts(p) {
+  closeMenu()
   acctTarget.value = p
   acctOptions.value = []
   acctSelected.value = []
   acctAllMode.value = true
-  detailOpen.value = true
-  if (p.scope === 'user' || p.scope === 'both') {
-    try {
-      const data = await api.getPluginAccounts(p.id)
-      acctOptions.value = data.accounts || []
-      acctSelected.value = [...(data.selected || [])]
-      acctAllMode.value = acctSelected.value.length === 0
-    } catch (e) { error.value = e.message }
-  }
+  try {
+    const data = await api.getPluginAccounts(p.id)
+    acctOptions.value = data.accounts || []
+    acctSelected.value = [...(data.selected || [])]
+    acctAllMode.value = acctSelected.value.length === 0
+    acctOpen.value = true
+  } catch (e) { error.value = e.message }
 }
 
 async function openConfig(p) {
+  closeMenu()
   configTarget.value = p
   try {
     const data = await api.getPluginConfig(p.id)
@@ -144,8 +147,82 @@ async function saveAccounts() {
   try {
     const sessions = acctAllMode.value ? [] : acctSelected.value
     await api.setPluginAccounts(acctTarget.value.id, sessions)
+    acctOpen.value = false
     toast.success('账号范围已保存')
   } catch (e) { error.value = e.message } finally { acctSaving.value = false }
+}
+
+// ── 插件日志弹窗（只看当前插件的日志） ──
+const logsOpen = ref(false)
+const logsTarget = ref(null)
+const logsList = ref([])          // 已按插件过滤的日志
+const logsConnected = ref(false)
+const logsBox = ref(null)
+let logsWs = null
+let logsReconnect = null
+
+const logLevelClass = (lv) => ({
+  DEBUG: 'lv-debug', INFO: 'lv-info', WARNING: 'lv-warn',
+  ERROR: 'lv-err', CRITICAL: 'lv-err',
+}[lv] || 'lv-info')
+
+function matchesPlugin(item, id) {
+  // 插件 ctx.log 会把 source 设成插件 id；兜底再匹配 msg 里的 [id] 前缀
+  return item.source === id || (item.msg && item.msg.startsWith(`[${id}]`))
+}
+
+function logsScrollBottom() {
+  if (logsBox.value) logsBox.value.scrollTop = logsBox.value.scrollHeight
+}
+
+function logsWsUrl() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws'
+  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(getToken())}`
+}
+
+function logsConnect() {
+  logsWs = new WebSocket(logsWsUrl())
+  logsWs.onopen = () => { logsConnected.value = true }
+  logsWs.onmessage = (e) => {
+    try {
+      const item = JSON.parse(e.data)
+      if (logsTarget.value && matchesPlugin(item, logsTarget.value.id)) {
+        logsList.value.push(item)
+        if (logsList.value.length > 500) logsList.value.splice(0, logsList.value.length - 500)
+        nextTick(logsScrollBottom)
+      }
+    } catch {}
+  }
+  logsWs.onclose = () => {
+    logsConnected.value = false
+    if (logsOpen.value) logsReconnect = setTimeout(logsConnect, 3000)
+  }
+  logsWs.onerror = () => { logsWs?.close() }
+}
+
+function logsDisconnect() {
+  clearTimeout(logsReconnect)
+  if (logsWs) { logsWs.onclose = null; logsWs.close(); logsWs = null }
+  logsConnected.value = false
+}
+
+async function openLogs(p) {
+  closeMenu()
+  logsTarget.value = p
+  logsList.value = []
+  logsOpen.value = true
+  // 先拉历史，过滤出当前插件
+  try {
+    const d = await api.recentLogs()
+    logsList.value = (d.logs || []).filter((it) => matchesPlugin(it, p.id))
+  } catch (e) { error.value = e.message }
+  nextTick(logsScrollBottom)
+  logsConnect()
+}
+
+function closeLogs() {
+  logsOpen.value = false
+  logsDisconnect()
 }
 
 function triggerUpload() { fileInput.value?.click() }
@@ -294,7 +371,14 @@ async function saveRepos() {
 
 function goStore() { tab.value = 'store'; if (store.value.length === 0) loadStore(true) }
 
-onMounted(() => { load(); loadStore(false) })
+onMounted(() => {
+  load(); loadStore(false)
+  document.addEventListener('click', closeMenu)
+})
+onUnmounted(() => {
+  logsDisconnect()
+  document.removeEventListener('click', closeMenu)
+})
 </script>
 
 <template>
@@ -341,7 +425,8 @@ onMounted(() => { load(); loadStore(false) })
         <p class="muted">去「插件市场」安装，或把 .py 文件拖到这里 / 点「上传插件」。</p>
       </div>
       <div v-else class="grid">
-        <div v-for="p in plugins" :key="p.id" class="card plugin-card clickable" :class="{ err: p.error }"
+        <div v-for="p in plugins" :key="p.id" class="card plugin-card clickable"
+             :class="{ err: p.error, 'menu-open': menuFor === p.id }"
              @click="openConfig(p)">
           <div class="card-head">
             <div class="store-title">
@@ -366,9 +451,30 @@ onMounted(() => { load(); loadStore(false) })
             <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item">v{{ p.version }}</span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
-            <button class="kebab" @click.stop="openDetail(p)" title="更多设置" aria-label="更多设置">
-              <span></span><span></span><span></span>
-            </button>
+            <div class="kebab-wrap">
+              <button class="kebab" :class="{ active: menuFor === p.id }" @click.stop="toggleMenu(p)"
+                      title="更多" aria-label="更多">
+                <span></span><span></span><span></span>
+              </button>
+              <div v-if="menuFor === p.id" class="dropdown" @click.stop>
+                <button class="menu-item" @click.stop="openConfig(p)">
+                  <span class="mi-ico">⚙</span> 配置
+                </button>
+                <button class="menu-item" @click.stop="openLogs(p)">
+                  <span class="mi-ico">📄</span> 查看日志
+                </button>
+                <button class="menu-item" v-if="p.scope === 'user' || p.scope === 'both'" @click.stop="openAccounts(p)">
+                  <span class="mi-ico">👤</span> 应用账号
+                </button>
+                <button class="menu-item" @click.stop="reload(p)" :disabled="busy[p.id]">
+                  <span class="mi-ico">↻</span> 重载
+                </button>
+                <div class="menu-sep"></div>
+                <button class="menu-item danger" @click.stop="remove(p)" :disabled="busy[p.id]">
+                  <span class="mi-ico">🗑</span> 删除
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -433,36 +539,14 @@ onMounted(() => { load(); loadStore(false) })
       </div>
     </div>
 
-    <!-- 设置仓库地址弹窗 -->
-    <!-- 插件详情面板（点开卡片）：账号范围 / 重载 / 删除 -->
-    <div v-if="detailOpen" class="modal-mask" @click.self="detailOpen=false">
+    <!-- 应用账号弹窗 -->
+    <div v-if="acctOpen" class="modal-mask" @click.self="acctOpen=false">
       <div class="modal card">
         <div class="modal-head">
-          <div class="store-title">
-            <img :src="detailTarget?.icon || logo" class="store-icon"
-                 :class="{ 'store-icon-fallback': !detailTarget?.icon }" alt="" />
-            <div class="card-title">
-              <span class="name">{{ detailTarget?.name }}
-                <span v-if="detailTarget && isOfficial(detailTarget)" class="badge-official">官方</span>
-              </span>
-              <span class="badge" :class="detailTarget?.error ? 'badge-err' : (detailTarget?.enabled ? 'badge-on' : 'badge-off')">
-                {{ detailTarget?.error ? '异常' : (detailTarget?.enabled ? '已启用' : '未启用') }}
-              </span>
-            </div>
-          </div>
-          <span class="close" @click="detailOpen=false">×</span>
+          <h2>{{ acctTarget?.name }} · 应用账号</h2>
+          <span class="close" @click="acctOpen=false">×</span>
         </div>
-
-        <p class="desc">{{ detailTarget?.description || '（无描述）' }}</p>
-        <div class="card-meta">
-          <span class="meta-item">{{ scopeLabel[detailTarget?.scope] || detailTarget?.scope }}</span>
-          <span class="meta-item">v{{ detailTarget?.version }}</span>
-          <span v-if="detailTarget?.author" class="meta-item">{{ detailTarget?.author }}</span>
-        </div>
-
-        <!-- 应用账号 -->
-        <div v-if="detailTarget?.scope === 'user' || detailTarget?.scope === 'both'" class="detail-section">
-          <h3 class="detail-h">应用账号</h3>
+        <div class="form">
           <div class="hint muted">选择这个插件在哪些账号上生效。多账号时可让不同号开不同插件。</div>
           <label class="acct-row">
             <input type="radio" :checked="acctAllMode" @change="acctAllMode = true" />
@@ -480,27 +564,37 @@ onMounted(() => { load(); loadStore(false) })
               <span class="muted mono small">{{ a.session }}</span>
             </label>
           </div>
-          <div class="detail-row-foot">
-            <button class="btn sm btn-primary" @click="saveAccounts" :disabled="acctSaving">
-              {{ acctSaving ? '保存中…' : '保存账号范围' }}
-            </button>
-          </div>
         </div>
-
-        <!-- 维护 -->
-        <div class="detail-section">
-          <h3 class="detail-h">维护</h3>
-          <div class="detail-actions">
-            <button class="btn sm" @click="reload(detailTarget)" :disabled="busy[detailTarget?.id]">
-              {{ busy[detailTarget?.id] ? '处理中…' : '重载插件' }}
-            </button>
-            <button class="btn sm btn-danger" @click="remove(detailTarget)" :disabled="busy[detailTarget?.id]">删除插件</button>
-          </div>
-          <div class="hint muted">重载会重新读取插件文件并热替换；删除不可恢复。</div>
-        </div>
-
         <div class="modal-foot">
-          <button class="btn" @click="detailOpen=false">关闭</button>
+          <button class="btn" @click="acctOpen=false">取消</button>
+          <button class="btn btn-primary" @click="saveAccounts" :disabled="acctSaving">
+            {{ acctSaving ? '保存中…' : '保存' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 插件日志弹窗（只看当前插件） -->
+    <div v-if="logsOpen" class="modal-mask" @click.self="closeLogs">
+      <div class="modal card logs-modal">
+        <div class="modal-head">
+          <h2>
+            {{ logsTarget?.name }} · 日志
+            <span class="conn" :class="{ on: logsConnected }"><span class="dot"></span>{{ logsConnected ? '实时' : '连接中' }}</span>
+          </h2>
+          <span class="close" @click="closeLogs">×</span>
+        </div>
+        <div class="log-box" ref="logsBox">
+          <div v-if="logsList.length === 0" class="muted center">该插件暂无日志</div>
+          <div v-for="(l, i) in logsList" :key="i" class="log-line">
+            <span class="time">{{ l.time }}</span>
+            <span class="level" :class="logLevelClass(l.level)">{{ l.level }}</span>
+            <span class="msg">{{ l.msg }}</span>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" @click="logsList = []">清空</button>
+          <button class="btn" @click="closeLogs">关闭</button>
         </div>
       </div>
     </div>
@@ -590,18 +684,41 @@ onMounted(() => { load(); loadStore(false) })
 .plugin-card.clickable { cursor: pointer; }
 .plugin-card.clickable:hover { border-color: var(--accent-dim); }
 .plugin-card.clickable:active { transform: scale(0.995); }
+.plugin-card.menu-open { position: relative; z-index: 50; }
 .plugin-card.err { border-color: var(--danger-dim); }
 
+.kebab-wrap { margin-left: auto; position: relative; }
 .kebab {
-  margin-left: auto;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
   width: 30px; height: 30px; padding: 0;
   border: none; background: transparent; cursor: pointer; border-radius: 6px;
   transition: background 0.15s;
 }
-.kebab:hover { background: var(--bg-elevated); }
+.kebab:hover, .kebab.active { background: var(--bg-elevated); }
 .kebab span { width: 4px; height: 4px; border-radius: 50%; background: var(--text-muted); }
-.kebab:hover span { background: var(--text-secondary); }
+.kebab:hover span, .kebab.active span { background: var(--text-secondary); }
+
+/* 三点下拉菜单 */
+.dropdown {
+  position: absolute; left: 0; top: calc(100% + 6px);
+  min-width: 150px; z-index: 160;
+  background: var(--bg-card); border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm); padding: 5px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  display: flex; flex-direction: column; gap: 1px;
+}
+.menu-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 8px 10px; border: none; background: transparent;
+  color: var(--text-primary); font-size: 13px; text-align: left; cursor: pointer;
+  border-radius: 6px; transition: background 0.12s;
+}
+.menu-item:hover:not(:disabled) { background: var(--bg-elevated); }
+.menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
+.menu-item.danger { color: var(--danger); }
+.menu-item.danger:hover:not(:disabled) { background: var(--danger-dim); }
+.mi-ico { width: 16px; text-align: center; font-size: 13px; flex-shrink: 0; }
+.menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; }
 .card-title { display: flex; flex-direction: column; gap: 6px; }
@@ -667,16 +784,28 @@ onMounted(() => { load(); loadStore(false) })
 .acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .acct-item .small { margin-left: auto; }
 
-/* 详情面板分区 */
-.detail-section {
-  margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);
-  display: flex; flex-direction: column; gap: 10px;
+/* 插件日志弹窗 */
+.logs-modal { width: 720px; display: flex; flex-direction: column; }
+.logs-modal .modal-head h2 { display: flex; align-items: center; gap: 12px; }
+.conn { display: flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 500; color: var(--text-muted); }
+.conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+.conn.on { color: var(--accent-2); }
+.conn.on .dot { background: var(--accent-2); box-shadow: 0 0 7px var(--accent-2); }
+.logs-modal .log-box {
+  flex: 1; min-height: 280px; max-height: 56vh; overflow-y: auto;
+  padding: 12px 14px; border-radius: var(--radius-sm); background: #07090f;
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; line-height: 1.65;
 }
-.detail-h { font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.detail-row-foot { display: flex; justify-content: flex-end; margin-top: 4px; }
-.detail-actions { display: flex; gap: 8px; }
-.modal .desc { margin-top: 12px; }
-.modal .card-meta { margin-top: 8px; }
+.logs-modal .log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }
+.logs-modal .log-line:hover { background: rgba(255,255,255,0.03); }
+.logs-modal .time { color: var(--text-muted); flex-shrink: 0; }
+.logs-modal .level { flex-shrink: 0; width: 60px; font-weight: 600; }
+.logs-modal .msg { color: var(--text-primary); }
+.logs-modal .center { padding: 40px; }
+.lv-debug { color: var(--text-muted); }
+.lv-info { color: var(--accent); }
+.lv-warn { color: var(--warning); }
+.lv-err { color: var(--danger); }
 
 /* 手机适配 */
 @media (max-width: 768px) {

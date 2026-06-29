@@ -78,6 +78,9 @@ export const api = {
   // 系统状态
   status: () => request('GET', '/api/status'),
 
+  // 运行日志
+  recentLogs: () => request('GET', '/api/logs/recent'),
+
   // 账号
   listAccounts: () => request('GET', '/api/accounts'),
   accountOnline: (s) => request('POST', `/api/accounts/${s}/online`),
