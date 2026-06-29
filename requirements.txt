@@ -62,6 +62,9 @@ asyncpg==0.31.0
 # --- 配置 ---
 toml==0.10.2
 
+# --- 依赖管理（插件 requirements 声明的冲突检测/规范化）---
+packaging==25.0
+
 # --- 数据处理 / 导出 ---
 pandas==3.0.2
 openpyxl==3.1.5

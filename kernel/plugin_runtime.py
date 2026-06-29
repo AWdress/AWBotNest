@@ -23,6 +23,7 @@ from typing import Optional, TYPE_CHECKING
 from libs.log import logger
 from kernel.context import PlatformContext
 from kernel.registry import registry, PluginMeta
+from kernel import deps
 
 if TYPE_CHECKING:
     from kernel.account_manager import AccountManager
@@ -82,9 +83,10 @@ class PluginRuntime:
         async with self._lock:
             return await self._enable_locked(plugin_id)
 
-    async def _enable_locked(self, plugin_id: str) -> PluginMeta:
+    async def _enable_locked(self, plugin_id: str, ensure_deps: bool = True) -> PluginMeta:
         """启用插件内部实现：调用方须已持有 self._lock。
-        导入文件 → setup → 登记；幂等：已加载则直接返回。"""
+        导入文件 → setup → 登记；幂等：已加载则直接返回。
+        ensure_deps=False 时跳过依赖检查/安装（用于 resync 重挂——依赖在首次 enable 已就绪）。"""
         if True:
             meta = registry.get_meta(plugin_id)
             if meta is None:
@@ -101,6 +103,16 @@ class PluginRuntime:
 
             ctx = None
             try:
+                # 启用前确保第三方依赖就绪：缺失则代装，版本冲突则拒绝启用。
+                # 单进程同一个包只能有一个版本，冲突只能挡在加载前，不能强行覆盖。
+                if ensure_deps and meta.requirements:
+                    dep = await deps.ensure(plugin_id, meta.requirements)
+                    if not dep["ok"]:
+                        meta.loaded = False
+                        meta.enabled = registry.is_enabled(plugin_id)
+                        meta.error = dep["error"]
+                        return meta
+
                 module = self._import_module(plugin_id)
                 setup = getattr(module, "setup", None)
                 if setup is None or not callable(setup):
@@ -222,8 +234,9 @@ class PluginRuntime:
             logger.info("账号状态变化，重新挂载 %d 个插件...", len(ids))
             for plugin_id in ids:
                 # persist=False：重挂只是运行态操作，不动持久启用意图
+                # ensure_deps=False：依赖在首次 enable 已就绪，重挂不必重跑 pip（否则账号每次上下线都触发）
                 await self._disable_locked(plugin_id, persist=False)
-                await self._enable_locked(plugin_id)
+                await self._enable_locked(plugin_id, ensure_deps=False)
                 if plugin_id not in self._loaded:
                     logger.warning("插件 [%s] 重挂失败，启用意图保留待重试", plugin_id)
 

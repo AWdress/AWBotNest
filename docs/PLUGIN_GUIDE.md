@@ -36,6 +36,9 @@ __plugin__ = {
     "config_schema": {            # 可选，前端据此生成配置表单
         "keyword": {"type": "string", "default": "hello", "label": "触发词"},
     },
+    "requirements": [             # 可选，第三方依赖；启用时由平台代装
+        "httpx>=0.27",
+    ],
 }
 
 async def setup(ctx):
@@ -53,6 +56,8 @@ async def teardown(ctx):
 `__plugin__` 为顶层字面量字典，平台通过静态 AST 解析读取，不执行插件代码。必填字段：`name`、`id`、`version`、`scope`。
 
 `icon` 为可选的图标 URL，用于前端插件卡片（「我的插件」与「插件市场」）。留空则回退平台 logo。从 GitHub 仓库发布时，仓库 `manifest.json` 中的 `icon` 用于市场展示（见下文），二者一致即可。
+
+`requirements` 为可选的第三方依赖列表（PEP 508 字符串）。**不要在插件里自己调 pip**——只声明，平台在启用时统一代装。建议用宽松范围（`"httpx>=0.27"`）而非钉死版本，以减少与其它插件/平台依赖撞车。若与已安装版本冲突，平台会拒绝启用并提示原因（插件运行在单进程内，同一个包无法多版本共存）。
 
 ---
 

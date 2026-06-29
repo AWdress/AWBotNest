@@ -33,6 +33,12 @@ __plugin__ = {
     # 上传后是否默认启用
     "default_enabled": False,
 
+    # ── 第三方依赖（可选）──
+    # PEP 508 字符串列表，启用时由平台统一代装（不要在插件里自己调 pip）。
+    # 建议用宽松范围（"httpx>=0.27"）而非钉死版本，减少与其它插件撞车；
+    # 与已安装版本冲突时平台会拒绝启用并提示原因（单进程同一包不能多版本共存）。
+    # "requirements": ["httpx>=0.27"],
+
     # ── 配置项（前端「配置」按钮据此自动生成设置界面）──
     # 每个字段支持：
     # type:    string | password | number | boolean | select | multiselect | slider | text(多行)

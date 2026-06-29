@@ -41,6 +41,7 @@ class PluginMeta:
     scope: str = "user"  # user | bot | both
     default_enabled: bool = False
     config_schema: dict[str, Any] = field(default_factory=dict)
+    requirements: list[str] = field(default_factory=list)  # 第三方依赖(PEP 508)，启用时由平台代装
 
     # 运行时字段（非元数据，由内核填充）
     file: str = ""            # 相对 plugins/ 的文件名
@@ -180,12 +181,22 @@ class PluginRegistry:
             scope=scope,
             default_enabled=bool(raw.get("default_enabled", False)),
             config_schema=raw.get("config_schema", {}) or {},
+            requirements=self._coerce_requirements(raw.get("requirements")),
             file=rel,
         )
         # 填充启用状态：已有记录优先，否则用 default_enabled
         meta.enabled = self._enabled_state.get(plugin_id, meta.default_enabled)
         meta.accounts = list(self._account_scope.get(plugin_id, []))
         return meta
+
+    @staticmethod
+    def _coerce_requirements(raw: Any) -> list[str]:
+        """把 __plugin__['requirements'] 规整成字符串列表。
+        接受 list[str]；其它形态（含字符串、None）一律返回空列表，避免畸形声明崩 scan。
+        具体的 PEP 508 合法性校验留给启用时的 deps.ensure。"""
+        if not isinstance(raw, list):
+            return []
+        return [str(x).strip() for x in raw if isinstance(x, str) and x.strip()]
 
     @staticmethod
     def _extract_plugin_dict(tree: ast.Module) -> Optional[dict[str, Any]]:
