@@ -21,8 +21,11 @@ const configSchema = ref({})
 const configValues = ref({})
 const configSaving = ref(false)
 
-// 应用账号弹窗（多账号下按账号选择插件）
-const acctOpen = ref(false)
+// 插件详情面板（点开卡片）：应用账号 / 重载 / 删除
+const detailOpen = ref(false)
+const detailTarget = ref(null)
+
+// 应用账号（多账号下按账号选择插件）——内嵌在详情面板里
 const acctTarget = ref(null)
 const acctOptions = ref([])    // [{session,name}]
 const acctSelected = ref([])   // 勾选的 session
@@ -80,11 +83,30 @@ async function remove(p) {
   try {
     await api.deletePlugin(p.id)
     plugins.value = plugins.value.filter((x) => x.id !== p.id)
+    detailOpen.value = false
     await loadStore(false)
   } catch (e) {
     error.value = `${p.name}: ${e.message}`
   } finally {
     busy.value[p.id] = false
+  }
+}
+
+// 点开卡片：打开详情面板，并按需加载账号范围
+async function openDetail(p) {
+  detailTarget.value = p
+  acctTarget.value = p
+  acctOptions.value = []
+  acctSelected.value = []
+  acctAllMode.value = true
+  detailOpen.value = true
+  if (p.scope === 'user' || p.scope === 'both') {
+    try {
+      const data = await api.getPluginAccounts(p.id)
+      acctOptions.value = data.accounts || []
+      acctSelected.value = [...(data.selected || [])]
+      acctAllMode.value = acctSelected.value.length === 0
+    } catch (e) { error.value = e.message }
   }
 }
 
@@ -112,16 +134,6 @@ async function saveConfig() {
   }
 }
 
-async function openAccounts(p) {
-  acctTarget.value = p
-  try {
-    const data = await api.getPluginAccounts(p.id)
-    acctOptions.value = data.accounts || []
-    acctSelected.value = [...(data.selected || [])]
-    acctAllMode.value = acctSelected.value.length === 0
-    acctOpen.value = true
-  } catch (e) { error.value = e.message }
-}
 function toggleAcct(session) {
   const i = acctSelected.value.indexOf(session)
   if (i >= 0) acctSelected.value.splice(i, 1)
@@ -132,7 +144,7 @@ async function saveAccounts() {
   try {
     const sessions = acctAllMode.value ? [] : acctSelected.value
     await api.setPluginAccounts(acctTarget.value.id, sessions)
-    acctOpen.value = false
+    toast.success('账号范围已保存')
   } catch (e) { error.value = e.message } finally { acctSaving.value = false }
 }
 
@@ -329,7 +341,8 @@ onMounted(() => { load(); loadStore(false) })
         <p class="muted">去「插件市场」安装，或把 .py 文件拖到这里 / 点「上传插件」。</p>
       </div>
       <div v-else class="grid">
-        <div v-for="p in plugins" :key="p.id" class="card plugin-card" :class="{ err: p.error }">
+        <div v-for="p in plugins" :key="p.id" class="card plugin-card clickable" :class="{ err: p.error }"
+             @click="openConfig(p)">
           <div class="card-head">
             <div class="store-title">
               <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -343,7 +356,7 @@ onMounted(() => { load(); loadStore(false) })
               </div>
             </div>
             <div class="toggle" :class="{ on: p.enabled, disabled: p.error || busy[p.id] }"
-                 @click="toggle(p)"></div>
+                 @click.stop="toggle(p)"></div>
           </div>
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
@@ -353,15 +366,9 @@ onMounted(() => { load(); loadStore(false) })
             <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item">v{{ p.version }}</span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
-          </div>
-
-          <div class="card-actions">
-            <button class="btn sm" @click="openConfig(p)"
-                    :disabled="Object.keys(p.config_schema || {}).length === 0">配置</button>
-            <button class="btn sm" v-if="p.scope === 'user' || p.scope === 'both'"
-                    @click="openAccounts(p)">账号</button>
-            <button class="btn sm" @click="reload(p)" :disabled="busy[p.id]">重载</button>
-            <button class="btn sm btn-danger" @click="remove(p)" :disabled="busy[p.id]">删除</button>
+            <button class="kebab" @click.stop="openDetail(p)" title="更多设置" aria-label="更多设置">
+              <span></span><span></span><span></span>
+            </button>
           </div>
         </div>
       </div>
@@ -415,10 +422,11 @@ onMounted(() => { load(); loadStore(false) })
           <h2>{{ configTarget?.name }} · 配置</h2>
           <span class="close" @click="configOpen=false">×</span>
         </div>
-        <ConfigForm v-model="configValues" :schema="configSchema" />
+        <ConfigForm v-if="Object.keys(configSchema).length" v-model="configValues" :schema="configSchema" />
+        <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
         <div class="modal-foot">
           <button class="btn" @click="configOpen=false">取消</button>
-          <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving">
+          <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
             {{ configSaving ? '保存中…' : '保存并应用' }}
           </button>
         </div>
@@ -426,14 +434,35 @@ onMounted(() => { load(); loadStore(false) })
     </div>
 
     <!-- 设置仓库地址弹窗 -->
-    <!-- 应用账号弹窗 -->
-    <div v-if="acctOpen" class="modal-mask" @click.self="acctOpen=false">
+    <!-- 插件详情面板（点开卡片）：账号范围 / 重载 / 删除 -->
+    <div v-if="detailOpen" class="modal-mask" @click.self="detailOpen=false">
       <div class="modal card">
         <div class="modal-head">
-          <h2>{{ acctTarget?.name }} · 应用账号</h2>
-          <span class="close" @click="acctOpen=false">×</span>
+          <div class="store-title">
+            <img :src="detailTarget?.icon || logo" class="store-icon"
+                 :class="{ 'store-icon-fallback': !detailTarget?.icon }" alt="" />
+            <div class="card-title">
+              <span class="name">{{ detailTarget?.name }}
+                <span v-if="detailTarget && isOfficial(detailTarget)" class="badge-official">官方</span>
+              </span>
+              <span class="badge" :class="detailTarget?.error ? 'badge-err' : (detailTarget?.enabled ? 'badge-on' : 'badge-off')">
+                {{ detailTarget?.error ? '异常' : (detailTarget?.enabled ? '已启用' : '未启用') }}
+              </span>
+            </div>
+          </div>
+          <span class="close" @click="detailOpen=false">×</span>
         </div>
-        <div class="form">
+
+        <p class="desc">{{ detailTarget?.description || '（无描述）' }}</p>
+        <div class="card-meta">
+          <span class="meta-item">{{ scopeLabel[detailTarget?.scope] || detailTarget?.scope }}</span>
+          <span class="meta-item">v{{ detailTarget?.version }}</span>
+          <span v-if="detailTarget?.author" class="meta-item">{{ detailTarget?.author }}</span>
+        </div>
+
+        <!-- 应用账号 -->
+        <div v-if="detailTarget?.scope === 'user' || detailTarget?.scope === 'both'" class="detail-section">
+          <h3 class="detail-h">应用账号</h3>
           <div class="hint muted">选择这个插件在哪些账号上生效。多账号时可让不同号开不同插件。</div>
           <label class="acct-row">
             <input type="radio" :checked="acctAllMode" @change="acctAllMode = true" />
@@ -451,12 +480,27 @@ onMounted(() => { load(); loadStore(false) })
               <span class="muted mono small">{{ a.session }}</span>
             </label>
           </div>
+          <div class="detail-row-foot">
+            <button class="btn sm btn-primary" @click="saveAccounts" :disabled="acctSaving">
+              {{ acctSaving ? '保存中…' : '保存账号范围' }}
+            </button>
+          </div>
         </div>
+
+        <!-- 维护 -->
+        <div class="detail-section">
+          <h3 class="detail-h">维护</h3>
+          <div class="detail-actions">
+            <button class="btn sm" @click="reload(detailTarget)" :disabled="busy[detailTarget?.id]">
+              {{ busy[detailTarget?.id] ? '处理中…' : '重载插件' }}
+            </button>
+            <button class="btn sm btn-danger" @click="remove(detailTarget)" :disabled="busy[detailTarget?.id]">删除插件</button>
+          </div>
+          <div class="hint muted">重载会重新读取插件文件并热替换；删除不可恢复。</div>
+        </div>
+
         <div class="modal-foot">
-          <button class="btn" @click="acctOpen=false">取消</button>
-          <button class="btn btn-primary" @click="saveAccounts" :disabled="acctSaving">
-            {{ acctSaving ? '保存中…' : '保存' }}
-          </button>
+          <button class="btn" @click="detailOpen=false">关闭</button>
         </div>
       </div>
     </div>
@@ -541,9 +585,23 @@ onMounted(() => { load(); loadStore(false) })
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--gap);
 }
-.plugin-card { display: flex; flex-direction: column; gap: 12px; transition: border-color 0.15s; }
+.plugin-card { display: flex; flex-direction: column; gap: 12px; transition: border-color 0.15s, transform 0.1s; }
 .plugin-card:hover { border-color: var(--border-light); }
+.plugin-card.clickable { cursor: pointer; }
+.plugin-card.clickable:hover { border-color: var(--accent-dim); }
+.plugin-card.clickable:active { transform: scale(0.995); }
 .plugin-card.err { border-color: var(--danger-dim); }
+
+.kebab {
+  margin-left: auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  width: 30px; height: 30px; padding: 0;
+  border: none; background: transparent; cursor: pointer; border-radius: 6px;
+  transition: background 0.15s;
+}
+.kebab:hover { background: var(--bg-elevated); }
+.kebab span { width: 4px; height: 4px; border-radius: 50%; background: var(--text-muted); }
+.kebab:hover span { background: var(--text-secondary); }
 
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; }
 .card-title { display: flex; flex-direction: column; gap: 6px; }
@@ -567,7 +625,7 @@ onMounted(() => { load(); loadStore(false) })
   font-size: 12px; font-family: monospace;
 }
 
-.card-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
+.card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: auto; }
 .meta-item {
   font-size: 11px; color: var(--text-muted);
   background: var(--bg-elevated); padding: 2px 8px; border-radius: 4px;
@@ -608,6 +666,17 @@ onMounted(() => { load(); loadStore(false) })
 .acct-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
 .acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .acct-item .small { margin-left: auto; }
+
+/* 详情面板分区 */
+.detail-section {
+  margin-top: 20px; padding-top: 18px; border-top: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.detail-h { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.detail-row-foot { display: flex; justify-content: flex-end; margin-top: 4px; }
+.detail-actions { display: flex; gap: 8px; }
+.modal .desc { margin-top: 12px; }
+.modal .card-meta { margin-top: 8px; }
 
 /* 手机适配 */
 @media (max-width: 768px) {
