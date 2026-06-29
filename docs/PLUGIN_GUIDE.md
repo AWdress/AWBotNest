@@ -95,11 +95,9 @@ await ctx.bot.send_photo(chat_id, "url_or_path")
 ```
 
 - `ctx.bot`：机器人账号发送代理。
-- `ctx.user`：本插件应用范围内首个已连接用户账号的发送代理。
-- `ctx.user_apps`：本插件应用范围内、所有已连接用户账号的列表，多账号插件需逐个操作时使用。
+- `ctx.user`：用户账号发送代理（取首个已连接）。
+- `ctx.user_apps`：已连接用户账号的列表，多账号插件需逐个操作时使用。
 - 目标账号未连接时，对应代理的发送方法抛 `RuntimeError`；可先判 `ctx.bot.connected` / `ctx.user.connected`。
-
-`ctx.user` 与 `ctx.user_apps` 均遵循「应用账号范围」：在插件卡片「账号」中只勾选了部分账号时，二者只返回所勾选的账号；处理器也只挂到这些账号。因此无论插件是被动响应消息、还是主动遍历 `ctx.user_apps` 发消息，都只作用于所选账号，不会用到范围外的账号。
 
 ### 通知平台所有者
 
