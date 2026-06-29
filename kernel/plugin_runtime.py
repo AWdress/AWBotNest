@@ -30,6 +30,10 @@ if TYPE_CHECKING:
 PLUGINS_DIR = Path("plugins")
 # 动态导入时使用的模块名前缀，避免与真实包冲突
 _MODULE_PREFIX = "awbotnest_plugin_"
+# group 基址分配：第一个插件从 1000 起，每个插件间隔 1000。
+# group 0 留给"未分配/平台内置"，负数区间留给需要抢在所有插件之前的特殊场景。
+_GROUP_BASE_START = 1000
+_GROUP_BASE_STEP = 1000
 
 
 class LoadedPlugin:
@@ -48,6 +52,20 @@ class PluginRuntime:
         self._accounts = accounts
         self._loaded: dict[str, LoadedPlugin] = {}
         self._lock = asyncio.Lock()
+        # 每插件分配一个唯一的 group 基址，插件内相对 group 会平移到该区间，
+        # 使不同插件的 handler 落在各自独立的 group 段，互不"吃消息"。
+        # 步长 1000 给插件内部留足相对偏移空间（建议相对 group 控制在 ±500 内）。
+        self._group_bases: dict[str, int] = {}
+        self._next_group_base = _GROUP_BASE_START
+
+    def _group_base_for(self, plugin_id: str) -> int:
+        """取得插件的 group 基址；首次访问时分配，重载/重挂保持稳定。"""
+        base = self._group_bases.get(plugin_id)
+        if base is None:
+            base = self._next_group_base
+            self._group_bases[plugin_id] = base
+            self._next_group_base += _GROUP_BASE_STEP
+        return base
 
     @property
     def loaded_ids(self) -> list[str]:
@@ -88,7 +106,10 @@ class PluginRuntime:
                 if setup is None or not callable(setup):
                     raise AttributeError("插件缺少 async def setup(ctx) 函数")
 
-                ctx = PlatformContext(plugin_id, self._accounts, registry)
+                ctx = PlatformContext(
+                    plugin_id, self._accounts, registry,
+                    group_base=self._group_base_for(plugin_id),
+                )
                 # setup 可以是 async 或 sync
                 result = setup(ctx)
                 if asyncio.iscoroutine(result):

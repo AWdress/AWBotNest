@@ -280,6 +280,7 @@ async def setup(ctx):
 | 过滤器 | `ctx.filters.text` 等 |
 | 注册消息 | `@ctx.on_message(filter, group=0, target="auto")` |
 | 注册回调 | `@ctx.on_callback(filter, group=0, target="auto")` |
+| 中断传播 | `raise ctx.StopPropagation`（在 handler 内主动阻止后续插件处理这条消息） |
 | Bot 发送 | `await ctx.bot.send(chat_id, text)` |
 | 用户发送 | `await ctx.user.send(chat_id, text)` |
 | 通知所有者 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给主人，回退主账号收藏夹） |
@@ -292,5 +293,7 @@ async def setup(ctx):
 | 清理回调 | `ctx.add_cleanup(fn)` |
 
 `target`: `"user"` / `"bot"` / `"both"` / `"auto"`（按插件 scope 自动选择）。
+
+**group 隔离（防止互相"吃消息"）**：Pyrogram 在同一 group 内只执行第一个匹配的 handler 即跳出该组。平台为**每个插件分配独立的 group 基址**（`PluginRuntime._group_base_for`，步长 1000），`ctx.on_message/on_callback` 把插件写的 `group=` 当作「**插件内相对优先级**」平移到该区间。因此：① 不同插件监听同类消息互不抢占，都能收到；② 单个插件内部仍可用多个相对 group 排序（数值越小越先）。插件作者无需关心其它插件的 group。若插件希望"我处理后不让后续插件再处理"，在 handler 内 `raise ctx.StopPropagation`。
 
 **多账号下的账号范围**：`scope=user`/`both` 的插件默认挂到**所有**已连接用户账号；用户可在插件卡片「账号」按钮里选择只应用到部分账号（前端 `PUT /api/plugins/<id>/accounts`，空数组=全部）。范围存于 `data/plugins_state.json` 的 `account_scope`，由 `ctx._resolve_targets` 按 client 的 session 名过滤。改动后自动重载重挂 handler。

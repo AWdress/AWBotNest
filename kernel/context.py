@@ -17,6 +17,7 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 from core import filters as _filters
 from core import logger as _root_logger
 from pyrogram.handlers import MessageHandler, CallbackQueryHandler
+from pyrogram import StopPropagation, ContinuePropagation
 
 
 class _PluginLoggerAdapter:
@@ -129,11 +130,15 @@ class PlatformContext:
         registry: "PluginRegistry",
         kv_dir: Path = Path("data/kv"),
         data_root: Path = Path("data/plugin_data"),
+        group_base: int = 0,
     ):
         self.plugin_id = plugin_id
         self._accounts = accounts
         self._registry = registry
         self._data_root = data_root
+        # 平台分配给本插件的 group 基址。插件写的相对 group 会平移到此基址上，
+        # 使不同插件落在各自独立的 group 区间，互不"吃消息"（见 on_message 说明）。
+        self._group_base = group_base
 
         # 已注册的处理器句柄列表：(client, handler, group)
         self._handles: list[tuple[object, object, int]] = []
@@ -144,6 +149,10 @@ class PlatformContext:
         self.filters = _filters
         self.log = _make_plugin_logger(plugin_id)
         self.kv = _KVStore(kv_dir / f"{plugin_id}.sqlite")
+        # 主动中断消息传播的信号：handler 内 `raise ctx.StopPropagation` 可阻止
+        # 后续（更大 group）的其它插件/handler 再处理这条消息。
+        self.StopPropagation = StopPropagation
+        self.ContinuePropagation = ContinuePropagation
 
     # ──────────────────────────────────────────────
     # 账号能力
@@ -226,24 +235,32 @@ class PlatformContext:
             async def handler(client, message): ...
 
         target: 'user' | 'bot' | 'auto'(按插件 scope 自动选择，默认 user)
+
+        关于 group：Pyrogram 在同一 group 内只执行第一个匹配的 handler 就跳出该组，
+        若所有插件都用同一 group，先注册者会"吃掉"消息。为此平台给每个插件分配独立的
+        group 基址，这里传入的 group 是「插件内相对优先级」——会被平移到本插件的区间，
+        既保证不同插件互不抢占，又保留插件内部用多个 group 排序的能力（数值越小越先）。
         """
         def decorator(func: Callable):
             wrapped = self._track(func)
             handler = MessageHandler(wrapped, filter_)
+            real_group = self._group_base + group
             for client in self._resolve_targets(target):
-                client.add_handler(handler, group)
-                self._handles.append((client, handler, group))
+                client.add_handler(handler, real_group)
+                self._handles.append((client, handler, real_group))
             return func
         return decorator
 
     def on_callback(self, filter_=None, group: int = 0, target: str = "auto"):
-        """注册回调查询处理器（按钮点击）"""
+        """注册回调查询处理器（按钮点击）。group 语义同 on_message：插件内相对优先级，
+        平台自动平移到本插件独立的 group 区间。"""
         def decorator(func: Callable):
             wrapped = self._track(func)
             handler = CallbackQueryHandler(wrapped, filter_)
+            real_group = self._group_base + group
             for client in self._resolve_targets(target):
-                client.add_handler(handler, group)
-                self._handles.append((client, handler, group))
+                client.add_handler(handler, real_group)
+                self._handles.append((client, handler, real_group))
             return func
         return decorator
 
