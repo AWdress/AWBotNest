@@ -195,8 +195,36 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     state["versions"] = versions
     _save_state(state)
     _refresh_registry()
+    # 自动重载「更新成功且当前正在运行」的插件，让新代码立即生效。
+    # 未加载的插件只更新文件、不启用（保持 §7.5：启用=执行远程代码须手动）。
+    reloaded = await _reload_running(result["downloaded"])
+    if reloaded:
+        result["reloaded"] = reloaded
     result["ok"] = bool(result["downloaded"])
     return result
+
+
+async def _reload_running(plugin_ids: list[str]) -> list[str]:
+    """对传入插件中「当前已加载」者执行热重载，使更新后的新代码生效。
+    返回实际重载成功的插件 id 列表。运行时不可用或某插件未加载则跳过。"""
+    reloaded: list[str] = []
+    try:
+        from kernel import state as _state
+        runtime = _state.runtime
+    except Exception:  # noqa: BLE001
+        runtime = None
+    if runtime is None:
+        return reloaded
+    for pid in plugin_ids:
+        try:
+            if not runtime.is_loaded(pid):
+                continue  # 未运行的只更新文件，不自动启用
+            await runtime.reload(pid)
+            reloaded.append(pid)
+            logger.info("插件 [%s] 更新后已自动重载", pid)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("插件 [%s] 更新后自动重载失败: %r", pid, e)
+    return reloaded
 
 
 def _refresh_registry() -> None:
@@ -222,6 +250,7 @@ async def sync_once() -> dict[str, Any]:
     state = _load_state()
     versions: dict[str, str] = state.get("versions") or {}
     updated: list[str] = []
+    reloaded: list[str] = []
     errors: list[str] = list(listing.get("errors") or [])
 
     to_update = []
@@ -244,11 +273,14 @@ async def sync_once() -> dict[str, Any]:
     if to_update:
         dl = await download_plugins(to_update)
         updated = dl.get("downloaded", [])
+        reloaded = dl.get("reloaded", [])
         errors.extend(dl.get("errors", []))
 
     if updated:
-        logger.info("插件仓库轮询：更新已安装插件 %d 个 %s", len(updated), updated)
-    return {"ok": True, "store_count": len(store), "updated": updated, "errors": errors}
+        logger.info("插件仓库轮询：更新已安装插件 %d 个 %s%s", len(updated), updated,
+                    f"，其中 %d 个已自动重载 %s" % (len(reloaded), reloaded) if reloaded else "")
+    return {"ok": True, "store_count": len(store), "updated": updated,
+            "reloaded": reloaded, "errors": errors}
 
 
 # ──────────────────────────────────────────────
