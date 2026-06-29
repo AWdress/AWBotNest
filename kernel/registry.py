@@ -37,6 +37,7 @@ class PluginMeta:
     version: str = "0.0.0"
     author: str = ""
     description: str = ""
+    icon: str = ""       # 可选：插件图标 URL，前端卡片展示；空则回退平台 logo
     scope: str = "user"  # user | bot | both
     default_enabled: bool = False
     config_schema: dict[str, Any] = field(default_factory=dict)
@@ -175,6 +176,7 @@ class PluginRegistry:
             version=str(raw.get("version", "0.0.0")),
             author=raw.get("author", ""),
             description=raw.get("description", ""),
+            icon=raw.get("icon", "") or "",
             scope=scope,
             default_enabled=bool(raw.get("default_enabled", False)),
             config_schema=raw.get("config_schema", {}) or {},

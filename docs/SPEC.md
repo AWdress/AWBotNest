@@ -81,12 +81,14 @@ __plugin__ = {
     "scope": "user",           # 必填：user | bot | both
     "author": "AW",            # 可选
     "description": "...",       # 可选：前端展示
+    "icon": "",                # 可选：图标 URL，前端卡片用；空则回退平台 logo
     "default_enabled": False,  # 可选：上传后是否默认启用
     "config_schema": {...},    # 可选：前端自动生成配置表单
 }
 ```
 
 - 缺必填字段、`id` ≠ 文件名、`scope` 非法 → 前端标红，禁止启用。
+- `icon` 在「我的插件」与「插件市场」卡片展示；GitHub 发布时 `manifest.json` 的 `icon` 用于市场，二者保持一致。
 
 ### 3.2 `setup(ctx)`（必填）
 

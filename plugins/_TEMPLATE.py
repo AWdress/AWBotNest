@@ -27,6 +27,7 @@ __plugin__ = {
     "version": "1.0.0",
     "author": "你的名字",
     "description": "这是一个插件模板，演示 setup/teardown、ctx 用法与配置 UI。",
+    "icon": "",                         # 可选：图标 URL，前端卡片用；留空回退平台 logo
     "scope": "user",                    # user(用户账号) | bot(机器人账号) | both
 
     # 上传后是否默认启用

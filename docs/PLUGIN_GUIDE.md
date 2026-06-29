@@ -30,6 +30,7 @@ __plugin__ = {
     "version": "1.0.0",
     "author": "",
     "description": "功能说明",
+    "icon": "",                   # 可选，图标 URL；留空回退平台 logo
     "scope": "user",              # user | bot | both
     "default_enabled": False,
     "config_schema": {            # 可选，前端据此生成配置表单
@@ -50,6 +51,8 @@ async def teardown(ctx):
 ```
 
 `__plugin__` 为顶层字面量字典，平台通过静态 AST 解析读取，不执行插件代码。必填字段：`name`、`id`、`version`、`scope`。
+
+`icon` 为可选的图标 URL，用于前端插件卡片（「我的插件」与「插件市场」）。留空则回退平台 logo。从 GitHub 仓库发布时，仓库 `manifest.json` 中的 `icon` 用于市场展示（见下文），二者一致即可。
 
 ---
 
