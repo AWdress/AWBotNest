@@ -392,22 +392,30 @@ onMounted(() => {
   .topbar-logo { display: block; }
   .topbar h1 { font-size: 16px; }
   .topbar-actions { display: flex; }
-  /* 内容区留出底部标签栏高度，避免被遮 */
-  .content { padding: 16px 14px calc(72px + env(safe-area-inset-bottom)); }
-  /* 底部标签栏 */
+  /* 内容区留出底部悬浮标签栏高度，避免被遮 */
+  .content { padding: 16px 14px calc(86px + env(safe-area-inset-bottom)); }
+  /* 底部标签栏：悬浮胶囊，居中不拉满 */
   .tabbar {
-    display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 20;
-    background: var(--bg-sidebar);
-    border-top: 1px solid var(--border);
-    padding-bottom: env(safe-area-inset-bottom);
+    display: flex; position: fixed;
+    bottom: calc(12px + env(safe-area-inset-bottom));
+    left: 50%; transform: translateX(-50%);
+    z-index: 20;
+    background: rgba(20, 23, 31, 0.55);
+    -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    padding: 5px 6px;
   }
   .tab-item {
-    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
-    padding: 9px 0 7px; color: var(--text-muted);
-    font-size: 11px; font-weight: 600; transition: color 0.15s;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    padding: 6px 12px; color: var(--text-muted);
+    font-size: 10px; font-weight: 600; white-space: nowrap;
+    border-radius: 999px;
+    transition: color 0.15s, background 0.15s;
   }
-  .tab-item.active { color: var(--accent); }
-  .tab-icon { width: 22px; height: 22px; }
+  .tab-item.active { color: var(--accent); background: var(--accent-dim); }
+  .tab-icon { width: 20px; height: 20px; }
 }
 
 /* 强制首次改密界面 */

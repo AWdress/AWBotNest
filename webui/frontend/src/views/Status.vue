@@ -289,7 +289,7 @@ const donut = computed(() => {
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
 @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px)  { .grid { grid-template-columns: 1fr; } }
-.stat { display: flex; align-items: center; gap: 16px; }
+.stat { display: flex; align-items: center; gap: 16px; min-width: 0; }
 .stat-icon {
   width: 48px; height: 48px; border-radius: 12px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;

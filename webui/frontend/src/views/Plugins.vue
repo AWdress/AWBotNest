@@ -23,7 +23,20 @@ const configSaving = ref(false)
 
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
-function toggleMenu(p) { menuFor.value = menuFor.value === p.id ? null : p.id }
+const menuAlignRight = ref(false)   // 靠近右边界时菜单改为向左展开
+function toggleMenu(p, ev) {
+  if (menuFor.value === p.id) { menuFor.value = null; return }
+  menuAlignRight.value = false
+  menuFor.value = p.id
+  // 展开后测量是否会超出视口右边界，会则贴着按钮左侧展开
+  const wrap = ev?.currentTarget?.closest('.kebab-wrap')
+  nextTick(() => {
+    const menu = wrap?.querySelector('.dropdown')
+    if (!menu) return
+    const r = menu.getBoundingClientRect()
+    if (r.right > window.innerWidth - 8) menuAlignRight.value = true
+  })
+}
 function closeMenu() { menuFor.value = null }
 
 // 应用账号弹窗（多账号下按账号选择插件）
@@ -452,11 +465,11 @@ onUnmounted(() => {
             <span class="meta-item">v{{ p.version }}</span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
             <div class="kebab-wrap">
-              <button class="kebab" :class="{ active: menuFor === p.id }" @click.stop="toggleMenu(p)"
+              <button class="kebab" :class="{ active: menuFor === p.id }" @click.stop="toggleMenu(p, $event)"
                       title="更多" aria-label="更多">
                 <span></span><span></span><span></span>
               </button>
-              <div v-if="menuFor === p.id" class="dropdown" @click.stop>
+              <div v-if="menuFor === p.id" class="dropdown" :class="{ 'align-right': menuAlignRight }" @click.stop>
                 <button class="menu-item" @click.stop="openConfig(p)">
                   <span class="mi-ico">⚙</span> 配置
                 </button>
@@ -707,6 +720,7 @@ onUnmounted(() => {
   box-shadow: 0 8px 28px rgba(0,0,0,0.45);
   display: flex; flex-direction: column; gap: 1px;
 }
+.dropdown.align-right { left: auto; right: 0; }
 .menu-item {
   display: flex; align-items: center; gap: 9px;
   width: 100%; padding: 8px 10px; border: none; background: transparent;

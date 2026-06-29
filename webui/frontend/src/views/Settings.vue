@@ -223,8 +223,9 @@ onMounted(() => { load(); loadUsername() })
 /* 手机适配 */
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
-  .tabs { overflow-x: auto; flex-wrap: nowrap; -webkit-overflow-scrolling: touch; }
-  .tab { white-space: nowrap; flex-shrink: 0; }
+  /* tab 全部换行展示，避免靠右的「数据库」被裁掉看不全 */
+  .tabs { flex-wrap: wrap; }
+  .tab { white-space: nowrap; flex: 1 1 auto; justify-content: center; padding: 8px 12px; }
   .panel { max-width: 100%; }
 }
 </style>
