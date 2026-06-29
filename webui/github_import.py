@@ -70,6 +70,19 @@ def _headers(token: Optional[str]) -> dict:
     return h
 
 
+def _bust(url: str) -> str:
+    """给 raw URL 追加一次性查询参数，绕过 raw.githubusercontent.com 的 Fastly CDN 缓存
+    （默认约 5 分钟 TTL）。否则刚推送的 manifest 版本在 TTL 内刷新仍读到旧值，
+    表现为「重启才看到新版本」。Fastly 缓存键含查询串，加随机参数即取最新。"""
+    import time
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}_ts={int(time.time() * 1000)}"
+
+
+# raw 读取（manifest / __init__.py 探测）统一带上 no-cache 请求头，配合 _bust 双保险
+_NOCACHE = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+
+
 def parse_source(src: str) -> dict:
     """解析用户输入 → {kind, ...}"""
     src = src.strip()
@@ -119,7 +132,7 @@ async def _try_manifest(client, owner, repo, branch, subdir, token) -> Optional[
     for name in MANIFEST_NAMES:
         url = _raw_url(owner, repo, branch, f"{base}{name}")
         try:
-            r = await client.get(url, headers=_headers(token))
+            r = await client.get(_bust(url), headers={**_headers(token), **_NOCACHE})
         except Exception:  # noqa: BLE001
             continue
         if r.status_code != 200:
@@ -177,7 +190,8 @@ async def _list_contents(client, owner, repo, branch, subdir, token) -> list[dic
             elif it.get("type") == "dir" and not nm.startswith("_"):
                 # 探测该目录是否含 __init__.py（文件夹插件）
                 sub = f"{it['path']}/__init__.py"
-                rr = await client.get(_raw_url(owner, repo, branch, sub), headers=_headers(token))
+                rr = await client.get(_bust(_raw_url(owner, repo, branch, sub)),
+                                      headers={**_headers(token), **_NOCACHE})
                 if rr.status_code == 200:
                     results.append({
                         "id": nm, "name": nm, "version": "", "author": "",
@@ -237,19 +251,14 @@ async def _list_dir_files(client, owner, repo, branch, dir_path, token) -> list[
 
 
 async def fetch_file(download_url: str, token: Optional[str] = None) -> bytes:
-    """下载单个文件内容。限制最大体积，防超大文件耗尽内存。"""
-    max_bytes = 8 * 1024 * 1024  # 单文件上限 8MB（插件源码足够）
+    """下载单个文件内容（不限大小）。"""
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
-        async with client.stream("GET", download_url, headers=_headers(token)) as r:
+        async with client.stream("GET", _bust(download_url),
+                                 headers={**_headers(token), **_NOCACHE}) as r:
             r.raise_for_status()
-            cl = r.headers.get("content-length")
-            if cl and int(cl) > max_bytes:
-                raise ValueError(f"文件过大（{int(cl)} 字节，上限 {max_bytes}）")
             chunks = bytearray()
             async for chunk in r.aiter_bytes():
                 chunks.extend(chunk)
-                if len(chunks) > max_bytes:
-                    raise ValueError(f"文件超过大小上限 {max_bytes} 字节")
             return bytes(chunks)
 
 
