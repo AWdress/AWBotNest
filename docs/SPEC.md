@@ -299,4 +299,6 @@ async def setup(ctx):
 
 **group 隔离（防止互相"吃消息"）**：Pyrogram 在同一 group 内只执行第一个匹配的 handler 即跳出该组。平台为**每个插件分配独立的 group 基址**（`PluginRuntime._group_base_for`，步长 1000），`ctx.on_message/on_callback` 把插件写的 `group=` 当作「**插件内相对优先级**」平移到该区间。因此：① 不同插件监听同类消息互不抢占，都能收到；② 单个插件内部仍可用多个相对 group 排序（数值越小越先）。插件作者无需关心其它插件的 group。若插件希望"我处理后不让后续插件再处理"，在 handler 内 `raise ctx.StopPropagation`。
 
-**多账号下的账号范围**：`scope=user`/`both` 的插件默认挂到**所有**已连接用户账号；用户可在插件卡片「账号」按钮里选择只应用到部分账号（前端 `PUT /api/plugins/<id>/accounts`，空数组=全部）。范围存于 `data/plugins_state.json` 的 `account_scope`，由 `ctx._resolve_targets` 按 client 的 session 名过滤。改动后自动重载重挂 handler。
+**多账号下的账号范围**：`scope=user`/`both` 的插件默认挂到**所有**已连接用户账号；用户可在插件卡片「账号」按钮里选择只应用到部分账号（前端 `PUT /api/plugins/<id>/accounts`，空数组=全部）。范围存于 `data/plugins_state.json` 的 `account_scope`，由 `ctx._scoped_user_apps` 按 client 的 session 名统一过滤。改动后自动重载重挂 handler。
+
+该范围对 handler 挂载、`ctx.user`、`ctx.user_apps` **一致生效**（三者共用 `_scoped_user_apps`）：只勾选一个账号时，处理器只挂到该账号，主动发送类逻辑遍历 `ctx.user_apps` 也只拿到该账号，不会出现「只勾一个账号、两个账号都在发消息」。

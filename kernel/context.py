@@ -164,13 +164,26 @@ class PlatformContext:
 
     @property
     def user(self) -> _ClientProxy:
-        """主用户账号发送代理（多账号取第一个已连接）"""
-        return _ClientProxy(self._accounts.primary_user_app)
+        """主用户账号发送代理（多账号取应用范围内第一个已连接）。
+        遵循插件的「应用账号范围」——只勾选了某些账号时，不会取到范围外的账号。"""
+        scoped = self._scoped_user_apps()
+        return _ClientProxy(scoped[0] if scoped else None)
 
     @property
     def user_apps(self) -> list[object]:
-        """所有已连接用户账号（多账号场景）"""
-        return self._accounts.connected_user_apps
+        """本插件应用范围内、已连接的用户账号列表（多账号场景）。
+        只勾选了部分账号时只返回这些账号；未勾选（=全部）时返回所有已连接用户账号。"""
+        return self._scoped_user_apps()
+
+    def _scoped_user_apps(self) -> list[object]:
+        """已连接用户账号，按本插件「应用账号范围」过滤（空范围=全部）。
+        handler 挂载与 ctx.user/ctx.user_apps 共用同一套过滤，保证「只勾一个账号」时
+        无论插件是被动响应消息还是主动遍历账号发消息，都只作用于所选账号。"""
+        user_apps = self._accounts.connected_user_apps
+        scope_sessions = self._registry.get_account_scope(self.plugin_id)
+        if scope_sessions:
+            return [a for a in user_apps if getattr(a, "name", None) in scope_sessions]
+        return list(user_apps)
 
     @property
     def owner_id(self) -> int:
@@ -285,7 +298,8 @@ class PlatformContext:
 
     def _resolve_targets(self, target: str) -> list[object]:
         """根据 target / 插件 scope 决定把 handler 注册到哪些 client。
-        user/both 插件会按「应用账号范围」过滤用户账号（空范围=全部）。"""
+        user/both 插件会按「应用账号范围」过滤用户账号（空范围=全部），
+        与 ctx.user / ctx.user_apps 共用 _scoped_user_apps，口径一致。"""
         meta = self._registry.get_meta(self.plugin_id)
         scope = meta.scope if meta else "user"
         if target == "auto":
@@ -293,12 +307,7 @@ class PlatformContext:
 
         clients: list[object] = []
         if target in ("user", "both"):
-            user_apps = self._accounts.connected_user_apps
-            scope_sessions = self._registry.get_account_scope(self.plugin_id)
-            if scope_sessions:
-                # 仅挂到勾选的账号（按 session 名匹配）
-                user_apps = [a for a in user_apps if getattr(a, "name", None) in scope_sessions]
-            clients.extend(user_apps)
+            clients.extend(self._scoped_user_apps())
         if target in ("bot", "both"):
             bot = self._accounts.bot_app
             if bot and getattr(bot, "is_connected", False):
