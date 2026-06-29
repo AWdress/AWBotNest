@@ -32,6 +32,7 @@ async function onAuthed() {
     mustChangePwd.value = !!st.must_change_password
   } catch { /* ignore */ }
   ping()
+  checkUpdate()
 }
 function logout() { setToken(''); authed.value = false; mustChangePwd.value = false }
 
@@ -87,7 +88,7 @@ async function ping() {
     const s = await api.status()
     online.value = true
     version.value = s.version || ''
-    checkUpdate()
+    // 查更新走独立的低频节奏，不跟 10 秒心跳，否则会打满 GitHub 未鉴权限流(60次/小时)
   } catch { online.value = false }
 }
 
@@ -105,8 +106,13 @@ function isNewer(remote, local) {
 }
 
 // 查 GitHub 最新发布版本，与当前对比（失败静默，不影响使用）
+// 注意：GitHub 未鉴权接口限流 60 次/小时/IP，必须低频调用，不能跟随心跳
 async function checkUpdate() {
-  if (!version.value) return
+  if (!version.value) {
+    // 还没拿到本地版本就先取一次，避免 onMounted 时序导致跳过
+    try { const s = await api.status(); version.value = s.version || '' } catch { return }
+    if (!version.value) return
+  }
   try {
     const r = await fetch('https://api.github.com/repos/AWdress/AWBotNest/releases/latest', {
       headers: { Accept: 'application/vnd.github+json' },
@@ -139,8 +145,10 @@ const icons = {
 }
 
 onMounted(() => {
-  if (authed.value) ping()   // 恢复登录态后立即校验令牌（失效则 401 踢回登录页）
+  if (authed.value) { ping(); checkUpdate() }   // 恢复登录态后立即校验令牌 + 查一次更新
   setInterval(() => { if (authed.value) ping() }, 10000)
+  // 查更新独立低频：每 6 小时一次，避免打满 GitHub 限流
+  setInterval(() => { if (authed.value) checkUpdate() }, 6 * 3600 * 1000)
 })
 </script>
 

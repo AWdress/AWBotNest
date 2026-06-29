@@ -235,17 +235,19 @@ const donut = computed(() => {
       <div class="card info">
         <div class="card-title">账号 ({{ st.accounts.length }})</div>
         <div v-if="st.accounts.length === 0" class="muted empty">暂无账号，去「账号管理」登录。</div>
-        <table v-else class="tbl">
-          <thead><tr><th>名称</th><th>session</th><th>TGID</th><th>状态</th></tr></thead>
-          <tbody>
-            <tr v-for="a in st.accounts" :key="a.session">
-              <td>{{ a.name }}</td>
-              <td class="mono">{{ a.session }}</td>
-              <td class="mono">{{ a.tgid || '—' }}</td>
-              <td><span class="badge" :class="a.online ? 'badge-on' : 'badge-off'">{{ a.online ? '在线' : '离线' }}</span></td>
-            </tr>
-          </tbody>
-        </table>
+        <div v-else class="tbl-scroll">
+          <table class="tbl">
+            <thead><tr><th>名称</th><th>session</th><th>TGID</th><th>状态</th></tr></thead>
+            <tbody>
+              <tr v-for="a in st.accounts" :key="a.session">
+                <td>{{ a.name }}</td>
+                <td class="mono">{{ a.session }}</td>
+                <td class="mono">{{ a.tgid || '—' }}</td>
+                <td><span class="badge" :class="a.online ? 'badge-on' : 'badge-off'">{{ a.online ? '在线' : '离线' }}</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
 
       <!-- 定时任务 -->
@@ -306,12 +308,11 @@ const donut = computed(() => {
 .stat-value.sm { font-size: 19px; }
 .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
-/* 网格子项默认 min-width:auto，卡内表格/任务行不换行会把列撑宽，超出其他卡片宽度 */
+.cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: var(--gap); }
 .cols > * { min-width: 0; }
 /* 时间线宽、环形窄 */
-.cols-activity { grid-template-columns: 2fr 1fr; }
-@media (max-width: 860px) { .cols, .cols-activity { grid-template-columns: 1fr; } }
+.cols-activity { grid-template-columns: minmax(0,2fr) minmax(0,1fr); }
+@media (max-width: 860px) { .cols, .cols-activity { grid-template-columns: minmax(0,1fr); } }
 
 .info { display: flex; flex-direction: column; gap: 14px; }
 .card-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
@@ -388,6 +389,7 @@ const donut = computed(() => {
 .job-trigger { color: var(--text-secondary); font-size: 12px; }
 .job-next { color: var(--text-muted); font-size: 12px; }
 
+.tbl-scroll { max-width: 100%; overflow-x: auto; }
 .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .tbl th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--border); }
 .tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
@@ -401,8 +403,8 @@ const donut = computed(() => {
   .stat { padding: 12px; gap: 10px; }
   .stat-icon { width: 38px; height: 38px; }
   .stat-value { font-size: 18px; }
-  /* 账号表格：超宽时容器内横向滚动，不撑破布局 */
-  .tbl { display: block; overflow-x: auto; white-space: nowrap; }
+  /* 账号表格：超宽时在 .tbl-scroll 容器内横向滚动，不撑破卡片 */
+  .tbl { white-space: nowrap; }
   .info-bar { gap: 10px 0; }
   .ib { flex-basis: 50%; }
 }
