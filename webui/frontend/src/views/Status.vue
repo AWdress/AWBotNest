@@ -307,6 +307,8 @@ const donut = computed(() => {
 .stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
 .cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+/* 网格子项默认 min-width:auto，卡内表格/任务行不换行会把列撑宽，超出其他卡片宽度 */
+.cols > * { min-width: 0; }
 /* 时间线宽、环形窄 */
 .cols-activity { grid-template-columns: 2fr 1fr; }
 @media (max-width: 860px) { .cols, .cols-activity { grid-template-columns: 1fr; } }
