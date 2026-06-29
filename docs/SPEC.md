@@ -283,6 +283,7 @@ async def setup(ctx):
 | 中断传播 | `raise ctx.StopPropagation`（在 handler 内主动阻止后续插件处理这条消息） |
 | Bot 发送 | `await ctx.bot.send(chat_id, text)` |
 | 用户发送 | `await ctx.user.send(chat_id, text)` |
+| 多账号列表 | `ctx.user_apps`（所有已连接用户账号；未连接时发送代理抛 `RuntimeError`，可判 `ctx.bot/user.connected`） |
 | 通知所有者 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给主人，回退主账号收藏夹） |
 | 所有者 ID | `ctx.owner_id`（平台主人 Telegram 数字 ID，无主账号为 0） |
 | 配置 | `ctx.config`（dict） |

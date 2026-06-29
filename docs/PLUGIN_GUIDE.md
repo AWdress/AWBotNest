@@ -73,6 +73,8 @@ async def h2(client, message):
 
 `group` 为本插件内部多个处理器之间的相对执行优先级，数值越小越先执行。在处理器中 `raise ctx.StopPropagation` 可阻止该消息被后续处理器继续处理。
 
+`on_message` / `on_callback` 还接受 `target` 参数，决定处理器挂载到哪类账号：`"auto"`（默认，按插件 `scope` 选择）、`"user"`、`"bot"`、`"both"`。`scope` 为 `both` 时可借此将不同处理器分别挂到用户账号或机器人账号。
+
 ### 注册回调处理器
 
 ```python
@@ -88,6 +90,11 @@ await ctx.bot.send(chat_id, "text")
 await ctx.user.send(chat_id, "text")
 await ctx.bot.send_photo(chat_id, "url_or_path")
 ```
+
+- `ctx.bot`：机器人账号发送代理。
+- `ctx.user`：主用户账号发送代理（多账号取首个已连接）。
+- `ctx.user_apps`：所有已连接用户账号的列表，多账号插件需逐个操作时使用。
+- 目标账号未连接时，对应代理的发送方法抛 `RuntimeError`；可先判 `ctx.bot.connected` / `ctx.user.connected`。
 
 ### 通知平台所有者
 
@@ -108,6 +115,8 @@ async def h(client, message):
 - `account`：多账号场景下传入处理器收到的 `client`，平台自动标注来源账号名。
 - 平台优先经 Bot 私聊所有者（需所有者已 `/start` 过 Bot），不可用时回退至主账号收藏夹；每条通知同时写入运行日志。
 - 推送通知一律走 `ctx.notify`，不要自行调用 `ctx.bot.send` 实现。
+
+若需所有者的 Telegram 数字 ID（如直接发送至特定会话），用 `ctx.owner_id`（无主账号时为 `0`）。
 
 ### 读取配置
 
@@ -160,6 +169,16 @@ ctx.schedule(daily_report, "cron", hour=9, id="每日早报")
 ```
 
 任务 `id` 自动附加 `<id>::` 前缀以归属到本插件；不传 `id` 时默认取函数名。已注册任务展示于「系统状态」页（任务名、所属插件、触发规则、下次运行时间）。
+
+### 资源清理
+
+通过 `ctx.on_message`、`ctx.on_callback`、`ctx.schedule` 注册的处理器与任务由平台在停用时自动清理，无需手动处理。若插件自行申请了其它资源（连接、文件句柄、外部客户端等），用 `ctx.add_cleanup(fn)` 注册清理回调（停用时调用），或在 `teardown(ctx)` 中释放。
+
+```python
+async def setup(ctx):
+    conn = open_something()
+    ctx.add_cleanup(conn.close)
+```
 
 ---
 
