@@ -90,9 +90,7 @@ async def h2(client, message):
 
 常用过滤器：`ctx.filters.text`、`ctx.filters.photo`、`ctx.filters.command("xxx")`、`ctx.filters.outgoing`、`ctx.filters.incoming`，可以用 `&`（与）`|`（或）`~`（非）组合。
 
-> **关于 group（消息抢占）**：Pyrogram 在同一个 group 内只执行第一个匹配的 handler 就跳出该组。平台会**给每个插件分配独立的 group 区间**，所以不同插件即使都监听同类消息也**不会互相吃消息**，各自都能收到。`group=` 参数表示的是「**本插件内部**的相对优先级」（数值越小越先执行），平台会自动平移到你这个插件的区间——你不用关心别的插件用了什么 group，写相对值即可。
->
-> 如果你确实希望「我处理了这条消息，就别让后面的插件再处理」，在 handler 里 `raise ctx.StopPropagation` 主动中断后续传播（谨慎使用，会影响其它插件）。
+> `group=` 是本插件内部多个处理器的相对优先级（数值越小越先）。想让"我处理后不再交给后续处理器"，在 handler 里 `raise ctx.StopPropagation`。
 
 ### 注册按钮回调
 
@@ -125,7 +123,7 @@ async def h(client, message):
     await ctx.notify("抢到红包", account=client)         # 通知里会带「账号：xxx」
 ```
 
-- `level`：`info` / `success` / `warning` / `error`，平台按级别打图标（）。
+- `level`：`info` / `success` / `warning` / `error`，平台按级别加标签。
 - `category`：可选业务分类（如「订单」「签到」），显示在标签里。
 - `account`：多账号时传 handler 收到的 `client`，平台自动显示该账号名——你不用自己查账号是谁。
 - 平台优先用 Bot 私聊主人（需主人事先 /start 过 Bot），Bot 不可用就发到主账号收藏夹；每条通知也会进运行日志。
