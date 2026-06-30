@@ -42,6 +42,9 @@ _DEFAULTS: dict[str, Any] = {
     "PLUGIN_REPO_ENABLE": False,
     "PLUGIN_REPOS": [],          # 多仓库：[{"url": "owner/repo", "token": ""}, ...]
     "PLUGIN_REPO_INTERVAL": 20,  # 轮询间隔（分钟）：刷新商店列表 + 检查已装插件更新
+    # 插件依赖安装用的 pip 镜像源。默认清华源（境内直连、不经墙，开箱可用）；
+    # 留空则走官方 pypi（此时若配了平台代理会自动用代理出墙）。
+    "PIP_INDEX_URL": "https://pypi.tuna.tsinghua.edu.cn/simple",
 }
 
 # 允许前端读写的字段（白名单，防止写入任意键）

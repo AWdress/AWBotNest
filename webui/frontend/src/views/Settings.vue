@@ -26,6 +26,7 @@ async function load() {
     // 保证嵌套结构存在
     s.value.proxy_set = s.value.proxy_set || { proxy_enable: false, proxy: {}, PROXY_URL: '' }
     s.value.proxy_set.proxy = s.value.proxy_set.proxy || {}
+    if (s.value.PIP_INDEX_URL === undefined) s.value.PIP_INDEX_URL = ''
     s.value.DB_INFO = s.value.DB_INFO || {}
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
   } catch (e) { err.value = e.message } finally { loading.value = false }
@@ -161,6 +162,12 @@ onMounted(() => { load(); loadUsername() })
               <input class="input" type="password" v-model="s.proxy_set.proxy.password" /></div>
           </div>
         </template>
+        <div class="field" style="margin-top:14px">
+          <label>pip 镜像源 (插件装依赖用)</label>
+          <input class="input" v-model="s.PIP_INDEX_URL"
+                 placeholder="https://pypi.tuna.tsinghua.edu.cn/simple" />
+          <div class="hint muted small">墙内建议填国内镜像（清华/阿里），境内直连不经墙。留空则走官方 pypi（此时若启用了上面的代理会自动用代理出墙）。</div>
+        </div>
       </div>
 
       <!-- 数据库 -->

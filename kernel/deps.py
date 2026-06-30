@@ -23,6 +23,7 @@ import subprocess
 import sys
 from importlib import metadata
 from typing import Any
+from urllib.parse import urlparse
 
 from packaging.requirements import Requirement
 
@@ -110,14 +111,36 @@ def check(reqs: list[str]) -> dict[str, Any]:
             "conflict": conflict, "invalid": invalid}
 
 
+def _index_url() -> str | None:
+    """读取 pip 镜像源（PIP_INDEX_URL）。默认清华源，留空则走官方 pypi。"""
+    try:
+        import config.config as _cfg
+        _cfg.reload()
+        url = (getattr(_cfg, "PIP_INDEX_URL", "") or "").strip()
+        return url or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _pip_install(specs: list[str]) -> tuple[bool, str]:
     """同步调用 pip 安装（在线程里跑，勿直接在事件循环调用）。
-    走平台代理（墙内环境必需）；限制重试/超时，连不上时快速失败，不长时间占着 pip 锁。"""
+    优先走 pip 镜像源（PIP_INDEX_URL，默认清华，境内直连不经墙）；未配镜像才回退官方
+    pypi 并套平台代理出墙。限制重试/超时，连不上时快速失败，不长时间占着 pip 锁。"""
     cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
            "--retries", "1", "--timeout", "15"]
-    proxy = _proxy()
-    if proxy:
-        cmd += ["--proxy", proxy]
+    index = _index_url()
+    if index:
+        # 走境内镜像：直连即可，不套代理（代理会把请求绕出境，反而更慢/更不稳）。
+        cmd += ["--index-url", index]
+        host = urlparse(index).hostname
+        if host:
+            # 个别网络对镜像也做 TLS 干扰，trusted-host 容错（镜像本身有合法证书时此项无害）
+            cmd += ["--trusted-host", host]
+    else:
+        # 官方 pypi：墙内需走平台代理
+        proxy = _proxy()
+        if proxy:
+            cmd += ["--proxy", proxy]
     cmd += specs
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
