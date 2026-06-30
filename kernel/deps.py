@@ -19,15 +19,38 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import os
 import subprocess
 import sys
 from importlib import metadata
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 from packaging.requirements import Requirement
 
 from libs.log import logger
+
+# 插件运行时依赖的安装目录。装进**已挂载的 data/ 卷**而非镜像 site-packages，
+# 这样容器重建/拉新镜像后依赖不丢（site-packages 在容器可写层，重建即丢失）。
+# 用 pip --target 装到这里，并把该目录加进 sys.path 供 import 与版本探测。
+PLUGIN_DEPS_DIR = Path(os.getcwd()) / "data" / "plugin_deps"
+
+
+def ensure_on_path() -> str:
+    """确保插件依赖目录存在且在 sys.path 上（幂等）。返回目录绝对路径字符串。
+    放到 sys.path **末尾**：平台自带依赖优先，plugin_deps 只补平台没有的，
+    避免插件装的包意外遮蔽平台/其它插件正在用的版本。"""
+    PLUGIN_DEPS_DIR.mkdir(parents=True, exist_ok=True)
+    p = str(PLUGIN_DEPS_DIR.resolve())
+    if p not in sys.path:
+        sys.path.append(p)
+    return p
+
+
+# 模块导入即挂上 sys.path——deps 在启用插件前就被 import，保证 check() 与后续
+# 插件 setup 里的 import 都能看到 data/plugin_deps 里已持久化的包。
+ensure_on_path()
 
 
 def _proxy() -> str | None:
@@ -124,10 +147,14 @@ def _index_url() -> str | None:
 
 def _pip_install(specs: list[str]) -> tuple[bool, str]:
     """同步调用 pip 安装（在线程里跑，勿直接在事件循环调用）。
-    优先走 pip 镜像源（PIP_INDEX_URL，默认清华，境内直连不经墙）；未配镜像才回退官方
-    pypi 并套平台代理出墙。限制重试/超时，连不上时快速失败，不长时间占着 pip 锁。"""
+    装到 data/plugin_deps（已挂载卷，容器重建不丢）；优先走 pip 镜像源（PIP_INDEX_URL，
+    默认清华，境内直连不经墙），未配镜像才回退官方 pypi 并套平台代理出墙。
+    限制重试/超时，连不上时快速失败，不长时间占着 pip 锁。"""
+    target = ensure_on_path()
     cmd = [sys.executable, "-m", "pip", "install", "--disable-pip-version-check",
-           "--retries", "1", "--timeout", "15"]
+           "--retries", "1", "--timeout", "15",
+           # --target 装到持久化目录；--upgrade 让已存在的包可被覆盖更新（幂等）
+           "--target", target, "--upgrade"]
     index = _index_url()
     if index:
         # 走境内镜像：直连即可，不套代理（代理会把请求绕出境，反而更慢/更不稳）。
@@ -152,10 +179,16 @@ def _pip_install(specs: list[str]) -> tuple[bool, str]:
 
 def _pip_check() -> set[str]:
     """跑 `pip check`，返回环境不一致行的集合（空集=一致）。
-    用于装前/装后差分，只把「新增」的不一致归因到本次安装。"""
+    用于装前/装后差分，只把「新增」的不一致归因到本次安装。
+    通过 PYTHONPATH 把 data/plugin_deps 纳入检查范围，否则 pip check 看不到 --target
+    装进去的包，体检形同虚设。"""
     cmd = [sys.executable, "-m", "pip", "check", "--disable-pip-version-check"]
+    env = dict(os.environ)
+    target = str(PLUGIN_DEPS_DIR.resolve())
+    prev = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = target + (os.pathsep + prev if prev else "")
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120, env=env)
     except Exception:  # noqa: BLE001 - pip check 失败不该挡启用，忽略
         return set()
     if proc.returncode == 0:

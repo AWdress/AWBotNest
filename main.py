@@ -20,6 +20,13 @@ from pathlib import Path
 _base = os.getcwd()
 os.makedirs(os.path.join(_base, "data"), exist_ok=True)
 
+# 插件运行时依赖目录（pip --target 装到这里，随 data/ 卷持久化，容器重建不丢）。
+# 在导入任何业务模块前就挂到 sys.path，保证启动早期 import 也能用上已持久化的包。
+_plugin_deps = os.path.join(_base, "data", "plugin_deps")
+os.makedirs(_plugin_deps, exist_ok=True)
+if _plugin_deps not in sys.path:
+    sys.path.append(_plugin_deps)
+
 # 配置数据源是 data/config.json（data/ 是卷映射的运行时目录；config/ 只放代码）。
 # 不存在则写一份空模板，平台仍能启动，用户在前端「设置」页填 API 凭据后重启即可。
 _cfg_json = os.path.join(_base, "data", "config.json")
