@@ -59,6 +59,11 @@ async def teardown(ctx):
 
 `requirements` 为可选的第三方依赖列表（PEP 508 字符串）。**不要在插件里自己调 pip**——只声明，平台在启用时统一代装。建议用宽松范围（`"httpx>=0.27"`）而非钉死版本，以减少与其它插件/平台依赖撞车。若与已安装版本冲突，平台会拒绝启用并提示原因（插件运行在单进程内，同一个包无法多版本共存）。
 
+声明依赖前请注意：
+
+- **必须有支持平台 Python 版本（当前 3.13）的发行版**。不少包用 `Requires-Python` 卡了上限，pypi 上虽有版本号，但 pip 在 3.13 上会判「无匹配版本」装失败。声明前先在 3.13 环境跑 `pip install "你的依赖" --dry-run` 验证能解出版本。（典型反例：`rapidocr_onnxruntime>=1.3` 全系列标 `<3.13`，装不上；应换支持 3.13 的 `rapidocr>=2`。）
+- **优先复用平台已装的库**（见仓库 `requirements.txt`）：OCR 用 `ddddocr`、HTTP 用 `httpx`/`aiohttp`、图像用 `Pillow`、解析用 `beautifulsoup4`/`lxml` 等。能复用就不声明，既免装又零冲突。
+
 ---
 
 ## ctx 接口
