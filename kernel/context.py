@@ -16,7 +16,7 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 # 通过 core 统一出口引用 Telegram 能力（插件不直接 import pyrogram）
 from core import filters as _filters
 from core import logger as _root_logger
-from pyrogram.handlers import MessageHandler, CallbackQueryHandler
+from pyrogram.handlers import MessageHandler, EditedMessageHandler, CallbackQueryHandler
 from pyrogram import StopPropagation, ContinuePropagation
 
 
@@ -257,6 +257,23 @@ class PlatformContext:
         def decorator(func: Callable):
             wrapped = self._track(func)
             handler = MessageHandler(wrapped, filter_)
+            real_group = self._group_base + group
+            for client in self._resolve_targets(target):
+                client.add_handler(handler, real_group)
+                self._handles.append((client, handler, real_group))
+            return func
+        return decorator
+
+    def on_edited_message(self, filter_=None, group: int = 0, target: str = "auto"):
+        """注册「已编辑消息」处理器。用法同 on_message，但只在消息被编辑时触发。
+
+        某些 bot（如 springsunday 大额转账确认）会先发一条消息再「编辑」它来送达最终结果，
+        这类结果 on_message 收不到，需要本方法。group/target 语义与 on_message 相同，
+        句柄同样登记进 self._handles，teardown/热重载时自动注销。
+        """
+        def decorator(func: Callable):
+            wrapped = self._track(func)
+            handler = EditedMessageHandler(wrapped, filter_)
             real_group = self._group_base + group
             for client in self._resolve_targets(target):
                 client.add_handler(handler, real_group)
