@@ -289,6 +289,12 @@ const storeLastSync = ref(null)
 const dlBusy = ref({})
 
 const storeAvailable = computed(() => store.value.filter((p) => !p.installed))
+// 已安装但仓库有新版本的插件：仅当平台记录过下载版本(local_version)且与远端不同才提示，
+// 本地上传/手动导入(无 local_version)不误报更新，避免静默覆盖本地改动。
+function hasUpdate(p) {
+  return p.installed && p.from_manifest && p.local_version && p.version && p.local_version !== p.version
+}
+const storeUpdatable = computed(() => store.value.filter(hasUpdate))
 const officialSet = computed(() => new Set(officialIds.value))
 function isOfficial(p) { return p.official || officialSet.value.has(p.id) }
 
@@ -319,21 +325,26 @@ async function loadStore(refresh = false) {
 }
 
 async function download(p) {
+  const isUpdate = hasUpdate(p)
   dlBusy.value[p.id] = true; storeErr.value = ''
   try {
     const r = await api.storeDownload([p])
     const res = r.result || {}
     if (res.errors && res.errors.length) {
       storeErr.value = res.errors.join('；')
-      toast.error(`${p.name} 安装失败`)
+      toast.error(`${p.name} ${isUpdate ? '更新' : '安装'}失败`)
     } else {
       p.installed = true
+      p.local_version = p.version   // 记录新版本，清除「有更新」提示
       await load()
-      toast.success(`插件「${p.name}」安装完成`)
+      const reloaded = (res.reloaded || []).includes(p.id)
+      toast.success(isUpdate
+        ? `插件「${p.name}」已更新到 v${p.version}${reloaded ? '（运行中实例已热重载）' : ''}`
+        : `插件「${p.name}」安装完成`)
     }
   } catch (e) {
     storeErr.value = `${p.name}: ${e.message}`
-    toast.error(`${p.name} 安装失败`)
+    toast.error(`${p.name} ${isUpdate ? '更新' : '安装'}失败`)
   } finally {
     dlBusy.value[p.id] = false
   }
@@ -408,7 +419,7 @@ onUnmounted(() => {
           我的插件 <span class="tab-count">{{ stats.total }}</span>
         </button>
         <button class="tab" :class="{ active: tab === 'store' }" @click="goStore">
-          插件市场 <span class="tab-count" v-if="storeAvailable.length">{{ storeAvailable.length }}</span>
+          插件市场 <span class="tab-count" v-if="storeAvailable.length + storeUpdatable.length">{{ storeAvailable.length + storeUpdatable.length }}</span>
         </button>
       </div>
       <div class="row gap">
@@ -499,10 +510,44 @@ onUnmounted(() => {
       <div v-if="storeErr" class="alert">{{ storeErr }} <span @click="storeErr=''" class="close">×</span></div>
 
       <div v-if="storeBusy && store.length === 0" class="muted center">加载市场…</div>
-      <div v-else-if="storeAvailable.length === 0" class="empty card">
-        <p class="muted">市场里没有可安装的新插件（仓库里的都已安装），或还没配置额外仓库。</p>
-      </div>
-      <div v-else class="grid">
+      <template v-else>
+        <!-- 有更新的已安装插件 -->
+        <div v-if="storeUpdatable.length" class="update-section">
+          <div class="section-label">可更新（{{ storeUpdatable.length }}）</div>
+          <div class="grid">
+            <div v-for="p in storeUpdatable" :key="p.id" class="card plugin-card store-card has-update">
+              <div class="card-head">
+                <div class="store-title">
+                  <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
+                  <div class="card-title">
+                    <span class="name">{{ p.name }}
+                      <span v-if="isOfficial(p)" class="badge-official">官方</span>
+                    </span>
+                    <span class="badge badge-update">v{{ p.local_version }} → v{{ p.version }}</span>
+                  </div>
+                </div>
+              </div>
+
+              <p class="desc">{{ p.description || '（无描述）' }}</p>
+              <div class="card-meta">
+                <span v-if="p.author" class="meta-item">{{ p.author }}</span>
+                <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
+              </div>
+
+              <div class="card-actions">
+                <button class="btn sm btn-primary" @click="download(p)" :disabled="dlBusy[p.id]">
+                  {{ dlBusy[p.id] ? '更新中…' : '⬆ 更新' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">可安装</div>
+        <div v-if="storeAvailable.length === 0 && storeUpdatable.length === 0" class="empty card">
+          <p class="muted">市场里没有可安装的新插件（仓库里的都已安装），或还没配置额外仓库。</p>
+        </div>
+        <div v-else-if="storeAvailable.length" class="grid">
         <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card">
           <div class="card-head">
             <div class="store-title">
@@ -529,6 +574,7 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
+      </template>
     </template>
 
     <!-- 拖拽遮罩 -->
@@ -748,6 +794,16 @@ onUnmounted(() => {
 .store-icon { width: 38px; height: 38px; border-radius: 8px; object-fit: cover; flex-shrink: 0; }
 .store-icon-fallback { object-fit: contain; padding: 4px; background: var(--bg-elevated); }
 .store-card:hover { border-color: var(--accent-dim); }
+.store-card.has-update { border-color: var(--accent-dim); }
+.update-section { margin-bottom: 20px; }
+.section-label {
+  font-size: 12px; font-weight: 600; color: var(--text-secondary);
+  margin: 0 0 10px; letter-spacing: .3px;
+}
+.badge-update {
+  font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 10px;
+  background: var(--accent-dim); color: var(--accent);
+}
 
 .desc { color: var(--text-secondary); font-size: 13px; min-height: 38px; }
 .err-msg {

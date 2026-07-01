@@ -95,10 +95,14 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
     返回 {ok, repos:int, plugins:[...], errors:[...], last_sync}。
     """
     state = _load_state()
+    versions: dict[str, str] = state.get("versions") or {}
     if not refresh:
         plugins = state.get("store") or []
         for p in plugins:
             p["installed"] = _local_exists(p["id"])
+            # local_version = 平台记录的「已下载版本」，供前端判断是否有更新。
+            # 只有从商店下载过的插件才有记录；本地上传/手动导入的没有，前端据此不提示更新。
+            p["local_version"] = versions.get(p["id"])
         return {"ok": True, "cached": True, "plugins": plugins,
                 "official_ids": state.get("official_ids") or [],
                 "errors": [], "last_sync": state.get("last_sync")}
@@ -125,6 +129,7 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
             p["repo_url"] = repo["url"]
             p["official"] = bool(repo.get("official"))
             p["installed"] = _local_exists(pid)
+            p["local_version"] = versions.get(pid)
             if p["official"]:
                 official_ids.append(pid)
             aggregated.append(p)
