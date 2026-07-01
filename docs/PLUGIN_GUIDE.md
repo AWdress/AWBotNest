@@ -86,7 +86,17 @@ async def h2(client, message):
 
 `group` 为本插件内部多个处理器之间的相对执行优先级，数值越小越先执行。在处理器中 `raise ctx.StopPropagation` 可阻止该消息被后续处理器继续处理。
 
-`on_message` / `on_callback` 还接受 `target` 参数，决定处理器挂载到哪类账号：`"auto"`（默认，按插件 `scope` 选择）、`"user"`、`"bot"`、`"both"`。`scope` 为 `both` 时可借此将不同处理器分别挂到用户账号或机器人账号。
+`on_message` / `on_edited_message` / `on_callback` 还接受 `target` 参数，决定处理器挂载到哪类账号：`"auto"`（默认，按插件 `scope` 选择）、`"user"`、`"bot"`、`"both"`。`scope` 为 `both` 时可借此将不同处理器分别挂到用户账号或机器人账号。
+
+### 注册编辑消息处理器
+
+用法、参数（`filter` / `group` / `target`）与 `on_message` 完全一致，但**只在消息被编辑时触发**，`on_message` 收不到。适用于「先发消息再编辑来送达最终结果」的 bot（如某些大额转账确认）。
+
+```python
+@ctx.on_edited_message(ctx.filters.text)
+async def on_edit(client, message):
+    ...
+```
 
 ### 注册回调处理器
 
@@ -185,7 +195,7 @@ ctx.schedule(daily_report, "cron", hour=9, id="每日早报")
 
 ### 资源清理
 
-通过 `ctx.on_message`、`ctx.on_callback`、`ctx.schedule` 注册的处理器与任务由平台在停用时自动清理，无需手动处理。若插件自行申请了其它资源（连接、文件句柄、外部客户端等），用 `ctx.add_cleanup(fn)` 注册清理回调（停用时调用），或在 `teardown(ctx)` 中释放。
+通过 `ctx.on_message`、`ctx.on_edited_message`、`ctx.on_callback`、`ctx.schedule` 注册的处理器与任务由平台在停用时自动清理，无需手动处理。若插件自行申请了其它资源（连接、文件句柄、外部客户端等），用 `ctx.add_cleanup(fn)` 注册清理回调（停用时调用），或在 `teardown(ctx)` 中释放。
 
 ```python
 async def setup(ctx):
