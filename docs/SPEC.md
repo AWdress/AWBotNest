@@ -142,7 +142,7 @@ async def setup(ctx):
 
 ## 4. 热插拔（必须支持）
 
-1. 所有处理器经 `ctx.on_message` / `ctx.on_callback` 注册——它们内部用实例级 `client.add_handler`，并登记句柄。**禁止使用类级 `@Client.on_message`**（无法热卸载）。
+1. 所有处理器经 `ctx.on_message` / `ctx.on_edited_message` / `ctx.on_callback` 注册——它们内部用实例级 `client.add_handler`，并登记句柄。**禁止使用类级 `@Client.on_message`**（无法热卸载）。
 2. 所有自管理资源（定时任务、连接、后台 task）必须可在 `teardown` 或通过 `ctx.add_cleanup` 释放。
 3. 启用 = 导入文件 + `setup`；停用 = 注销句柄 + `teardown` + 从 `sys.modules` 卸载。全程不重启进程。
 4. **容错**：单个插件 `setup` 抛异常只标记该插件 `error`，不影响内核与其它插件。
@@ -302,6 +302,7 @@ async def setup(ctx):
 |------|------|
 | 过滤器 | `ctx.filters.text` 等 |
 | 注册消息 | `@ctx.on_message(filter, group=0, target="auto")` |
+| 注册编辑消息 | `@ctx.on_edited_message(filter, group=0, target="auto")`（仅消息被编辑时触发，用法同 on_message） |
 | 注册回调 | `@ctx.on_callback(filter, group=0, target="auto")` |
 | 中断传播 | `raise ctx.StopPropagation`（在 handler 内主动阻止后续插件处理这条消息） |
 | Bot 发送 | `await ctx.bot.send(chat_id, text)` |
