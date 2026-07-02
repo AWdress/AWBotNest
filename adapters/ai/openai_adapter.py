@@ -9,26 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 def _platform_proxy():
-    """读取平台代理 URL（启用时），供 AI 客户端使用。"""
-    try:
-        import config.config as _cfg
-        _cfg.reload()
-        ps = getattr(_cfg, "proxy_set", {}) or {}
-        if not ps.get("proxy_enable"):
-            return None
-        url = (ps.get("PROXY_URL") or "").strip()
-        if url:
-            return url
-        px = ps.get("proxy", {}) or {}
-        host, port = px.get("hostname"), px.get("port")
-        if host and port:
-            scheme = px.get("scheme", "http")
-            user, pwd = px.get("username", ""), px.get("password", "")
-            auth = f"{user}:{pwd}@" if user else ""
-            return f"{scheme}://{auth}{host}:{port}"
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+    """读取平台代理 URL（启用时），供 AI 客户端使用。统一走 libs.proxy。"""
+    from libs.proxy import proxy_url
+    return proxy_url()
+
 
 class OpenAIAdapter(AiEnginePort):
     """OpenAI 兼容接口适配器"""

@@ -38,27 +38,9 @@ GITHUB_API = "https://api.github.com"
 
 
 def _proxy() -> Optional[str]:
-    """读取平台代理（启用时返回 httpx 可用的代理 URL），用于访问 GitHub。"""
-    try:
-        import config.config as _cfg
-        _cfg.reload()
-        ps = getattr(_cfg, "proxy_set", {}) or {}
-        if not ps.get("proxy_enable"):
-            return None
-        url = (ps.get("PROXY_URL") or "").strip()
-        if url:
-            return url
-        # 无 PROXY_URL 时按 proxy 子项拼
-        px = ps.get("proxy", {}) or {}
-        host, port = px.get("hostname"), px.get("port")
-        if host and port:
-            scheme = px.get("scheme", "http")
-            user, pwd = px.get("username", ""), px.get("password", "")
-            auth = f"{user}:{pwd}@" if user else ""
-            return f"{scheme}://{auth}{host}:{port}"
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+    """读取平台代理（启用时返回 httpx 可用的代理 URL），用于访问 GitHub。统一走 libs.proxy。"""
+    from libs.proxy import proxy_url
+    return proxy_url()
 RAW_HOST = "raw.githubusercontent.com"
 MANIFEST_NAMES = ("manifest.json", "manifest.v2.json")
 

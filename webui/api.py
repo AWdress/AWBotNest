@@ -23,7 +23,7 @@ from webui.auth import require_password_changed as _auth_pwc
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -502,6 +502,14 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
 
     cfg.save(merged)
     logger.info("平台设置已更新（config.json）")
+
+    # 代理变更 → 立即刷新进程环境变量，新启动/重载的插件即时生效（长连接旧客户端仍需重启）
+    if "proxy_set" in incoming:
+        try:
+            from libs.proxy import export_env
+            export_env()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("刷新代理环境变量失败: %r", e)
 
     # 插件仓库相关设置变更 → 重排轮询任务（即时生效，无需重启）
     if any(k in incoming for k in ("PLUGIN_REPO_ENABLE", "PLUGIN_REPOS", "PLUGIN_REPO_INTERVAL")):

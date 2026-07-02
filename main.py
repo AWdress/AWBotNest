@@ -42,6 +42,16 @@ if not os.path.exists(_cfg_json) or os.path.getsize(_cfg_json) == 0:
     with open(_cfg_json, "w", encoding="utf-8") as _f:
         json.dump(_tpl, _f, ensure_ascii=False, indent=2)
 
+# 平台代理导出为环境变量：让所有插件的 httpx/requests/aiohttp 自动走系统设置的代理。
+# 必须在导入业务模块 / 启动插件前执行，保证启动早期的出站请求也走代理。
+try:
+    from libs.proxy import export_env as _export_proxy_env
+    _px = _export_proxy_env()
+    if _px:
+        print(f"[proxy] 平台代理已启用，插件出站请求将走 {_px}")
+except Exception as _e:  # noqa: BLE001 - 代理导出失败不应阻断启动
+    print(f"[proxy] 导出代理环境变量失败: {_e!r}")
+
 # Python 3.13+ 事件循环策略
 if sys.version_info >= (3, 13):
     try:
