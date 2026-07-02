@@ -211,7 +211,6 @@ onMounted(() => {
                    stroke-linecap="round" stroke-linejoin="round">
                 <path d="M12 19V5M5 12l7-7 7 7" />
               </svg>
-              <span class="ua-ver">v{{ latestVersion }}</span>
             </a>
           </span>
         </div>
@@ -335,7 +334,6 @@ onMounted(() => {
 }
 .update-arrow svg { width: 13px; height: 13px; }
 .update-arrow:hover { opacity: 0.8; }
-.ua-ver { font-family: monospace; }
 @keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .logout-btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
