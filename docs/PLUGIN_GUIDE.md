@@ -63,6 +63,7 @@ async def teardown(ctx):
 
 - **必须有支持平台 Python 版本（当前 3.13）的发行版**。不少包用 `Requires-Python` 卡了上限，pypi 上虽有版本号，但 pip 在 3.13 上会判「无匹配版本」装失败。声明前先在 3.13 环境跑 `pip install "你的依赖" --dry-run` 验证能解出版本。（典型反例：`rapidocr_onnxruntime>=1.3` 全系列标 `<3.13`，装不上；应换支持 3.13 的 `rapidocr>=2`。）
 - **优先复用平台已装的库**（见仓库 `requirements.txt`）：OCR 用 `ddddocr`、HTTP 用 `httpx`/`aiohttp`、图像用 `Pillow`、解析用 `beautifulsoup4`/`lxml` 等。能复用就不声明，既免装又零冲突。
+- **出站请求自动走平台代理**：系统设置里启用代理后，平台会导出 `HTTP(S)_PROXY`/`ALL_PROXY` 环境变量，`httpx`/`requests`/`aiohttp`（默认 `trust_env=True`）会自动走代理，插件无需手动配置。`localhost`/`127.0.0.1` 已排除。如手动关闭了 `trust_env`，请自行读取这些环境变量。
 
 ---
 

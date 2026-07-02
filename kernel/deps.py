@@ -55,26 +55,9 @@ ensure_on_path()
 
 def _proxy() -> str | None:
     """读取平台代理（启用时返回 pip 可用的代理 URL）。墙内环境装依赖需走代理，
-    否则连不上 pypi.org。复用 config.proxy_set，与 GitHub/AI 访问同一套设置。"""
-    try:
-        import config.config as _cfg
-        _cfg.reload()
-        ps = getattr(_cfg, "proxy_set", {}) or {}
-        if not ps.get("proxy_enable"):
-            return None
-        url = (ps.get("PROXY_URL") or "").strip()
-        if url:
-            return url
-        px = ps.get("proxy", {}) or {}
-        host, port = px.get("hostname"), px.get("port")
-        if host and port:
-            scheme = px.get("scheme", "http")
-            user, pwd = px.get("username", ""), px.get("password", "")
-            auth = f"{user}:{pwd}@" if user else ""
-            return f"{scheme}://{auth}{host}:{port}"
-    except Exception:  # noqa: BLE001
-        pass
-    return None
+    否则连不上 pypi.org。复用 config.proxy_set，与 GitHub/AI 访问同一套设置。统一走 libs.proxy。"""
+    from libs.proxy import proxy_url
+    return proxy_url()
 
 
 def check(reqs: list[str]) -> dict[str, Any]:
