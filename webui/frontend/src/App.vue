@@ -14,6 +14,7 @@ const router = useRouter()
 const online = ref(false)
 const version = ref('')
 const latestVersion = ref('')   // GitHub 最新发布版本
+const latestNote = ref('')      // 新版本的一句更新说明（hover 提示用）
 const hasUpdate = ref(false)    // 是否有新版本
 const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 
@@ -123,6 +124,13 @@ async function checkUpdate() {
     if (tag) {
       latestVersion.value = tag.replace(/^v/i, '')
       hasUpdate.value = isNewer(latestVersion.value, version.value)
+      // 取一句更新说明：优先 release 标题（非纯版本号），否则取正文首个非空行，去掉 markdown 记号
+      let note = (data.name || '').trim()
+      if (!note || /^v?[\d.]+$/i.test(note)) {
+        note = ((data.body || '').split(/\r?\n/).map(l => l.trim()).find(Boolean) || '')
+          .replace(/^[#>\-*\s]+/, '').replace(/\*\*/g, '').trim()
+      }
+      latestNote.value = note.slice(0, 80)
     }
   } catch { /* 离线/限流忽略 */ }
 }
@@ -205,13 +213,21 @@ onMounted(() => {
           </div>
           <span class="ver" v-if="version">
             v{{ version }}
-            <a v-if="hasUpdate" :href="RELEASE_URL" target="_blank" rel="noopener"
-               class="update-arrow" :title="`有新版本 v${latestVersion}，点击查看`">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
-                   stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 19V5M5 12l7-7 7 7" />
-              </svg>
-            </a>
+            <span v-if="hasUpdate" class="update-wrap">
+              <a :href="RELEASE_URL" target="_blank" rel="noopener" class="update-arrow">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 19V5M5 12l7-7 7 7" />
+                </svg>
+              </a>
+              <div class="update-pop">
+                <div class="update-pop-head">
+                  <span class="update-pop-title">发现新版本</span>
+                  <span class="update-pop-ver">v{{ latestVersion }}</span>
+                </div>
+                <div class="update-pop-note" v-if="latestNote">{{ latestNote }}</div>
+              </div>
+            </span>
           </span>
         </div>
         <button class="restart-btn" @click="restart" :disabled="restarting">
@@ -335,6 +351,28 @@ onMounted(() => {
 .update-arrow svg { width: 13px; height: 13px; }
 .update-arrow:hover { opacity: 0.8; }
 @keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
+.update-wrap { position: relative; display: inline-flex; align-items: center; }
+.update-pop {
+  position: absolute; bottom: calc(100% + 8px); left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  min-width: 176px; max-width: 240px; padding: 10px 12px;
+  background: var(--bg-elevated); border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow);
+  font-family: initial; z-index: 50;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.update-wrap:hover .update-pop {
+  opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0);
+}
+.update-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.update-pop-title { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.update-pop-ver {
+  font-family: monospace; font-size: 11px; font-weight: 600; color: var(--text-primary);
+  background: var(--bg-base); border: 1px solid var(--border-light);
+  border-radius: 6px; padding: 1px 7px; white-space: nowrap;
+}
+.update-pop-note { margin-top: 6px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 .logout-btn {
   display: flex; align-items: center; justify-content: center; gap: 8px;
   width: 100%; padding: 9px; cursor: pointer;
