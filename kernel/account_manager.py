@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-from core import API_HASH, API_ID, BOT_TOKEN
+from core import API_HASH, API_ID
 from libs.log import logger
 from libs.custom_client import Client
 from libs.session_cleaner import clean_corrupted_sessions
@@ -22,6 +22,32 @@ from core import manager
 from infra.config import get_settings
 
 config = get_settings()
+
+# 默认 Bot 的固定 id（由 config 的 BOT_TOKEN 表示，session 文件名保持 bot_account 向后兼容）
+DEFAULT_BOT_ID = "default"
+
+
+def _load_bots_config() -> list[dict]:
+    """读取「默认 Bot + 额外 Bot」的统一列表：[{id, name, token}]。
+    默认 Bot 恒在首位（id=default，token=BOT_TOKEN）；额外 Bot 取自 config 的 BOTS。
+    token 为空的额外 Bot 会被跳过。"""
+    import config.config as _cfg
+    _cfg.reload()
+    bots: list[dict] = [{
+        "id": DEFAULT_BOT_ID,
+        "name": "默认 Bot",
+        "token": str(getattr(_cfg, "BOT_TOKEN", "") or ""),
+    }]
+    for b in (getattr(_cfg, "BOTS", None) or []):
+        if not isinstance(b, dict):
+            continue
+        bid = str(b.get("id") or "").strip()
+        token = str(b.get("token") or "").strip()
+        if not bid or bid == DEFAULT_BOT_ID or not token:
+            continue
+        bots.append({"id": bid, "name": str(b.get("name") or bid), "token": token})
+    return bots
+
 
 # 兼容旧 config 读取
 try:
@@ -37,7 +63,10 @@ class AccountManager:
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.user_apps: list[Client] = []
-        self.bot_app: Optional[Client] = None
+        # 多 Bot：id -> Client。默认 Bot 的 id 为 DEFAULT_BOT_ID。
+        self.bot_apps: dict[str, Client] = {}
+        # 各 Bot 的显示名（id -> name），供通知/列表展示
+        self._bot_names: dict[str, str] = {}
 
         # 登录流程的临时会话状态：{session_name: {client, phone, phone_code_hash}}
         self._login_sessions: dict[str, dict] = {}
@@ -57,6 +86,40 @@ class AccountManager:
     def connected_user_apps(self) -> list[Client]:
         return [a for a in self.user_apps if a and a.is_connected]
 
+    @property
+    def bot_app(self) -> Optional[Client]:
+        """默认 Bot（向后兼容旧代码：notifier / DI 容器 / manager 等仍用 bot_app）。"""
+        return self.bot_apps.get(DEFAULT_BOT_ID)
+
+    def get_bot(self, bot_id: str | None = None) -> Optional[Client]:
+        """按 id 取 Bot；未指定 / 不存在 / 未连接则回退默认 Bot。"""
+        if bot_id and bot_id != DEFAULT_BOT_ID:
+            app = self.bot_apps.get(bot_id)
+            if app is not None:
+                return app
+        return self.bot_apps.get(DEFAULT_BOT_ID)
+
+    async def list_bots(self) -> list[dict]:
+        """返回所有已配置 Bot 及在线状态，供前端「通知 Bot」页与推送路由用。
+        性能：用已连接 client 缓存的 .me（启动时已填充），不发网络请求。"""
+        result: list[dict] = []
+        for b in _load_bots_config():
+            bid = b["id"]
+            app = self.bot_apps.get(bid)
+            online = bool(app and getattr(app, "is_connected", False))
+            username = None
+            if online and getattr(app, "me", None):
+                username = getattr(app.me, "username", None)
+            result.append({
+                "id": bid,
+                "name": b.get("name") or bid,
+                "online": online,
+                "username": username,
+                "is_default": bid == DEFAULT_BOT_ID,
+            })
+        return result
+
+
     # ──────────────────────────────────────────────
     # 客户端构建
     # ──────────────────────────────────────────────
@@ -70,13 +133,15 @@ class AccountManager:
             proxy=self.proxy,
         )
 
-    def _build_bot_client(self) -> Client:
-        """构建 Bot 账号 Client"""
+    def _build_bot_client(self, bot_id: str, bot_token: str) -> Client:
+        """构建 Bot 账号 Client。默认 Bot 的 session 沿用 bot_account（向后兼容），
+        额外 Bot 用 bot_<id> 独立 session 文件。"""
+        session_name = "bot_account" if bot_id == DEFAULT_BOT_ID else f"bot_{bot_id}"
         return Client(
-            "bot_account",
+            session_name,
             api_id=API_ID,
             api_hash=API_HASH,
-            bot_token=BOT_TOKEN,
+            bot_token=bot_token,
             workdir=str(self.workdir.resolve()),
             proxy=self.proxy,
         )
@@ -84,29 +149,47 @@ class AccountManager:
     # ──────────────────────────────────────────────
     # 启动 / 停止
     # ──────────────────────────────────────────────
-    async def start_bot(self) -> None:
-        """启动 Bot 账号（带重试）。未配置凭据时直接跳过，不进重试循环、不打 traceback。"""
+    async def start_bots(self) -> None:
+        """启动所有已配置 Bot（默认 Bot + 额外 Bot），每个带重试。
+        未配置凭据时直接跳过（不进重试、不打 traceback）。单个 Bot 失败不影响其它 Bot。"""
         import config.config as _cfg
         _cfg.reload()
-        if not (getattr(_cfg, "API_ID", 0) and getattr(_cfg, "API_HASH", "") and getattr(_cfg, "BOT_TOKEN", "")):
-            raise RuntimeError("未配置 Telegram 凭据（API_ID/API_HASH/BOT_TOKEN），请在系统设置填写后重启")
-        self.bot_app = self._build_bot_client()
-        last_error = None
-        for attempt in range(1, 4):
-            try:
-                await self.bot_app.start()
-                logger.info("bot_app 启动成功")
-                last_error = None
-                break
-            except Exception as e:  # noqa: BLE001
-                last_error = e
-                logger.warning("bot_app 启动失败（第 %s/3 次）: %r", attempt, e)
-                if attempt < 3:
-                    await asyncio.sleep(2 * attempt)
-        if last_error is not None:
-            # 启动失败：清掉未连接的残留实例，避免插件 handler 被挂到死 client
-            self.bot_app = None
-            raise RuntimeError(f"Bot App 无法启动: {last_error}")
+        self.bot_apps.clear()
+        self._bot_names.clear()
+
+        if not (getattr(_cfg, "API_ID", 0) and getattr(_cfg, "API_HASH", "")):
+            raise RuntimeError("未配置 Telegram 凭据（API_ID/API_HASH），请在系统设置填写后重启")
+
+        bots = _load_bots_config()
+        # 默认 Bot 无 token 时，视为「未配置 Bot」——与旧逻辑一致，交由 start_all 兜底跳过
+        if not bots or not bots[0].get("token"):
+            raise RuntimeError("未配置默认 Bot 的 BOT_TOKEN，请在系统设置填写后重启")
+
+        for b in bots:
+            bid, name, token = b["id"], b.get("name") or b["id"], b["token"]
+            self._bot_names[bid] = name
+            app = self._build_bot_client(bid, token)
+            started = False
+            last_error = None
+            for attempt in range(1, 4):
+                try:
+                    await app.start()
+                    logger.info("Bot [%s] 启动成功", name)
+                    started = True
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last_error = e
+                    logger.warning("Bot [%s] 启动失败（第 %s/3 次）: %r", name, attempt, e)
+                    if attempt < 3:
+                        await asyncio.sleep(2 * attempt)
+            if started:
+                self.bot_apps[bid] = app
+            else:
+                logger.error("Bot [%s] 无法启动，已跳过: %r", name, last_error)
+
+        if DEFAULT_BOT_ID not in self.bot_apps:
+            # 默认 Bot 都没起来 → 抛出，交由 start_all 记 warning（与旧行为一致）
+            raise RuntimeError("默认 Bot 无法启动（检查 BOT_TOKEN / 网络 / 代理）")
 
     async def start_users(self) -> None:
         """启动所有用户账号（无 session 或已暂停的跳过）"""
@@ -130,8 +213,8 @@ class AccountManager:
             if valid_group_ids:
                 for app in self.user_apps:
                     app.set_valid_group_ids(valid_group_ids)
-                if self.bot_app:
-                    self.bot_app.set_valid_group_ids(valid_group_ids)
+                for bot in self.bot_apps.values():
+                    bot.set_valid_group_ids(valid_group_ids)
         except Exception as e:  # noqa: BLE001
             logger.warning("设置有效群组失败: %r", e)
 
@@ -167,7 +250,7 @@ class AccountManager:
         await asyncio.sleep(1)  # 给上次异常退出的 SQLite 锁释放留时间
 
         try:
-            await self.start_bot()
+            await self.start_bots()
         except RuntimeError as e:
             logger.warning("Bot 启动跳过（可在 WebUI 配置凭据后重启）: %s", e)
         await self.start_users()
@@ -178,8 +261,9 @@ class AccountManager:
 
     async def stop_all(self) -> None:
         """停止所有账号连接"""
-        if self.bot_app and self.bot_app.is_connected:
-            await self.bot_app.stop()
+        for bot in list(self.bot_apps.values()):
+            if bot and bot.is_connected:
+                await bot.stop()
         for app in self.user_apps:
             if app and app.is_connected:
                 await app.stop()

@@ -159,8 +159,18 @@ class PlatformContext:
     # ──────────────────────────────────────────────
     @property
     def bot(self) -> _ClientProxy:
-        """Bot 账号发送代理"""
-        return _ClientProxy(self._accounts.bot_app)
+        """Bot 账号发送代理。返回本插件在「系统设置 → 通知 Bot」里被平台分配的 Bot，
+        未分配则为默认 Bot。"""
+        return _ClientProxy(self._chosen_bot())
+
+    def get_bot(self, bot_id: str | None = None) -> _ClientProxy:
+        """按 id 取指定 Bot 的发送代理（高级用法）；不传/不存在则回退默认 Bot。"""
+        return _ClientProxy(self._accounts.get_bot(bot_id))
+
+    def _chosen_bot(self) -> object | None:
+        """本插件被平台分配的 Bot（bot_choice）对应的 client，未分配=默认 Bot。"""
+        bot_id = self._registry.get_bot_choice(self.plugin_id)
+        return self._accounts.get_bot(bot_id)
 
     @property
     def user(self) -> _ClientProxy:
@@ -188,8 +198,8 @@ class PlatformContext:
     @property
     def owner_id(self) -> int:
         """
-        平台所有者的 Telegram 数字 ID（取自主账号 ACCOUNTS[0].tgid）。
-        插件不直接读 config，需要给「平台主人」推送时用它。无主账号时为 0。
+        平台管理员的 Telegram 数字 ID（取自主账号 ACCOUNTS[0].tgid）。
+        插件不直接读 config，需要给「平台管理员」推送时用它。无主账号时为 0。
         """
         try:
             import config.config as _cfg
@@ -201,7 +211,7 @@ class PlatformContext:
                      account: Any = None, **kwargs) -> Any:
         """
         提交一条通知给平台通知中心。插件只管「内容 + 级别 + 分类 + 哪个账号」，
-        平台统一分类（打级别标签 + 插件名 + 账号名）、套格式，再通过 Bot 发给平台主人
+        平台统一分类（打级别标签 + 插件名 + 账号名）、套格式，再通过 Bot 发给平台管理员
         （Bot 不可用时回退主账号收藏夹）。同时记入运行日志。
 
         level: info | success | warning | error
@@ -326,7 +336,7 @@ class PlatformContext:
         if target in ("user", "both"):
             clients.extend(self._scoped_user_apps())
         if target in ("bot", "both"):
-            bot = self._accounts.bot_app
+            bot = self._chosen_bot()
             if bot and getattr(bot, "is_connected", False):
                 clients.append(bot)
         return clients

@@ -94,4 +94,9 @@ export const api = {
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
   restartPlatform: () => request('POST', '/api/system/restart'),
+
+  // 多 Bot / 通知推送路由
+  listBots: () => request('GET', '/api/bots'),
+  getBotsRouting: () => request('GET', '/api/bots/routing'),
+  setBotRouting: (plugin_id, bot_id) => request('PUT', '/api/bots/routing', { plugin_id, bot_id }),
 }
