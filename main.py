@@ -33,7 +33,7 @@ _cfg_json = os.path.join(_base, "data", "config.json")
 if not os.path.exists(_cfg_json) or os.path.getsize(_cfg_json) == 0:
     _tpl = {
         "API_ID": 0, "API_HASH": "", "BOT_TOKEN": "", "BOTS": [], "ACCOUNTS": [],
-        "WEB_UI_URL": "", "WEB_UI_PORT": 18001, "NGROK_ENABLE": False, "NGROK_TOKEN": "",
+        "WEB_UI_URL": "", "WEB_UI_PORT": 18001,
         "proxy_set": {"proxy_enable": False,
                        "proxy": {"scheme": "http", "hostname": "127.0.0.1", "port": 7890, "username": "", "password": ""},
                        "PROXY_URL": ""},

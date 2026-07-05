@@ -24,14 +24,14 @@ _DEFAULTS: dict[str, Any] = {
     "API_ID": 0,
     "API_HASH": "",
     "BOT_TOKEN": "",
+    # 默认 Bot 的通知目标 Chat ID（用户/群/频道）。留空=发给平台管理员（现有行为）。
+    "DEFAULT_BOT_CHAT_ID": "",
     # 额外 Bot（多 Bot 通知推送用）。默认 Bot 仍由 BOT_TOKEN 表示（id="default"）。
-    # 每项：{"id": "<唯一id>", "name": "<显示名>", "token": "<Bot Token>"}
+    # 每项：{"id": "<唯一id>", "name": "<显示名>", "token": "<Bot Token>", "chat_id": "<可选通知目标>"}
     "BOTS": [],
     "ACCOUNTS": [],
     "WEB_UI_URL": "",
     "WEB_UI_PORT": 18001,
-    "NGROK_ENABLE": False,
-    "NGROK_TOKEN": "",
     # 平台级 webhook 密钥：外部服务 POST /api/v1/webhook?apikey=<此值> 即可把内容
     # 推给平台管理员（经默认 Bot，回退主账号收藏夹）。留空=关闭平台 webhook。
     "WEBHOOK_SECRET": "",

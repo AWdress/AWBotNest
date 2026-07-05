@@ -95,8 +95,6 @@ class TelegramSettings(BaseSettings):
     ny_username: str = Field(default="", description="TG 用户名")
     web_ui_url: str = Field(default="", description="Web UI 的外部访问 URL")
     web_ui_port: int = Field(default=8000, description="Web UI 监听端口")
-    ngrok_enable: bool = Field(default=False, description="是否自动开启 ngrok 映射")
-    ngrok_token: str = Field(default="", description="ngrok authtoken")
     # 多用户账号列表，每项含 session 名称（对应 sessions/<session>.session）
     user_accounts: list[dict] = Field(
         default_factory=lambda: [{"session": "user_account"}],
@@ -292,8 +290,6 @@ def _load_legacy_config(settings: AppSettings) -> None:
             ny_username=getattr(cfg, "NY_USERNAME", ""),
             web_ui_url=getattr(cfg, "WEB_UI_URL", ""),
             web_ui_port=getattr(cfg, "WEB_UI_PORT", 18000),
-            ngrok_enable=getattr(cfg, "NGROK_ENABLE", False),
-            ngrok_token=getattr(cfg, "NGROK_TOKEN", ""),
             user_accounts=[
                 acc if isinstance(acc, dict) else {"session": acc}
                 for acc in getattr(cfg, "ACCOUNTS", None)
@@ -398,8 +394,6 @@ def _patch_legacy_config_file() -> None:
             ("proxy_set", 'proxy_set = {"proxy_enable": False, "proxy": {"scheme": "http", "hostname": "127.0.0.1", "port": 7890}, "PROXY_URL": ""}'),
             ("WEB_UI_URL", 'WEB_UI_URL = "" # Web 控制面板外部地址'),
             ("WEB_UI_PORT", 'WEB_UI_PORT = 18000'),
-            ("NGROK_ENABLE", 'NGROK_ENABLE = False'),
-            ("NGROK_TOKEN", 'NGROK_TOKEN = ""'),
             ("DB_INFO", 'DB_INFO = {"dbset": "SQLite", "address": "127.0.0.1", "db_name": "tgbot", "port": 3306, "user": "", "password": ""}'),
         ]
 

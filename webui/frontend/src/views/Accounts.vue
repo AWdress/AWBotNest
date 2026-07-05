@@ -125,7 +125,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close">×</span></div>
+    <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
 
     <div v-if="loading" class="center muted">加载中…</div>
 
@@ -164,7 +164,7 @@ onMounted(load)
       <div class="modal card">
         <div class="modal-head">
           <h2>登录账号</h2>
-          <span class="close" @click="wizardOpen=false">×</span>
+          <span class="close" @click="wizardOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
 
         <!-- 步骤指示 -->
@@ -240,7 +240,8 @@ onMounted(load)
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .center { text-align: center; padding: 40px; }
 .alert { background: var(--danger-dim); color: var(--danger); padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 16px; display: flex; justify-content: space-between; }
-.alert .close { cursor: pointer; }
+.alert .close { cursor: pointer; display: inline-flex; align-items: center; }
+.close .x-ico { width: 16px; height: 16px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); }
 .acc-card { display: flex; flex-direction: column; gap: 16px; }
@@ -254,7 +255,8 @@ onMounted(load)
 .modal { width: 440px; max-width: 90vw; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-head h2 { font-size: 16px; }
-.modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); }
+.modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
+.modal-head .close .x-ico { width: 20px; height: 20px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 
 .steps { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 13px; color: var(--text-muted); }
