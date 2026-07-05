@@ -120,7 +120,7 @@ await ctx.bot.send_photo(chat_id, "url_or_path")
 - `ctx.user_apps`：已连接用户账号的列表，多账号插件需逐个操作时使用。
 - 目标账号未连接时，对应代理的发送方法抛 `RuntimeError`；可先判 `ctx.bot.connected` / `ctx.user.connected`。
 
-> **多 Bot**：平台可配置多个 Bot，并在「系统设置 → 通知 Bot」为每个插件指定用哪个 Bot（默认=默认 Bot）。这对插件是**透明**的——`ctx.bot`、`ctx.notify`、`scope=bot` 的 handler 会自动走平台为本插件分配的 Bot，插件代码无需改动、也不要自己选 Bot。
+> **多 Bot**：平台可配置多个 Bot，并在「系统设置 → 通知」为每个插件指定用哪个 Bot（默认=默认 Bot）。这对插件是**透明**的——`ctx.bot`、`ctx.notify`、`scope=bot` 的 handler 会自动走平台为本插件分配的 Bot，插件代码无需改动、也不要自己选 Bot。
 
 ### 通知平台管理员
 

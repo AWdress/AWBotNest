@@ -159,7 +159,7 @@ class PlatformContext:
     # ──────────────────────────────────────────────
     @property
     def bot(self) -> _ClientProxy:
-        """Bot 账号发送代理。返回本插件在「系统设置 → 通知 Bot」里被平台分配的 Bot，
+        """Bot 账号发送代理。返回本插件在「系统设置 → 通知」里被平台分配的 Bot，
         未分配则为默认 Bot。"""
         return _ClientProxy(self._chosen_bot())
 

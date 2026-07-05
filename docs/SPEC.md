@@ -264,8 +264,8 @@ async def setup(ctx):
 
 平台支持配置**多个 Bot**，并由平台（管理员）集中决定「哪个插件用哪个 Bot」——插件作者**不选择** Bot，选择权在平台。
 
-- **配置**：默认 Bot 仍由 `config.json` 的 `BOT_TOKEN` 表示（id 恒为 `"default"`）；额外 Bot 存在 `config.json` 的 `BOTS`：`[{"id","name","token"}]`。都在前端「系统设置 → 通知 Bot」页管理，新增/删除 Bot 需重启平台才能建立/断开连接（与凭据一致）。
-- **推送路由**：`data/plugins_state.json` 的 `bot_choice`（`{插件id: bot_id}`，空/缺失/`"default"`=默认 Bot）。在「通知 Bot」页的路由表里逐插件选择，`PUT /api/bots/routing` 即时生效（重载重挂）。删除某个 Bot 时，指向它的插件自动回退默认 Bot。
+- **配置**：默认 Bot 仍由 `config.json` 的 `BOT_TOKEN` 表示（id 恒为 `"default"`）；额外 Bot 存在 `config.json` 的 `BOTS`：`[{"id","name","token"}]`。都在前端「系统设置 → 通知」页管理，新增/删除 Bot 需重启平台才能建立/断开连接（与凭据一致）。
+- **推送路由**：`data/plugins_state.json` 的 `bot_choice`（`{插件id: bot_id}`，空/缺失/`"default"`=默认 Bot）。在「通知」页的路由表里逐插件选择，`PUT /api/bots/routing` 即时生效（重载重挂）。删除某个 Bot 时，指向它的插件自动回退默认 Bot。
 - **作用范围（通知 + 处理器一致）**：该选择同时决定 ① `ctx.notify` 走哪个 Bot 投递；② `ctx.bot` 返回哪个 Bot；③ `scope=bot`/`both` 插件的 handler（`target="bot"`/`"both"`）挂到哪个 Bot。默认 Bot 用于所有未分配的插件，保证既有部署零改动。
 - 运行时由 `AccountManager.bot_apps`（`{id: Client}`）持有各 Bot，`accounts.bot_app` 恒为默认 Bot（向后兼容）；`accounts.get_bot(id)` 取指定 Bot（不存在/未连接回退默认）。
 
@@ -335,4 +335,4 @@ async def setup(ctx):
 
 该范围对 handler 挂载、`ctx.user`、`ctx.user_apps` **一致生效**（三者共用 `_scoped_user_apps`）：只勾选一个账号时，处理器只挂到该账号，主动发送类逻辑遍历 `ctx.user_apps` 也只拿到该账号，不会出现「只勾一个账号、两个账号都在发消息」。
 
-**多 Bot 下的 Bot 选择**：见 §8.2。平台在「系统设置 → 通知 Bot」为每个插件分配 Bot（`bot_choice`），该选择对 `ctx.notify` 投递、`ctx.bot`、`scope=bot`/`both` 的 handler 挂载（`target="bot"`/`"both"`）**一致生效**——三者都走 `ctx._chosen_bot()`。未分配则用默认 Bot（`BOT_TOKEN`）。插件作者不感知也不选择 Bot，写 `ctx.bot.send(...)` / `ctx.notify(...)` 即可。
+**多 Bot 下的 Bot 选择**：见 §8.2。平台在「系统设置 → 通知」为每个插件分配 Bot（`bot_choice`），该选择对 `ctx.notify` 投递、`ctx.bot`、`scope=bot`/`both` 的 handler 挂载（`target="bot"`/`"both"`）**一致生效**——三者都走 `ctx._chosen_bot()`。未分配则用默认 Bot（`BOT_TOKEN`）。插件作者不感知也不选择 Bot，写 `ctx.bot.send(...)` / `ctx.notify(...)` 即可。

@@ -8,7 +8,7 @@ const tab = ref('login')   // login | telegram | bots | web | proxy | db
 const TABS = [
   { key: 'login',    label: '控制台登录' },
   { key: 'telegram', label: 'Telegram 凭据' },
-  { key: 'bots',     label: '通知 Bot' },
+  { key: 'bots',     label: '通知' },
   { key: 'web',      label: 'Web 控制台' },
   { key: 'proxy',    label: '运行代理' },
   { key: 'db',       label: '数据库' },
@@ -142,7 +142,7 @@ onMounted(() => { load(); loadUsername() })
       <!-- Telegram 凭据 -->
       <div v-show="tab === 'telegram'" class="card">
         <div class="card-title">Telegram 凭据</div>
-        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知 Bot」页配置。敏感值显示为打码，不改就留着。</div>
+        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知」页配置。敏感值显示为打码，不改就留着。</div>
         <div class="grid2">
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
@@ -151,9 +151,9 @@ onMounted(() => { load(); loadUsername() })
         </div>
       </div>
 
-      <!-- 通知 Bot（默认 Bot + 额外 Bot + 推送路由） -->
+      <!-- 通知（默认 Bot + 额外 Bot + 推送路由） -->
       <div v-show="tab === 'bots'" class="card">
-        <div class="card-title">通知 Bot</div>
+        <div class="card-title">通知</div>
         <div class="hint muted">
           平台的插件通知（ctx.notify）与 bot 类插件都通过 Bot 发送。你可以配置多个 Bot，
           再在下方指定「每个插件推送到哪个 Bot」。默认 Bot 从 @BotFather 获取 Token；新增/删除 Bot 需重启平台生效。
@@ -304,7 +304,7 @@ onMounted(() => { load(); loadUsername() })
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 
-/* 通知 Bot：额外 Bot 行 + 推送路由表 */
+/* 通知：额外 Bot 行 + 推送路由表 */
 .bot-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .bot-row .input { flex: 1; }
 .bot-row .bot-name { max-width: 200px; flex: 0 0 auto; }

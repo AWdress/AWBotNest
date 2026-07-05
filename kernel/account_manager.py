@@ -100,7 +100,7 @@ class AccountManager:
         return self.bot_apps.get(DEFAULT_BOT_ID)
 
     async def list_bots(self) -> list[dict]:
-        """返回所有已配置 Bot 及在线状态，供前端「通知 Bot」页与推送路由用。
+        """返回所有已配置 Bot 及在线状态，供前端「通知」页与推送路由用。
         性能：用已连接 client 缓存的 .me（启动时已填充），不发网络请求。"""
         result: list[dict] = []
         for b in _load_bots_config():
