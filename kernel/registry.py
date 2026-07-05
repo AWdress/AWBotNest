@@ -40,6 +40,7 @@ class PluginMeta:
     icon: str = ""       # 可选：插件图标 URL，前端卡片展示；空则回退平台 logo
     scope: str = "user"  # user | bot | both
     default_enabled: bool = False
+    webhook: bool = False  # 是否提供 HTTP webhook 入站端点（配 ctx.on_webhook 使用）
     config_schema: dict[str, Any] = field(default_factory=dict)
     requirements: list[str] = field(default_factory=list)  # 第三方依赖(PEP 508)，启用时由平台代装
 
@@ -66,6 +67,7 @@ class PluginRegistry:
         self._config_state: dict[str, dict[str, Any]] = {}
         self._account_scope: dict[str, list[str]] = {}  # 插件id -> [session名]，空/缺失=全部
         self._bot_choice: dict[str, str] = {}  # 插件id -> bot id，空/缺失/"default"=默认 Bot
+        self._webhook_key: dict[str, str] = {}  # 插件id -> webhook 密钥，空/缺失=未开启
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -80,6 +82,7 @@ class PluginRegistry:
             self._config_state = {}
             self._account_scope = {}
             self._bot_choice = {}
+            self._webhook_key = {}
             return
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
@@ -87,18 +90,21 @@ class PluginRegistry:
             self._config_state = data.get("config", {})
             self._account_scope = data.get("account_scope", {})
             self._bot_choice = data.get("bot_choice", {})
+            self._webhook_key = data.get("webhook_key", {})
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("读取插件状态文件失败，将重置：%s", e)
             self._enabled_state = {}
             self._config_state = {}
             self._account_scope = {}
             self._bot_choice = {}
+            self._webhook_key = {}
 
     def _save_state(self) -> None:
         """写回磁盘"""
         try:
             payload = {"enabled": self._enabled_state, "config": self._config_state,
-                       "account_scope": self._account_scope, "bot_choice": self._bot_choice}
+                       "account_scope": self._account_scope, "bot_choice": self._bot_choice,
+                       "webhook_key": self._webhook_key}
             self.state_file.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -185,6 +191,7 @@ class PluginRegistry:
             icon=raw.get("icon", "") or "",
             scope=scope,
             default_enabled=bool(raw.get("default_enabled", False)),
+            webhook=bool(raw.get("webhook", False)),
             config_schema=raw.get("config_schema", {}) or {},
             requirements=self._coerce_requirements(raw.get("requirements")),
             file=rel,
@@ -364,6 +371,24 @@ class PluginRegistry:
         return affected
 
     # ──────────────────────────────────────────────
+    # webhook 密钥（每插件独立；空/缺失=未开启 webhook）
+    # ──────────────────────────────────────────────
+    def get_webhook_key(self, plugin_id: str) -> str:
+        """返回插件的 webhook 密钥；空字符串表示未开启。"""
+        with self._lock:
+            return self._webhook_key.get(plugin_id, "") or ""
+
+    def set_webhook_key(self, plugin_id: str, key: str) -> None:
+        """设置插件 webhook 密钥；空=关闭 webhook（删除该记录）。"""
+        with self._lock:
+            key = (key or "").strip()
+            if key:
+                self._webhook_key[plugin_id] = key
+            else:
+                self._webhook_key.pop(plugin_id, None)
+            self._save_state()
+
+    # ──────────────────────────────────────────────
     # 插件配置读写（对应 config_schema）
     # ──────────────────────────────────────────────
     def get_config(self, plugin_id: str) -> dict[str, Any]:
@@ -392,6 +417,7 @@ class PluginRegistry:
             self._config_state.pop(plugin_id, None)
             self._account_scope.pop(plugin_id, None)
             self._bot_choice.pop(plugin_id, None)
+            self._webhook_key.pop(plugin_id, None)
             self._save_state()
 
 

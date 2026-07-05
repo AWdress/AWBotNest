@@ -197,6 +197,31 @@ ctx.schedule(daily_report, "cron", hour=9, id="每日早报")
 
 任务 `id` 自动附加 `<id>::` 前缀以归属到本插件；不传 `id` 时默认取函数名。已注册任务展示于「系统状态」页（任务名、所属插件、触发规则、下次运行时间）。
 
+### Webhook（接收外部回调）
+
+需要接收外部服务回调（如媒体服务器事件推送）的插件，可在 `__plugin__` 声明 `"webhook": True`，并用 `ctx.on_webhook` 注册处理器：
+
+```python
+__plugin__ = { ..., "webhook": True }
+
+async def setup(ctx):
+    @ctx.on_webhook
+    async def on_hook(req):
+        data = req.json or {}          # 解析出的 JSON（非 JSON 为 None）
+        await ctx.notify(f"收到事件：{data}", category="Webhook")
+        return {"ok": True}            # dict→JSON / str→文本 / None→{"ok": true}
+```
+
+声明后，在插件「配置」弹窗的 Webhook 区点「随机」生成每插件独立密钥，即得入站地址：
+
+```
+http(s)://<平台地址>/api/v1/plugin/<插件id>/webhook?apikey=<密钥>
+```
+
+处理器收到的 `req` 是 `WebhookRequest`：`req.method` / `req.query`（已剔除 apikey）/ `req.headers`（键小写）/ `req.json` / `req.text` / `req.body`。一个插件一个处理器，停用/重载时自动失效；密钥随插件删除一并清除。仅当插件已启用、已注册处理器且已生成密钥时，webhook 才会响应。
+
+> 若只是想把外部内容推给管理员而不写插件，用**平台级 webhook**：在「系统设置 → 通知」生成密钥，POST 到 `…/api/v1/webhook?apikey=<密钥>` 即可。
+
 ### 资源清理
 
 通过 `ctx.on_message`、`ctx.on_edited_message`、`ctx.on_callback`、`ctx.schedule` 注册的处理器与任务由平台在停用时自动清理，无需手动处理。若插件自行申请了其它资源（连接、文件句柄、外部客户端等），用 `ctx.add_cleanup(fn)` 注册清理回调（停用时调用），或在 `teardown(ctx)` 中释放。
