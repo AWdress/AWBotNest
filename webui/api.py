@@ -330,32 +330,22 @@ async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends
 
 
 # ──────────────────────────────────────────────
-# 插件 webhook（每插件独立密钥；入站地址见 /api/v1/plugin/<id>/webhook）
+# 插件 webhook 信息（入站地址见 /api/v1/plugin/<id>/webhook；密钥用平台统一的 WEBHOOK_SECRET）
 # ──────────────────────────────────────────────
 @app.get("/api/plugins/{plugin_id}/webhook")
 async def get_plugin_webhook(plugin_id: str, user=Depends(_auth)):
-    """读取插件 webhook 信息：是否声明支持、当前密钥（空=未开启）、入站路径。
-    密钥需明文回显供管理员复制到外部服务，接口已经过鉴权。"""
+    """读取插件 webhook 信息：是否声明支持、入站路径、以及平台统一密钥（用于拼完整地址）。
+    密钥即「系统设置 → 通知」里的 WEBHOOK_SECRET，所有插件与平台 webhook 共用。"""
     meta = registry.get_meta(plugin_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="插件不存在")
+    import config.config as cfg
+    secret = str((cfg.load().get("WEBHOOK_SECRET") or "")).strip()
     return {
         "webhook": bool(meta.webhook),
-        "key": registry.get_webhook_key(plugin_id),
+        "secret": secret,
         "path": f"/api/v1/plugin/{plugin_id}/webhook",
     }
-
-
-@app.put("/api/plugins/{plugin_id}/webhook")
-async def set_plugin_webhook(plugin_id: str, body: Dict[str, Any], user=Depends(_auth_pwc)):
-    """设置/更新插件 webhook 密钥。body: {key}；key 为空=关闭该插件 webhook。"""
-    if registry.get_meta(plugin_id) is None:
-        raise HTTPException(status_code=404, detail="插件不存在")
-    key = str((body or {}).get("key") or "").strip()
-    if key and len(key) < 8:
-        raise HTTPException(status_code=400, detail="密钥太短，至少 8 位")
-    registry.set_webhook_key(plugin_id, key)
-    return {"status": "success", "key": registry.get_webhook_key(plugin_id)}
 
 
 # ──────────────────────────────────────────────
@@ -692,13 +682,15 @@ def _webhook_result_response(result: Any):
 
 @app.api_route("/api/v1/plugin/{plugin_id}/webhook", methods=["GET", "POST"])
 async def plugin_webhook(plugin_id: str, request: Request):
-    """插件 webhook 入站：校验密钥 → 交给插件 ctx.on_webhook 注册的处理器。"""
-    key = registry.get_webhook_key(plugin_id)
-    if not key:
-        # 未设密钥即视为未开启，不泄露插件是否存在
-        raise HTTPException(status_code=404, detail="webhook 未开启")
+    """插件 webhook 入站：校验平台统一密钥 → 交给插件 ctx.on_webhook 注册的处理器。
+    apikey 用「系统设置 → 通知」的 WEBHOOK_SECRET（与平台 webhook 共用，不单独生成）。"""
+    import config.config as cfg
+    secret = str((cfg.load().get("WEBHOOK_SECRET") or "")).strip()
+    if not secret:
+        # 未设平台密钥即视为 webhook 未开启，不泄露插件是否存在
+        raise HTTPException(status_code=404, detail="webhook 未开启（请先在系统设置生成密钥）")
     given = request.query_params.get("apikey", "")
-    if not hmac.compare_digest(given, key):
+    if not hmac.compare_digest(given, secret):
         raise HTTPException(status_code=401, detail="apikey 无效")
 
     runtime = _get_runtime()

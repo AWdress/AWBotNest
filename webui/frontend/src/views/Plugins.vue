@@ -139,39 +139,26 @@ async function openConfig(p) {
   }
 }
 
-// ── 插件 webhook（每插件独立密钥） ──
-const webhookKey = ref('')
-const webhookBusy = ref(false)
-
-function randomHex(bytesLen = 24) {
-  const bytes = new Uint8Array(bytesLen)
-  crypto.getRandomValues(bytes)
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
-}
+// ── 插件 webhook（入站地址；密钥用平台统一的 WEBHOOK_SECRET，在「系统设置 → 通知」生成） ──
+const webhookSecret = ref('')
+const webhookPath = ref('')
 
 const webhookUrl = computed(() => {
-  if (!configTarget.value || !webhookKey.value) return ''
-  return `${location.origin}/api/v1/plugin/${configTarget.value.id}/webhook?apikey=${webhookKey.value}`
+  if (!webhookSecret.value || !webhookPath.value) return ''
+  return `${location.origin}${webhookPath.value}?apikey=${webhookSecret.value}`
 })
 
 async function loadWebhook() {
-  webhookKey.value = ''
+  webhookSecret.value = ''
+  webhookPath.value = ''
   if (!configTarget.value?.webhook) return
   try {
     const d = await api.getPluginWebhook(configTarget.value.id)
-    webhookKey.value = d.key || ''
+    webhookSecret.value = d.secret || ''
+    webhookPath.value = d.path || ''
   } catch { /* 配置弹窗照常打开，webhook 区留空 */ }
 }
 
-async function saveWebhookKey(key) {
-  webhookBusy.value = true
-  try {
-    const d = await api.setPluginWebhook(configTarget.value.id, key)
-    webhookKey.value = d.key || ''
-  } catch (e) { toast.error('保存失败：' + e.message) } finally { webhookBusy.value = false }
-}
-function genWebhookKey() { saveWebhookKey(randomHex(24)) }
-function clearWebhookKey() { saveWebhookKey('') }
 async function copyWebhookUrl() {
   if (!webhookUrl.value) return
   try { await navigator.clipboard.writeText(webhookUrl.value); toast.success('已复制 webhook 地址') }
@@ -634,23 +621,18 @@ onUnmounted(() => {
         <div v-if="configTarget?.webhook" class="webhook-box">
           <div class="webhook-title">Webhook 入站地址</div>
           <div class="hint muted small">
-            外部服务可 POST 到此地址触发本插件（每个插件独立密钥）。生成密钥后即开启；
-            需插件已启用并实现了处理器才会真正响应。
+            外部服务可 POST 到此地址触发本插件。密钥与平台统一（在「系统设置 → 通知」生成），
+            所有插件共用；需插件已启用并实现了处理器才会真正响应。
           </div>
-          <template v-if="webhookKey">
+          <template v-if="webhookSecret">
             <div class="webhook-url mono">{{ webhookUrl }}</div>
             <div class="webhook-actions">
               <button class="btn sm" @click="copyWebhookUrl">复制地址</button>
-              <button class="btn sm" @click="genWebhookKey" :disabled="webhookBusy" title="重新生成随机密钥">🎲 随机</button>
-              <button class="btn sm danger" @click="clearWebhookKey" :disabled="webhookBusy">关闭</button>
             </div>
           </template>
-          <template v-else>
-            <div class="muted small">尚未开启。点「随机」生成密钥即可启用。</div>
-            <div class="webhook-actions">
-              <button class="btn sm btn-primary" @click="genWebhookKey" :disabled="webhookBusy">🎲 生成密钥并开启</button>
-            </div>
-          </template>
+          <div v-else class="muted small">
+            尚未设置 Webhook 密钥。请先到「系统设置 → 通知 → 平台 Webhook」生成密钥。
+          </div>
         </div>
         <div class="modal-foot">
           <button class="btn" @click="configOpen=false">取消</button>

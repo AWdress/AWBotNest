@@ -4,10 +4,10 @@
 
 ## v1.0.6
 
-- 新增 HTTP Webhook：外部服务可通过入站地址触发平台/插件。
-  - 插件级：插件在 `__plugin__` 声明 `"webhook": True` 并用 `ctx.on_webhook` 注册处理器，即可在「插件 → 配置」弹窗生成每插件独立密钥、拿到入站地址 `…/api/v1/plugin/<插件id>/webhook?apikey=<密钥>`；处理器收到 `WebhookRequest`（method/query/headers/json/text/body），返回 dict/str/None。
-  - 平台级：在「系统设置 → 通知」生成密钥后，外部 POST 到 `…/api/v1/webhook?apikey=<密钥>` 即把内容（JSON 的 text/title/category 或整段文本）作为通知推送给管理员。
-  - 密钥用查询串 `apikey` 校验（`hmac.compare_digest` 防时序攻击），未生成密钥即视为关闭；密钥旁有「随机」按钮一键生成。插件密钥随插件删除一并清除，热卸载/重载后处理器自动失效。
+- 新增 HTTP Webhook：外部服务可通过入站地址触发平台/插件，密钥全平台统一（在「系统设置 → 通知」生成一次，平台与所有插件共用）。
+  - 平台级：POST 到 `…/api/v1/webhook?apikey=<密钥>`，把内容（JSON 的 text/title/category 或整段文本）作为通知推送给管理员。
+  - 插件级：插件在 `__plugin__` 声明 `"webhook": True` 并用 `ctx.on_webhook` 注册处理器，即可在「插件 → 配置」弹窗看到本插件入站地址 `…/api/v1/plugin/<插件id>/webhook?apikey=<密钥>`（每插件路径不同、密钥共用）；处理器收到 `WebhookRequest`（method/query/headers/json/text/body），返回 dict/str/None。
+  - 密钥用查询串 `apikey` 校验（`hmac.compare_digest` 防时序攻击），未生成密钥即视为关闭；密钥旁有「随机」按钮一键生成。热卸载/重载后插件处理器自动失效。
 
 ## v1.0.5
 

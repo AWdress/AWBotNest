@@ -212,13 +212,13 @@ async def setup(ctx):
         return {"ok": True}            # dict→JSON / str→文本 / None→{"ok": true}
 ```
 
-声明后，在插件「配置」弹窗的 Webhook 区点「随机」生成每插件独立密钥，即得入站地址：
+声明后，在插件「配置」弹窗的 Webhook 区即可看到本插件的入站地址（每个插件路径不同）：
 
 ```
 http(s)://<平台地址>/api/v1/plugin/<插件id>/webhook?apikey=<密钥>
 ```
 
-处理器收到的 `req` 是 `WebhookRequest`：`req.method` / `req.query`（已剔除 apikey）/ `req.headers`（键小写）/ `req.json` / `req.text` / `req.body`。一个插件一个处理器，停用/重载时自动失效；密钥随插件删除一并清除。仅当插件已启用、已注册处理器且已生成密钥时，webhook 才会响应。
+其中 `apikey` 是**平台统一的 Webhook 密钥**，在「系统设置 → 通知 → 平台 Webhook」点「随机」生成一次即可，所有插件与平台 webhook 共用，不为每个插件单独生成。处理器收到的 `req` 是 `WebhookRequest`：`req.method` / `req.query`（已剔除 apikey）/ `req.headers`（键小写）/ `req.json` / `req.text` / `req.body`。一个插件一个处理器，停用/重载时自动失效。仅当插件已启用、已注册处理器且平台已生成密钥时，webhook 才会响应。
 
 > 若只是想把外部内容推给管理员而不写插件，用**平台级 webhook**：在「系统设置 → 通知」生成密钥，POST 到 `…/api/v1/webhook?apikey=<密钥>` 即可。
 
