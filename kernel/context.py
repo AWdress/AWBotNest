@@ -346,14 +346,31 @@ class PlatformContext:
                 await ctx.notify(f"收到事件：{data}")
                 return {"ok": True}        # 返回 dict→JSON / str→文本 / None→{"ok":true}
 
-        平台会暴露一个每插件独立的入站地址：
+        平台会为每个插件暴露一个入站地址（路径按插件 id 区分）：
             http(s)://<平台地址>/api/v1/plugin/<插件id>/webhook?apikey=<密钥>
-        地址与密钥在「插件 → 配置」弹窗里查看/生成（需在 __plugin__ 声明 "webhook": True）。
+        其中 apikey 是平台统一的 Webhook 密钥（在「系统设置 → 通知」生成，平台与所有插件共用）；
+        本插件需在 __plugin__ 声明 "webhook": True，地址可在「插件 → 配置」弹窗查看/复制。
 
         req 是 WebhookRequest（.method/.query/.headers/.json/.text/.body）。
         一个插件只有一个处理器，重复注册后者覆盖前者；停用/重载时自动失效。
         """
-        self._webhook_handler = self._track(func)
+        # webhook 处理器由路由用单参数 handler(req) 调用，不能用为消息/回调
+        # 设计的 _track（其 wrapper 签名是 (client, update, ...)，单参数调用会缺参报错）。
+        # 这里用单参数专用包装，同样把「当前插件」设进 contextvar 以归属出站动作。
+        import functools
+        from kernel import activity
+
+        pid = self.plugin_id
+
+        @functools.wraps(func)
+        async def wrapper(req):
+            token = activity.set_current(pid)
+            try:
+                return await func(req)
+            finally:
+                activity.reset_current(token)
+
+        self._webhook_handler = wrapper
         return func
 
     def _track(self, func: Callable) -> Callable:
