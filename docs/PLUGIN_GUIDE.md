@@ -120,9 +120,11 @@ await ctx.bot.send_photo(chat_id, "url_or_path")
 - `ctx.user_apps`：已连接用户账号的列表，多账号插件需逐个操作时使用。
 - 目标账号未连接时，对应代理的发送方法抛 `RuntimeError`；可先判 `ctx.bot.connected` / `ctx.user.connected`。
 
-### 通知平台所有者
+> **多 Bot**：平台可配置多个 Bot，并在「系统设置 → 通知 Bot」为每个插件指定用哪个 Bot（默认=默认 Bot）。这对插件是**透明**的——`ctx.bot`、`ctx.notify`、`scope=bot` 的 handler 会自动走平台为本插件分配的 Bot，插件代码无需改动、也不要自己选 Bot。
 
-监控、定时、告警类插件需向平台所有者推送时，调用 `ctx.notify` 提交给平台。平台负责分类、附加插件名与级别标签、统一格式与投递，插件无需关心收件人与格式。
+### 通知平台管理员
+
+监控、定时、告警类插件需向平台管理员推送时，调用 `ctx.notify` 提交给平台。平台负责分类、附加插件名与级别标签、统一格式与投递，插件无需关心收件人与格式。
 
 ```python
 await ctx.notify("有新订单")
@@ -137,10 +139,11 @@ async def h(client, message):
 - `level`：`info` / `success` / `warning` / `error`，平台按级别加标签。
 - `category`：可选业务分类（如「订单」「签到」），显示于标签中。
 - `account`：多账号场景下传入处理器收到的 `client`，平台自动标注来源账号名。
-- 平台优先经 Bot 私聊所有者（需所有者已 `/start` 过 Bot），不可用时回退至主账号收藏夹；每条通知同时写入运行日志。
+- 平台优先经 Bot 私聊管理员（需管理员已 `/start` 过 Bot），不可用时回退至主账号收藏夹；每条通知同时写入运行日志。
+- 具体走哪个 Bot 由平台按插件分配（见上「多 Bot」），插件无需关心。
 - 推送通知一律走 `ctx.notify`，不要自行调用 `ctx.bot.send` 实现。
 
-若需所有者的 Telegram 数字 ID（如直接发送至特定会话），用 `ctx.owner_id`（无主账号时为 `0`）。
+若需管理员的 Telegram 数字 ID（如直接发送至特定会话），用 `ctx.owner_id`（无主账号时为 `0`）。
 
 ### 读取配置
 

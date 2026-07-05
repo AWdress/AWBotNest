@@ -2,7 +2,7 @@
 kernel/notifier.py
 平台通知中心 —— 插件不直接发通知，而是「提交」给平台；
 平台统一分类（按级别打标签 + 插件名 + 可选分类）、套统一格式，再通过 Bot
-发给平台主人（Bot 不可用时回退主账号「收藏夹」）。
+发给平台管理员（Bot 不可用时回退主账号「收藏夹」）。
 
 为什么集中到平台：通知的「发给谁、什么格式、怎么投递」是平台策略，不该让每个
 插件各自实现。插件只提供「内容 + 级别 + 分类」，其余交给平台。
@@ -80,7 +80,7 @@ async def submit(
     **send_kwargs,
 ) -> Any:
     """
-    接收一条插件通知，分类 + 统一格式 + 投递给平台主人。
+    接收一条插件通知，分类 + 统一格式 + 投递给平台管理员。
 
     accounts: AccountManager（取 bot_app / primary_user_app）
     level: info | success | warning | error（决定图标与中文标签）
@@ -108,15 +108,29 @@ async def submit(
     acc_tag = f"[{account_label}]" if account_label else ""
     logger.info("[通知][%s]%s %s%s", plugin_name, acc_tag, f"({category}) " if category else "", text)
 
-    # 投递：优先 Bot 私聊主人，回退主账号收藏夹
+    # 投递：优先本插件被平台分配的 Bot 私聊管理员，回退主账号收藏夹
     oid = _owner_id()
-    bot = getattr(accounts, "bot_app", None)
+    bot = _resolve_plugin_bot(accounts, plugin_id)
     if bot and getattr(bot, "is_connected", False) and oid:
         return await bot.send_message(oid, body, **send_kwargs)
     user = getattr(accounts, "primary_user_app", None)
     if user and getattr(user, "is_connected", False):
         return await user.send_message("me", body, **send_kwargs)
     raise RuntimeError("无可用账号投递通知（Bot 未连接且无在线用户账号）")
+
+
+def _resolve_plugin_bot(accounts: Any, plugin_id: str) -> Any:
+    """按插件在「系统设置 → 通知 Bot」的推送路由取 Bot；未分配 / 取不到则回退默认 Bot。"""
+    get_bot = getattr(accounts, "get_bot", None)
+    if not callable(get_bot):
+        # 兼容极旧的 accounts 对象（无多 Bot 能力）
+        return getattr(accounts, "bot_app", None)
+    try:
+        from kernel.registry import registry
+        bot_id = registry.get_bot_choice(plugin_id)
+    except Exception:  # noqa: BLE001
+        bot_id = ""
+    return get_bot(bot_id)
 
 
 def history() -> list[dict]:

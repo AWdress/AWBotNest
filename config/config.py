@@ -24,6 +24,9 @@ _DEFAULTS: dict[str, Any] = {
     "API_ID": 0,
     "API_HASH": "",
     "BOT_TOKEN": "",
+    # 额外 Bot（多 Bot 通知推送用）。默认 Bot 仍由 BOT_TOKEN 表示（id="default"）。
+    # 每项：{"id": "<唯一id>", "name": "<显示名>", "token": "<Bot Token>"}
+    "BOTS": [],
     "ACCOUNTS": [],
     "WEB_UI_URL": "",
     "WEB_UI_PORT": 18001,

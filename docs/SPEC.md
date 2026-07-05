@@ -156,7 +156,7 @@ async def setup(ctx):
    - 平台级配置（登录凭据、账号、Web 控制台、ngrok、代理、数据库）全部在前端「系统设置」页修改，经 `GET/PUT /api/settings` 读写 `data/config.json`。敏感字段读取时打码、写入时跳过打码值保留原值。
    - 部分关键项（API 凭据等）改后需重启平台生效，接口返回 `restart_required`。
 1. **插件自带配置，禁止碰平台配置**。
-   - 平台级配置只含：登录凭据(API_ID/HASH/BOT_TOKEN)、账号(ACCOUNTS)、Web 控制台、ngrok、运行代理、数据库(DB_INFO，平台存储基础设施)。
+   - 平台级配置只含：登录凭据(API_ID/HASH/BOT_TOKEN)、多 Bot(BOTS)、账号(ACCOUNTS)、Web 控制台、ngrok、运行代理、数据库(DB_INFO，平台存储基础设施)。
    - **不含任何业务数据**：群组 ID(PT_GROUP_ID)、抽奖/奖品/陷阱/AI/炸弹等全部属于插件，写在各插件的 `config_schema` 里。
    - 业务功能的所有参数（开关、密钥、群组、文案等）一律写进插件自己的 `__plugin__["config_schema"]`，由前端「配置」按钮自动生成 UI，值存于 `data/plugins_state.json`。插件用 `ctx.config` 读取。
    - 严禁插件向平台配置写入或依赖业务键。旧项目的完整配置已归档在 `config/config.legacy.py`，仅供迁移时参照。
@@ -249,16 +249,25 @@ async def setup(ctx):
 4. 跨文件引用用绝对导入（`from kernel.registry import ...`），禁止模糊相对引用。
 5. 每个包目录必须有 `__init__.py`。
 
-### 8.1 通知中心（插件 → 平台 → 主人）
+### 8.1 通知中心（插件 → 平台 → 管理员）
 
 插件**不直接**发通知，而是提交给平台通知中心 `kernel/notifier.py`，由平台统一处理：
 
 1. 插件调 `await ctx.notify(text, level="info", category=None, account=client)` —— 只提供内容、级别、分类，以及（多账号时）触发的账号。
-2. 平台 `notifier.submit` 负责**分类与统一格式**：按 `level`（info/success/warning/error）打图标标签，前缀插件名 + 可选 `category`；**多账号场景标注账号名**（从传入的 `account` client 解析 `me.first_name`→session 名，与账号管理页一致），让主人知道是哪个账号的消息。
-3. 平台**统一投递**给平台主人：优先 Bot 私聊（`MY_TGID`，需主人 /start 过 Bot），Bot 不可用时回退主账号「收藏夹」。
+2. 平台 `notifier.submit` 负责**分类与统一格式**：按 `level`（info/success/warning/error）打图标标签，前缀插件名 + 可选 `category`；**多账号场景标注账号名**（从传入的 `account` client 解析 `me.first_name`→session 名，与账号管理页一致），让管理员知道是哪个账号的消息。
+3. 平台**统一投递**给平台管理员：优先 **本插件被平台分配的 Bot**（见 §8.2 多 Bot）私聊（`MY_TGID`，需管理员 /start 过该 Bot），Bot 不可用时回退主账号「收藏夹」。
 4. 每条通知同时记入运行日志（带插件名）与通知中心历史环形缓冲（最近 200 条）。
 
 「发给谁、什么格式、怎么投递」是平台策略，插件不实现也不绕过——禁止插件为了发通知自己拼 `ctx.bot.send` 给 `owner_id`，统一走 `ctx.notify`。
+
+### 8.2 多 Bot 与推送路由（平台集中管理）
+
+平台支持配置**多个 Bot**，并由平台（管理员）集中决定「哪个插件用哪个 Bot」——插件作者**不选择** Bot，选择权在平台。
+
+- **配置**：默认 Bot 仍由 `config.json` 的 `BOT_TOKEN` 表示（id 恒为 `"default"`）；额外 Bot 存在 `config.json` 的 `BOTS`：`[{"id","name","token"}]`。都在前端「系统设置 → 通知 Bot」页管理，新增/删除 Bot 需重启平台才能建立/断开连接（与凭据一致）。
+- **推送路由**：`data/plugins_state.json` 的 `bot_choice`（`{插件id: bot_id}`，空/缺失/`"default"`=默认 Bot）。在「通知 Bot」页的路由表里逐插件选择，`PUT /api/bots/routing` 即时生效（重载重挂）。删除某个 Bot 时，指向它的插件自动回退默认 Bot。
+- **作用范围（通知 + 处理器一致）**：该选择同时决定 ① `ctx.notify` 走哪个 Bot 投递；② `ctx.bot` 返回哪个 Bot；③ `scope=bot`/`both` 插件的 handler（`target="bot"`/`"both"`）挂到哪个 Bot。默认 Bot 用于所有未分配的插件，保证既有部署零改动。
+- 运行时由 `AccountManager.bot_apps`（`{id: Client}`）持有各 Bot，`accounts.bot_app` 恒为默认 Bot（向后兼容）；`accounts.get_bot(id)` 取指定 Bot（不存在/未连接回退默认）。
 
 ---
 
@@ -305,11 +314,12 @@ async def setup(ctx):
 | 注册编辑消息 | `@ctx.on_edited_message(filter, group=0, target="auto")`（仅消息被编辑时触发，用法同 on_message） |
 | 注册回调 | `@ctx.on_callback(filter, group=0, target="auto")` |
 | 中断传播 | `raise ctx.StopPropagation`（在 handler 内主动阻止后续插件处理这条消息） |
-| Bot 发送 | `await ctx.bot.send(chat_id, text)` |
+| Bot 发送 | `await ctx.bot.send(chat_id, text)`（`ctx.bot` = 本插件被平台分配的 Bot，未分配=默认 Bot，见 §8.2） |
+| 指定 Bot | `ctx.get_bot(bot_id)`（高级：取某个 Bot 的发送代理，不传/不存在回退默认 Bot） |
 | 用户发送 | `await ctx.user.send(chat_id, text)` |
 | 多账号列表 | `ctx.user_apps`（所有已连接用户账号；未连接时发送代理抛 `RuntimeError`，可判 `ctx.bot/user.connected`） |
-| 通知所有者 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给主人，回退主账号收藏夹） |
-| 所有者 ID | `ctx.owner_id`（平台主人 Telegram 数字 ID，无主账号为 0） |
+| 通知管理员 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给管理员，回退主账号收藏夹） |
+| 管理员 ID | `ctx.owner_id`（平台管理员 Telegram 数字 ID，无主账号为 0） |
 | 配置 | `ctx.config`（dict） |
 | 键值存储 | `ctx.kv.get/set/delete/keys`（每插件私有） |
 | 可写目录 | `ctx.data_dir`（`Path`，每插件独立 `data/plugin_data/<id>/`） |
@@ -324,3 +334,5 @@ async def setup(ctx):
 **多账号下的账号范围**：`scope=user`/`both` 的插件默认挂到**所有**已连接用户账号；用户可在插件卡片「账号」按钮里选择只应用到部分账号（前端 `PUT /api/plugins/<id>/accounts`，空数组=全部）。范围存于 `data/plugins_state.json` 的 `account_scope`，由 `ctx._scoped_user_apps` 按 client 的 session 名统一过滤。改动后自动重载重挂 handler。
 
 该范围对 handler 挂载、`ctx.user`、`ctx.user_apps` **一致生效**（三者共用 `_scoped_user_apps`）：只勾选一个账号时，处理器只挂到该账号，主动发送类逻辑遍历 `ctx.user_apps` 也只拿到该账号，不会出现「只勾一个账号、两个账号都在发消息」。
+
+**多 Bot 下的 Bot 选择**：见 §8.2。平台在「系统设置 → 通知 Bot」为每个插件分配 Bot（`bot_choice`），该选择对 `ctx.notify` 投递、`ctx.bot`、`scope=bot`/`both` 的 handler 挂载（`target="bot"`/`"both"`）**一致生效**——三者都走 `ctx._chosen_bot()`。未分配则用默认 Bot（`BOT_TOKEN`）。插件作者不感知也不选择 Bot，写 `ctx.bot.send(...)` / `ctx.notify(...)` 即可。

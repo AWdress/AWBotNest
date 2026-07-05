@@ -1,12 +1,14 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api'
+import { toast } from '../composables/toast'
 
-const tab = ref('login')   // login | telegram | web | proxy | db
+const tab = ref('login')   // login | telegram | bots | web | proxy | db
 
 const TABS = [
   { key: 'login',    label: '控制台登录' },
   { key: 'telegram', label: 'Telegram 凭据' },
+  { key: 'bots',     label: '通知 Bot' },
   { key: 'web',      label: 'Web 控制台' },
   { key: 'proxy',    label: '运行代理' },
   { key: 'db',       label: '数据库' },
@@ -29,6 +31,7 @@ async function load() {
     if (s.value.PIP_INDEX_URL === undefined) s.value.PIP_INDEX_URL = ''
     s.value.DB_INFO = s.value.DB_INFO || {}
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
+    s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
   } catch (e) { err.value = e.message } finally { loading.value = false }
 }
 
@@ -37,9 +40,40 @@ async function save() {
   try {
     const r = await api.saveSettings(s.value)
     ok.value = r.restart_required
-      ? '已保存。凭据/代理/数据库等改动需重启平台生效。'
+      ? '已保存。凭据/代理/数据库/新增 Bot 等改动需重启平台生效。'
       : '已保存。'
+    // Bot 列表可能变化 → 刷新推送路由的可选项
+    if (tab.value === 'bots') loadRouting()
   } catch (e) { err.value = e.message } finally { saving.value = false }
+}
+
+// ── 多 Bot（额外 Bot 增删） ──
+function addBot() {
+  s.value.BOTS.push({ id: 'bot_' + Date.now().toString(36), name: '', token: '' })
+}
+function removeBot(i) { s.value.BOTS.splice(i, 1) }
+
+// ── 通知推送路由（哪个插件推到哪个 Bot） ──
+const routing = ref({ bots: [], plugins: [] })
+const routingLoading = ref(false)
+
+async function loadRouting() {
+  routingLoading.value = true
+  try { routing.value = await api.getBotsRouting() }
+  catch (e) { toast.error('加载推送路由失败：' + e.message) }
+  finally { routingLoading.value = false }
+}
+
+async function saveRouting(p) {
+  try {
+    await api.setBotRouting(p.id, p.bot || '')
+    toast.success(`「${p.name}」推送 Bot 已更新`)
+  } catch (e) { toast.error('保存失败：' + e.message); loadRouting() }
+}
+
+function goTab(k) {
+  tab.value = k
+  if (k === 'bots' && routing.value.plugins.length === 0) loadRouting()
 }
 
 // ── 登录凭据修改 ──
@@ -71,7 +105,7 @@ onMounted(() => { load(); loadUsername() })
     <div class="toolbar">
       <div class="tabs">
         <button v-for="t in TABS" :key="t.key" class="tab" :class="{ active: tab === t.key }"
-                @click="tab = t.key">{{ t.label }}</button>
+                @click="goTab(t.key)">{{ t.label }}</button>
       </div>
       <div class="row gap" v-if="s && tab !== 'login'">
         <button class="btn" @click="load">重置</button>
@@ -108,15 +142,59 @@ onMounted(() => { load(); loadUsername() })
       <!-- Telegram 凭据 -->
       <div v-show="tab === 'telegram'" class="card">
         <div class="card-title">Telegram 凭据</div>
-        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH；BOT_TOKEN 从 @BotFather 获取。敏感值显示为打码，不改就留着。</div>
+        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知 Bot」页配置。敏感值显示为打码，不改就留着。</div>
         <div class="grid2">
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
           <div class="field"><label>API HASH</label>
             <input class="input" v-model="s.API_HASH" /></div>
         </div>
-        <div class="field"><label>BOT TOKEN</label>
-          <input class="input" v-model="s.BOT_TOKEN" /></div>
+      </div>
+
+      <!-- 通知 Bot（默认 Bot + 额外 Bot + 推送路由） -->
+      <div v-show="tab === 'bots'" class="card">
+        <div class="card-title">通知 Bot</div>
+        <div class="hint muted">
+          平台的插件通知（ctx.notify）与 bot 类插件都通过 Bot 发送。你可以配置多个 Bot，
+          再在下方指定「每个插件推送到哪个 Bot」。默认 Bot 从 @BotFather 获取 Token；新增/删除 Bot 需重启平台生效。
+        </div>
+
+        <!-- 默认 Bot -->
+        <div class="field">
+          <label>默认 Bot · BOT TOKEN</label>
+          <input class="input" v-model="s.BOT_TOKEN" placeholder="从 @BotFather 获取" />
+        </div>
+
+        <!-- 额外 Bot 列表 -->
+        <div class="field" style="margin-top:6px">
+          <label>额外 Bot</label>
+          <div class="hint muted small" style="margin-bottom:8px">给不同插件分流通知时使用。名称仅用于识别，Token 从 @BotFather 获取。</div>
+          <div v-for="(b, i) in s.BOTS" :key="i" class="bot-row">
+            <input class="input bot-name" v-model="b.name" placeholder="名称（如 订单Bot）" />
+            <input class="input" v-model="b.token" placeholder="Bot Token" />
+            <button class="btn sm danger" @click="removeBot(i)">删除</button>
+          </div>
+          <button class="btn sm" @click="addBot">+ 添加 Bot</button>
+        </div>
+
+        <!-- 推送路由 -->
+        <div class="field" style="margin-top:10px">
+          <label>推送路由（哪个插件推到哪个 Bot）</label>
+          <div class="hint muted small" style="margin-bottom:8px">选择每个插件的通知发到哪个 Bot；选择立即生效（无需保存设置）。默认 = 默认 Bot。</div>
+          <div v-if="routingLoading" class="muted small">加载中…</div>
+          <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
+          <div v-else class="route-table">
+            <div v-for="p in routing.plugins" :key="p.id" class="route-row">
+              <span class="route-name" :title="p.id">{{ p.name }}</span>
+              <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
+                <option value="">默认 Bot</option>
+                <option v-for="b in routing.bots.filter(x => !x.is_default)" :key="b.id" :value="b.id">
+                  {{ b.name }}{{ b.online ? '' : '（离线）' }}
+                </option>
+              </select>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Web 控制台 -->
@@ -225,6 +303,18 @@ onMounted(() => { load(); loadUsername() })
 .field label { font-size: 12px; color: var(--text-secondary); }
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
+
+/* 通知 Bot：额外 Bot 行 + 推送路由表 */
+.bot-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.bot-row .input { flex: 1; }
+.bot-row .bot-name { max-width: 200px; flex: 0 0 auto; }
+.btn.sm { padding: 6px 12px; font-size: 13px; }
+.btn.sm.danger { color: var(--danger); }
+.route-table { display: flex; flex-direction: column; gap: 8px; }
+.route-row { display: flex; align-items: center; gap: 10px; }
+.route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.route-sel { max-width: 220px; flex: 0 0 auto; }
+.small { font-size: 12px; }
 @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
 
 /* 手机适配 */

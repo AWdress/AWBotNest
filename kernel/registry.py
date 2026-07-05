@@ -48,6 +48,7 @@ class PluginMeta:
     enabled: bool = False     # 当前是否启用
     loaded: bool = False      # 当前是否已加载到运行时
     accounts: list[str] = field(default_factory=list)  # 应用到哪些账号(session名)；空=全部用户账号
+    bot: str = ""             # 通知推送 + bot/both handler 用哪个 Bot(id)；空=默认 Bot
     error: Optional[str] = None  # 加载/解析错误信息（前端标红用）
 
     def to_dict(self) -> dict[str, Any]:
@@ -64,6 +65,7 @@ class PluginRegistry:
         self._enabled_state: dict[str, bool] = {}
         self._config_state: dict[str, dict[str, Any]] = {}
         self._account_scope: dict[str, list[str]] = {}  # 插件id -> [session名]，空/缺失=全部
+        self._bot_choice: dict[str, str] = {}  # 插件id -> bot id，空/缺失/"default"=默认 Bot
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -77,23 +79,26 @@ class PluginRegistry:
             self._enabled_state = {}
             self._config_state = {}
             self._account_scope = {}
+            self._bot_choice = {}
             return
         try:
             data = json.loads(self.state_file.read_text(encoding="utf-8"))
             self._enabled_state = data.get("enabled", {})
             self._config_state = data.get("config", {})
             self._account_scope = data.get("account_scope", {})
+            self._bot_choice = data.get("bot_choice", {})
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("读取插件状态文件失败，将重置：%s", e)
             self._enabled_state = {}
             self._config_state = {}
             self._account_scope = {}
+            self._bot_choice = {}
 
     def _save_state(self) -> None:
         """写回磁盘"""
         try:
             payload = {"enabled": self._enabled_state, "config": self._config_state,
-                       "account_scope": self._account_scope}
+                       "account_scope": self._account_scope, "bot_choice": self._bot_choice}
             self.state_file.write_text(
                 json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
             )
@@ -187,6 +192,7 @@ class PluginRegistry:
         # 填充启用状态：已有记录优先，否则用 default_enabled
         meta.enabled = self._enabled_state.get(plugin_id, meta.default_enabled)
         meta.accounts = list(self._account_scope.get(plugin_id, []))
+        meta.bot = self._bot_choice.get(plugin_id, "") or ""
         return meta
 
     @staticmethod
@@ -327,6 +333,37 @@ class PluginRegistry:
         return affected
 
     # ──────────────────────────────────────────────
+    # 通知推送 Bot 选择（单选；空/缺失/"default"=默认 Bot）
+    # ──────────────────────────────────────────────
+    def get_bot_choice(self, plugin_id: str) -> str:
+        """返回插件选定的 Bot id；空字符串表示默认 Bot。"""
+        with self._lock:
+            return self._bot_choice.get(plugin_id, "") or ""
+
+    def set_bot_choice(self, plugin_id: str, bot_id: str) -> None:
+        """设置插件推送/handler 用的 Bot；空或 "default" =默认 Bot（删除该记录）。"""
+        with self._lock:
+            bot_id = (bot_id or "").strip()
+            if bot_id and bot_id != "default":
+                self._bot_choice[plugin_id] = bot_id
+            else:
+                self._bot_choice.pop(plugin_id, None)
+            self._save_state()
+
+    def purge_bot(self, bot_id: str) -> list[str]:
+        """某个 Bot 被删除时，把所有指向它的插件回退到默认 Bot。
+        返回受影响的插件 id 列表，供调用方决定是否重载重挂。"""
+        affected: list[str] = []
+        with self._lock:
+            for pid, bid in list(self._bot_choice.items()):
+                if bid == bot_id:
+                    self._bot_choice.pop(pid, None)
+                    affected.append(pid)
+            if affected:
+                self._save_state()
+        return affected
+
+    # ──────────────────────────────────────────────
     # 插件配置读写（对应 config_schema）
     # ──────────────────────────────────────────────
     def get_config(self, plugin_id: str) -> dict[str, Any]:
@@ -354,6 +391,7 @@ class PluginRegistry:
             self._enabled_state.pop(plugin_id, None)
             self._config_state.pop(plugin_id, None)
             self._account_scope.pop(plugin_id, None)
+            self._bot_choice.pop(plugin_id, None)
             self._save_state()
 
 
