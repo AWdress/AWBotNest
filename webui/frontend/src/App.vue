@@ -207,10 +207,6 @@ onMounted(() => {
 
       <div class="sidebar-footer">
         <div class="foot-row">
-          <div class="footer-status">
-            <div class="status-dot" :class="{ online }"></div>
-            <span class="muted">{{ online ? '平台在线' : '连接中…' }}</span>
-          </div>
           <span class="ver" v-if="version">
             v{{ version }}
             <span v-if="hasUpdate" class="update-wrap">
@@ -229,6 +225,10 @@ onMounted(() => {
               </div>
             </span>
           </span>
+          <div class="footer-status">
+            <div class="status-dot" :class="{ online }"></div>
+            <span class="muted">{{ online ? '在线' : '连接中…' }}</span>
+          </div>
         </div>
         <button class="restart-btn" @click="restart" :disabled="restarting">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"

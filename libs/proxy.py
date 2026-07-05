@@ -29,9 +29,11 @@ def proxy_url() -> str | None:
         px = ps.get("proxy", {}) or {}
         host, port = px.get("hostname"), px.get("port")
         if host and port:
+            from urllib.parse import quote
             scheme = px.get("scheme", "http")
             user, pwd = px.get("username", ""), px.get("password", "")
-            auth = f"{user}:{pwd}@" if user else ""
+            # 用户名/密码可能含 @ : / # 等，需转义，否则拼进 URL 会破坏解析
+            auth = f"{quote(str(user), safe='')}:{quote(str(pwd), safe='')}@" if user else ""
             return f"{scheme}://{auth}{host}:{port}"
     except Exception:  # noqa: BLE001
         pass

@@ -139,6 +139,28 @@ async function openConfig(p) {
   }
 }
 
+// 复制到剪贴板：优先 navigator.clipboard（需安全上下文），
+// 非 HTTPS（http://IP:端口）下降级到临时 textarea + execCommand('copy')。
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* 落到降级方案 */ }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus(); ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch { return false }
+}
+
 // ── 插件 webhook（入站地址；密钥用平台统一的 WEBHOOK_SECRET，在「系统设置 → 通知」生成） ──
 const webhookSecret = ref('')
 const webhookPath = ref('')
@@ -161,8 +183,8 @@ async function loadWebhook() {
 
 async function copyWebhookUrl() {
   if (!webhookUrl.value) return
-  try { await navigator.clipboard.writeText(webhookUrl.value); toast.success('已复制 webhook 地址') }
-  catch { toast.error('复制失败，请手动选择复制') }
+  if (await copyText(webhookUrl.value)) toast.success('已复制 webhook 地址')
+  else toast.error('复制失败，请手动选择复制')
 }
 
 async function saveConfig() {
@@ -466,7 +488,7 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close">×</span></div>
+    <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
 
     <!-- ════ 我的插件 ════ -->
     <template v-if="tab === 'mine'">
@@ -509,20 +531,20 @@ onUnmounted(() => {
               </button>
               <div v-if="menuFor === p.id" class="dropdown" :class="{ 'align-right': menuAlignRight }" @click.stop>
                 <button class="menu-item" @click.stop="openConfig(p)">
-                  <span class="mi-ico">⚙</span> 配置
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 配置
                 </button>
                 <button class="menu-item" @click.stop="openLogs(p)">
-                  <span class="mi-ico">📄</span> 查看日志
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看日志
                 </button>
                 <button class="menu-item" v-if="p.scope === 'user' || p.scope === 'both'" @click.stop="openAccounts(p)">
-                  <span class="mi-ico">👤</span> 应用账号
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM4 21a8 8 0 0 1 16 0"/></svg> 应用账号
                 </button>
                 <button class="menu-item" @click.stop="reload(p)" :disabled="busy[p.id]">
-                  <span class="mi-ico">↻</span> 重载
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 重载
                 </button>
                 <div class="menu-sep"></div>
                 <button class="menu-item danger" @click.stop="remove(p)" :disabled="busy[p.id]">
-                  <span class="mi-ico">🗑</span> 删除
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg> 删除
                 </button>
               </div>
             </div>
@@ -534,7 +556,7 @@ onUnmounted(() => {
     <!-- ════ 插件市场 ════ -->
     <template v-else>
       <div class="hint muted store-hint">来自官方仓库与你配置的 GitHub 仓库。点「安装」拉到本地（不自动启用），安装后到「我的插件」开启。</div>
-      <div v-if="storeErr" class="alert">{{ storeErr }} <span @click="storeErr=''" class="close">×</span></div>
+      <div v-if="storeErr" class="alert">{{ storeErr }} <span @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
 
       <div v-if="storeBusy && store.length === 0" class="muted center">加载市场…</div>
       <template v-else>
@@ -563,7 +585,13 @@ onUnmounted(() => {
 
               <div class="card-actions">
                 <button class="btn sm btn-primary" @click="download(p)" :disabled="dlBusy[p.id]">
-                  {{ dlBusy[p.id] ? '更新中…' : '⬆ 更新' }}
+                  <template v-if="dlBusy[p.id]">更新中…</template>
+                  <template v-else>
+                    <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                    </svg>更新
+                  </template>
                 </button>
               </div>
             </div>
@@ -596,7 +624,13 @@ onUnmounted(() => {
 
           <div class="card-actions">
             <button class="btn sm btn-primary" @click="download(p)" :disabled="dlBusy[p.id]">
-              {{ dlBusy[p.id] ? '安装中…' : '⬇ 安装' }}
+              <template v-if="dlBusy[p.id]">安装中…</template>
+              <template v-else>
+                <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
+                </svg>安装
+              </template>
             </button>
           </div>
         </div>
@@ -612,7 +646,7 @@ onUnmounted(() => {
       <div class="modal card">
         <div class="modal-head">
           <h2>{{ configTarget?.name }} · 配置</h2>
-          <span class="close" @click="configOpen=false">×</span>
+          <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
         <ConfigForm v-if="Object.keys(configSchema).length" v-model="configValues" :schema="configSchema" />
         <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
@@ -648,7 +682,7 @@ onUnmounted(() => {
       <div class="modal card">
         <div class="modal-head">
           <h2>{{ acctTarget?.name }} · 应用账号</h2>
-          <span class="close" @click="acctOpen=false">×</span>
+          <span class="close" @click="acctOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
         <div class="form">
           <div class="hint muted">选择这个插件在哪些账号上生效。多账号时可让不同号开不同插件。</div>
@@ -686,7 +720,7 @@ onUnmounted(() => {
             {{ logsTarget?.name }} · 日志
             <span class="conn" :class="{ on: logsConnected }"><span class="dot"></span>{{ logsConnected ? '实时' : '连接中' }}</span>
           </h2>
-          <span class="close" @click="closeLogs">×</span>
+          <span class="close" @click="closeLogs"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
         <div class="log-box" ref="logsBox">
           <div v-if="logsList.length === 0" class="muted center">该插件暂无日志</div>
@@ -707,7 +741,7 @@ onUnmounted(() => {
       <div class="modal card">
         <div class="modal-head">
           <h2>设置 GitHub 仓库地址</h2>
-          <span class="close" @click="repoOpen=false">×</span>
+          <span class="close" @click="repoOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
         <div v-if="repoErr" class="alert">{{ repoErr }}</div>
         <div class="form">
@@ -723,7 +757,7 @@ onUnmounted(() => {
               <input class="input" v-model="r.url"
                      placeholder="owner/repo 或 https://github.com/owner/repo（可带 /tree/分支/子目录）" />
               <input class="input repo-token" type="password" v-model="r.token" placeholder="token（私有库才填）" />
-              <button class="btn sm btn-danger" @click="delRepo(i)">×</button>
+              <button class="btn sm btn-danger" @click="delRepo(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
             <div class="hint muted">推荐仓库带 manifest.json 并写好 version，平台才能识别「更新」。</div>
@@ -771,7 +805,8 @@ onUnmounted(() => {
   margin-bottom: 16px; font-size: 13px;
   display: flex; justify-content: space-between;
 }
-.alert .close { cursor: pointer; font-size: 16px; }
+.alert .close { cursor: pointer; font-size: 16px; display: inline-flex; align-items: center; }
+.x-ico { width: 16px; height: 16px; }
 
 .store-hint { font-size: 12px; margin-bottom: 16px; }
 .center { text-align: center; padding: 40px; }
@@ -822,7 +857,7 @@ onUnmounted(() => {
 .menu-item:disabled { opacity: 0.5; cursor: not-allowed; }
 .menu-item.danger { color: var(--danger); }
 .menu-item.danger:hover:not(:disabled) { background: var(--danger-dim); }
-.mi-ico { width: 16px; text-align: center; font-size: 13px; flex-shrink: 0; }
+.mi-ico { width: 15px; height: 15px; flex-shrink: 0; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; }
@@ -865,6 +900,7 @@ onUnmounted(() => {
 
 .card-actions { display: flex; gap: 8px; margin-top: 4px; }
 .btn.sm { padding: 6px 12px; font-size: 12px; }
+.btn-ico { width: 14px; height: 14px; flex-shrink: 0; }
 
 .drag-overlay {
   position: fixed; inset: 0;
@@ -884,7 +920,8 @@ onUnmounted(() => {
 .modal { width: 540px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-head h2 { font-size: 16px; }
-.modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); }
+.modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
+.modal-head .close .x-ico { width: 20px; height: 20px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .form { display: flex; flex-direction: column; gap: 16px; }
 .form .field { display: flex; flex-direction: column; gap: 8px; }

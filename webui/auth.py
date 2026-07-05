@@ -82,7 +82,10 @@ def _make_token(data: dict) -> str:
 def login(username: str, password: str) -> str:
     """校验用户名+密码，返回令牌"""
     data = _ensure_default()
-    user_ok = hmac.compare_digest((username or "").strip(), data["username"])
+    # 转 bytes 再比：hmac.compare_digest 对含非 ASCII 的 str 会抛 TypeError，
+    # 直接比 str 会让「用户名含中文/非 ASCII」变成 500 而非干脆 401。
+    user_ok = hmac.compare_digest((username or "").strip().encode("utf-8"),
+                                  (data["username"] or "").encode("utf-8"))
     pwd_ok = hmac.compare_digest(_hash_pwd(password or "", data["salt"]), data["pwd_hash"])
     if not (user_ok and pwd_ok):
         raise HTTPException(status_code=401, detail="用户名或密码错误")

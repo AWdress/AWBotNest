@@ -108,29 +108,63 @@ async def submit(
     acc_tag = f"[{account_label}]" if account_label else ""
     logger.info("[通知][%s]%s %s%s", plugin_name, acc_tag, f"({category}) " if category else "", text)
 
-    # 投递：优先本插件被平台分配的 Bot 私聊管理员，回退主账号收藏夹
-    oid = _owner_id()
-    bot = _resolve_plugin_bot(accounts, plugin_id)
-    if bot and getattr(bot, "is_connected", False) and oid:
-        return await bot.send_message(oid, body, **send_kwargs)
+    # 投递：优先本插件路由 Bot 配置的通知目标 Chat ID，其次平台管理员；
+    # Bot 都不可用时回退主账号「收藏夹」。
+    bot_id = _plugin_bot_id(plugin_id)
+    bot = _get_bot(accounts, bot_id)
+    if bot and getattr(bot, "is_connected", False):
+        target = _bot_chat_id(bot_id)
+        if target is None:
+            target = _owner_id() or None
+        if target:
+            return await bot.send_message(target, body, **send_kwargs)
     user = getattr(accounts, "primary_user_app", None)
     if user and getattr(user, "is_connected", False):
         return await user.send_message("me", body, **send_kwargs)
-    raise RuntimeError("无可用账号投递通知（Bot 未连接且无在线用户账号）")
+    raise RuntimeError("无可用账号投递通知（Bot 未连接/未配置 Chat ID，且无在线用户账号）")
 
 
-def _resolve_plugin_bot(accounts: Any, plugin_id: str) -> Any:
-    """按插件在「系统设置 → 通知」的推送路由取 Bot；未分配 / 取不到则回退默认 Bot。"""
-    get_bot = getattr(accounts, "get_bot", None)
-    if not callable(get_bot):
-        # 兼容极旧的 accounts 对象（无多 Bot 能力）
-        return getattr(accounts, "bot_app", None)
+def _plugin_bot_id(plugin_id: str) -> str:
+    """本插件在「系统设置 → 通知」路由到的 Bot id；未分配返回 ""（默认 Bot）。"""
     try:
         from kernel.registry import registry
-        bot_id = registry.get_bot_choice(plugin_id)
+        return registry.get_bot_choice(plugin_id) or ""
     except Exception:  # noqa: BLE001
-        bot_id = ""
-    return get_bot(bot_id)
+        return ""
+
+
+def _get_bot(accounts: Any, bot_id: str) -> Any:
+    """按 id 取 Bot client；兼容极旧的无多 Bot 能力的 accounts 对象。"""
+    get_bot = getattr(accounts, "get_bot", None)
+    if callable(get_bot):
+        return get_bot(bot_id)
+    return getattr(accounts, "bot_app", None)
+
+
+def _bot_chat_id(bot_id: str) -> Any:
+    """读取该 Bot 配置的通知目标 Chat ID；未配置返回 None。
+    纯数字（含负号，群/频道）转 int 供 pyrogram 识别；否则原样（@username）。"""
+    try:
+        import config.config as cfg
+        d = cfg.load()
+    except Exception:  # noqa: BLE001
+        return None
+    raw = ""
+    if not bot_id or bot_id == "default":
+        raw = str(d.get("DEFAULT_BOT_CHAT_ID") or "").strip()
+    else:
+        for b in (d.get("BOTS") or []):
+            if isinstance(b, dict) and b.get("id") == bot_id:
+                raw = str(b.get("chat_id") or "").strip()
+                break
+    if not raw:
+        return None
+    if raw.lstrip("-").isdigit():
+        try:
+            return int(raw)
+        except ValueError:
+            return raw
+    return raw
 
 
 def history() -> list[dict]:

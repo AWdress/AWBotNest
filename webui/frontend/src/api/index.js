@@ -95,6 +95,8 @@ export const api = {
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
   restartPlatform: () => request('POST', '/api/system/restart'),
+  testProxy: (proxy_set) => request('POST', '/api/settings/test_proxy', { proxy_set }),
+  testDb: (DB_INFO) => request('POST', '/api/settings/test_db', { DB_INFO }),
 
   // 多 Bot / 通知推送路由
   listBots: () => request('GET', '/api/bots'),

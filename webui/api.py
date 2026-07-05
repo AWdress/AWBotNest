@@ -490,7 +490,7 @@ async def login_submit_password(body: Dict[str, Any], user=Depends(_auth)):
 # 平台设置（config.json 读写）
 # ──────────────────────────────────────────────
 # 敏感字段：读取时打码，仅当前端传回非打码值才更新
-_SECRET_FIELDS = ("API_HASH", "BOT_TOKEN", "NGROK_TOKEN")
+_SECRET_FIELDS = ("API_HASH", "BOT_TOKEN")
 _MASK = "********"
 
 
@@ -586,7 +586,8 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
                 tok = b.get("token", "")
                 if tok == _MASK or (isinstance(tok, str) and _MASK in tok):
                     tok = old_bot_tokens.get(bid, "")
-                cleaned_bots.append({"id": bid, "name": str(b.get("name") or bid), "token": tok})
+                cleaned_bots.append({"id": bid, "name": str(b.get("name") or bid), "token": tok,
+                                     "chat_id": str(b.get("chat_id") or "").strip()})
             v = cleaned_bots
         merged[k] = v
 
@@ -650,10 +651,94 @@ async def restart_platform(user=Depends(_auth_pwc)):
 
 
 # ──────────────────────────────────────────────
-# Webhook 入站端点（公开，靠 apikey 查询串鉴权，不走登录令牌）
-#   平台级：/api/v1/webhook?apikey=<WEBHOOK_SECRET>   → 推送给管理员
-#   插件级：/api/v1/plugin/<id>/webhook?apikey=<插件密钥> → 交插件处理器
+# 连接测试（代理 / 数据库）——用「当前表单值」测，打码密码回落已保存值
 # ──────────────────────────────────────────────
+@app.post("/api/settings/test_proxy")
+async def test_proxy(body: Dict[str, Any], user=Depends(_auth)):
+    """用提交的 proxy_set 试连一次外网。返回 {ok, message}，不抛异常（失败也是 200）。"""
+    import config.config as cfg
+    ps = (body or {}).get("proxy_set") or body or {}
+    cur = cfg.load()
+    px = dict(ps.get("proxy") or {})
+    # 打码密码回落已保存值
+    if px.get("password") == _MASK:
+        px["password"] = cur.get("proxy_set", {}).get("proxy", {}).get("password", "")
+
+    url = (ps.get("PROXY_URL") or "").strip()
+    if not url:
+        host, port = px.get("hostname"), px.get("port")
+        if not (host and port):
+            return {"ok": False, "message": "未填写代理主机/端口"}
+        from urllib.parse import quote
+        scheme = px.get("scheme", "http")
+        uname, pwd = px.get("username", ""), px.get("password", "")
+        # 用户名/密码可能含特殊字符，转义后再拼进 URL
+        auth = f"{quote(str(uname), safe='')}:{quote(str(pwd), safe='')}@" if uname else ""
+        url = f"{scheme}://{auth}{host}:{port}"
+
+    import httpx
+    try:
+        async with httpx.AsyncClient(proxy=url, timeout=8, trust_env=False) as client:
+            r = await client.get("https://api.telegram.org")
+        return {"ok": True, "message": f"代理可用（可达 api.telegram.org，HTTP {r.status_code}）"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"代理连接失败：{e.__class__.__name__}: {e}"}
+
+
+@app.post("/api/settings/test_db")
+async def test_db(body: Dict[str, Any], user=Depends(_auth)):
+    """用提交的 DB_INFO 试连一次数据库。返回 {ok, message}，不抛异常（失败也是 200）。"""
+    import asyncio as _aio
+    from urllib.parse import quote_plus
+    import config.config as cfg
+    db = (body or {}).get("DB_INFO") or body or {}
+    cur = cfg.load()
+    db = dict(db)
+    if db.get("password") == _MASK:
+        db["password"] = cur.get("DB_INFO", {}).get("password", "")
+
+    dbset = db.get("dbset", "SQLite")
+    if dbset == "SQLite":
+        return {"ok": True, "message": "SQLite 为本地文件，无需测试连接"}
+
+    pwd = quote_plus(str(db.get("password", "")))
+    user_, addr, port, name = db.get("user"), db.get("address"), db.get("port"), db.get("db_name")
+    if dbset == "mySQL":
+        dsn = f"mysql+aiomysql://{user_}:{pwd}@{addr}:{port}/{name}"
+    elif dbset == "PostgreSQL":
+        dsn = f"postgresql+asyncpg://{user_}:{pwd}@{addr}:{port}/{name}"
+    else:
+        return {"ok": False, "message": f"未知数据库类型：{dbset}"}
+
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy import text as _text
+    engine = create_async_engine(dsn)
+    try:
+        async def _probe():
+            async with engine.connect() as conn:
+                await conn.execute(_text("SELECT 1"))
+        await _aio.wait_for(_probe(), timeout=8)
+        return {"ok": True, "message": "数据库连接成功"}
+    except _aio.TimeoutError:
+        return {"ok": False, "message": "连接超时（检查地址/端口/网络）"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"连接失败：{e.__class__.__name__}: {e}"}
+    finally:
+        await engine.dispose()
+
+
+# ──────────────────────────────────────────────
+# Webhook 入站端点（公开，靠 apikey 查询串鉴权，不走登录令牌）
+#   平台级：/api/v1/webhook?apikey=<WEBHOOK_SECRET>          → 推送给管理员
+#   插件级：/api/v1/plugin/<id>/webhook?apikey=<WEBHOOK_SECRET> → 交插件处理器
+#   两者共用同一个平台密钥（不为插件单独生成）。
+# ──────────────────────────────────────────────
+def _apikey_ok(given: str, secret: str) -> bool:
+    """恒定时间比对 apikey。转 bytes 再比：hmac.compare_digest 对含非 ASCII 的 str
+    会抛 TypeError，直接比 str 会让「?apikey=中文/乱码」变成 500 而非干脆 401。"""
+    return hmac.compare_digest((given or "").encode("utf-8"), (secret or "").encode("utf-8"))
+
+
 async def _build_webhook_request(request: Request):
     """把 FastAPI Request 转成给插件的轻量 WebhookRequest（剔除 apikey）。"""
     from kernel.context import WebhookRequest
@@ -690,7 +775,7 @@ async def plugin_webhook(plugin_id: str, request: Request):
         # 未设平台密钥即视为 webhook 未开启，不泄露插件是否存在
         raise HTTPException(status_code=404, detail="webhook 未开启（请先在系统设置生成密钥）")
     given = request.query_params.get("apikey", "")
-    if not hmac.compare_digest(given, secret):
+    if not _apikey_ok(given, secret):
         raise HTTPException(status_code=401, detail="apikey 无效")
 
     runtime = _get_runtime()
@@ -717,7 +802,7 @@ async def platform_webhook(request: Request):
     if not secret:
         raise HTTPException(status_code=404, detail="平台 webhook 未开启")
     given = request.query_params.get("apikey", "")
-    if not hmac.compare_digest(given, secret):
+    if not _apikey_ok(given, secret):
         raise HTTPException(status_code=401, detail="apikey 无效")
 
     wreq = await _build_webhook_request(request)
@@ -742,7 +827,14 @@ async def platform_webhook(request: Request):
             level="info", category=category,
         )
     except RuntimeError as e:
+        # 无可用账号投递（Bot 未连接且无在线用户账号）
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001 - 投递失败（多为 Chat ID 配置错误 / Bot 无权限）
+        logger.warning("平台 webhook 投递失败: %r", e)
+        raise HTTPException(
+            status_code=502,
+            detail=f"通知投递失败：{e.__class__.__name__}（请检查通知 Chat ID 是否正确、Bot 是否有权限）",
+        ) from e
     return {"ok": True}
 
 
@@ -918,20 +1010,6 @@ async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):
     """启动 Web UI 服务"""
     import asyncio
     import uvicorn
-
-    if config.telegram.ngrok_enable:
-        try:
-            from pyngrok import ngrok
-            if config.telegram.ngrok_token:
-                ngrok.set_auth_token(config.telegram.ngrok_token)
-            tunnel = ngrok.connect(port, "http")
-            public_url = tunnel.public_url.replace("http://", "https://")
-            config.telegram.web_ui_url = public_url
-            logger.info("[自动映射] 公网访问地址: %s", public_url)
-        except ImportError:
-            logger.error("未安装 pyngrok，无法开启自动映射")
-        except Exception as e:  # noqa: BLE001
-            logger.error("开启 ngrok 隧道失败: %s", e)
 
     try:
         cfg = uvicorn.Config(app, host=host, port=port, log_level="warning")

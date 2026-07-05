@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../composables/toast'
+import { confirm } from '../composables/confirm'
 
 const tab = ref('login')   // login | telegram | bots | web | proxy | db
 
@@ -17,11 +19,23 @@ const TABS = [
 const s = ref(null)
 const loading = ref(true)
 const saving = ref(false)
-const err = ref('')
-const ok = ref('')
+const err = ref('')          // 仅用于加载失败（页面无数据时内联提示）
+// 敏感字段显示/隐藏切换：key -> bool（true=明文）。key 见模板：'default'/bot.id/'webhook'/'api_hash'/'proxy_pw'/'db_pw'
+const reveal = ref({})
+function toggleReveal(key) { reveal.value[key] = !reveal.value[key] }
 
-async function load() {
-  loading.value = true; err.value = ''
+// 未保存改动检测：快照 vs 当前
+const savedSnap = ref('')
+const dirty = computed(() => !!s.value && JSON.stringify(s.value) !== savedSnap.value)
+// 保存后需重启提示
+const restartHint = ref(false)
+const restarting = ref(false)
+// 用户又开始改动时，隐藏“需重启”横幅（新改动得重新保存）
+watch(dirty, (d) => { if (d) restartHint.value = false })
+
+async function load(silent = false) {
+  if (!silent) loading.value = true
+  err.value = ''
   try {
     const d = await api.getSettings()
     s.value = d.settings
@@ -33,24 +47,65 @@ async function load() {
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
     if (s.value.WEBHOOK_SECRET === undefined) s.value.WEBHOOK_SECRET = ''
-  } catch (e) { err.value = e.message } finally { loading.value = false }
+    if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
+    // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
+    s.value.BOTS.forEach((b) => { if (b.chat_id === undefined) b.chat_id = '' })
+    savedSnap.value = JSON.stringify(s.value)   // 基线快照
+  } catch (e) { err.value = e.message } finally { if (!silent) loading.value = false }
 }
 
 async function save() {
-  saving.value = true; err.value = ''; ok.value = ''
+  saving.value = true
   try {
     const r = await api.saveSettings(s.value)
-    ok.value = r.restart_required
+    const needRestart = !!r.restart_required
+    // 静默重载：同步服务端清洗后的值（如剔除畸形 Bot）并重置基线快照
+    await load(true)
+    restartHint.value = needRestart
+    toast.success(needRestart
       ? '已保存。凭据/代理/数据库/新增 Bot 等改动需重启平台生效。'
-      : '已保存。'
+      : '已保存。')
     // Bot 列表可能变化 → 刷新推送路由的可选项
     if (tab.value === 'bots') loadRouting()
-  } catch (e) { err.value = e.message } finally { saving.value = false }
+  } catch (e) { toast.error('保存失败：' + e.message) } finally { saving.value = false }
+}
+
+async function doRestart() {
+  restarting.value = true
+  try {
+    await api.restartPlatform()
+    toast.success('平台正在重启，十几秒后自动刷新')
+    restartHint.value = false
+    let tries = 0
+    const timer = setInterval(async () => {
+      tries++
+      try { await api.status(); clearInterval(timer); location.reload() }
+      catch { if (tries > 30) { clearInterval(timer); restarting.value = false } }
+    }, 2000)
+  } catch (e) { toast.error('重启请求失败：' + e.message); restarting.value = false }
+}
+
+// ── 连接测试（代理 / 数据库）──
+const proxyTest = ref(null)     // { ok, message } | null
+const proxyTesting = ref(false)
+async function testProxy() {
+  proxyTesting.value = true; proxyTest.value = null
+  try { proxyTest.value = await api.testProxy(s.value.proxy_set) }
+  catch (e) { proxyTest.value = { ok: false, message: e.message } }
+  finally { proxyTesting.value = false }
+}
+const dbTest = ref(null)
+const dbTesting = ref(false)
+async function testDb() {
+  dbTesting.value = true; dbTest.value = null
+  try { dbTest.value = await api.testDb(s.value.DB_INFO) }
+  catch (e) { dbTest.value = { ok: false, message: e.message } }
+  finally { dbTesting.value = false }
 }
 
 // ── 多 Bot（额外 Bot 增删） ──
 function addBot() {
-  s.value.BOTS.push({ id: 'bot_' + Date.now().toString(36), name: '', token: '' })
+  s.value.BOTS.push({ id: 'bot_' + Date.now().toString(36), name: '', token: '', chat_id: '' })
 }
 function removeBot(i) { s.value.BOTS.splice(i, 1) }
 
@@ -65,10 +120,29 @@ const platformWebhookUrl = computed(() => {
   if (!s.value?.WEBHOOK_SECRET) return ''
   return `${location.origin}/api/v1/webhook?apikey=${s.value.WEBHOOK_SECRET}`
 })
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* 落到降级方案 */ }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.focus(); ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch { return false }
+}
 async function copyPlatformWebhook() {
   if (!platformWebhookUrl.value) return
-  try { await navigator.clipboard.writeText(platformWebhookUrl.value); toast.success('已复制平台 webhook 地址') }
-  catch { toast.error('复制失败，请手动选择复制') }
+  if (await copyText(platformWebhookUrl.value)) toast.success('已复制平台 webhook 地址')
+  else toast.error('复制失败，请手动选择复制')
 }
 
 // ── 通知推送路由（哪个插件推到哪个 Bot） ──
@@ -88,6 +162,21 @@ async function saveRouting(p) {
     toast.success(`「${p.name}」推送 Bot 已更新`)
   } catch (e) { toast.error('保存失败：' + e.message); loadRouting() }
 }
+
+// Bot 在线状态/用户名：取自 routing.bots（后端 list_bots，含 online/username）。
+// 新加的额外 Bot 尚未保存重启，查不到状态，返回 null（UI 显示「未连接」）。
+function botStatus(id) {
+  return (routing.value.bots || []).find((b) => b.id === id) || null
+}
+
+// 推送路由搜索：按插件名/id 过滤
+const routeSearch = ref('')
+const filteredRoutePlugins = computed(() => {
+  const q = routeSearch.value.trim().toLowerCase()
+  const list = routing.value.plugins || []
+  if (!q) return list
+  return list.filter((p) => (p.name || '').toLowerCase().includes(q) || (p.id || '').toLowerCase().includes(q))
+})
 
 function goTab(k) {
   tab.value = k
@@ -115,6 +204,19 @@ async function saveCred() {
 }
 
 onMounted(() => { load(); loadUsername() })
+
+// 未保存改动保护：刷新/关页 + 站内切换路由时提醒
+function beforeUnload(e) { if (dirty.value) { e.preventDefault(); e.returnValue = '' } }
+onMounted(() => window.addEventListener('beforeunload', beforeUnload))
+onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
+onBeforeRouteLeave(async () => {
+  if (!dirty.value) return true
+  return await confirm({
+    title: '离开系统设置',
+    message: '有未保存的改动，离开将丢失。确定离开？',
+    confirmText: '离开', danger: true,
+  })
+})
 </script>
 
 <template>
@@ -126,15 +228,26 @@ onMounted(() => { load(); loadUsername() })
                 @click="goTab(t.key)">{{ t.label }}</button>
       </div>
       <div class="row gap" v-if="s && tab !== 'login'">
-        <button class="btn" @click="load">重置</button>
-        <button class="btn btn-primary" @click="save" :disabled="saving">{{ saving ? '保存中…' : '保存设置' }}</button>
+        <button class="btn" @click="load" :disabled="!dirty" title="撤销未保存的改动，从服务器重新加载">撤销更改</button>
+        <button class="btn btn-primary" @click="save" :disabled="saving || !dirty">
+          <span v-if="dirty" class="dirty-dot"></span>{{ saving ? '保存中…' : (dirty ? '保存设置' : '已保存') }}
+        </button>
       </div>
     </div>
 
     <div v-if="loading" class="muted center">加载中…</div>
     <div v-else-if="s" class="panel">
       <div v-if="err" class="alert err">{{ err }}</div>
-      <div v-if="ok" class="alert ok">{{ ok }}</div>
+      <!-- 保存后需重启：给一键重启入口 -->
+      <div v-if="restartHint" class="restart-banner">
+        <span>部分改动需重启平台才生效。</span>
+        <div class="row gap">
+          <button class="btn sm" @click="restartHint = false">稍后</button>
+          <button class="btn sm btn-primary" @click="doRestart" :disabled="restarting">
+            {{ restarting ? '重启中…' : '立即重启' }}
+          </button>
+        </div>
+      </div>
 
       <!-- 控制台登录 -->
       <div v-show="tab === 'login'" class="card">
@@ -165,34 +278,103 @@ onMounted(() => { load(); loadUsername() })
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
           <div class="field"><label>API HASH</label>
-            <input class="input" v-model="s.API_HASH" /></div>
+            <div class="secret-field">
+              <input class="input" :type="reveal['api_hash'] ? 'text' : 'password'" v-model="s.API_HASH" />
+              <button class="eye" type="button" @click="toggleReveal('api_hash')" :title="reveal['api_hash'] ? '隐藏' : '显示'">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+                  <line v-if="reveal['api_hash']" x1="3" y1="3" x2="21" y2="21"/>
+                </svg>
+              </button>
+            </div></div>
         </div>
       </div>
 
-      <!-- 通知（默认 Bot + 额外 Bot + 推送路由） -->
+      <!-- 通知（通知 Bot 卡片 + 推送路由 + 平台 Webhook） -->
       <div v-show="tab === 'bots'" class="card">
         <div class="card-title">通知</div>
         <div class="hint muted">
-          平台的插件通知（ctx.notify）与 bot 类插件都通过 Bot 发送。你可以配置多个 Bot，
-          再在下方指定「每个插件推送到哪个 Bot」。默认 Bot 从 @BotFather 获取 Token；新增/删除 Bot 需重启平台生效。
+          平台的插件通知（ctx.notify）与 bot 类插件都通过 Bot 发送。可配置多个 Bot，
+          再在下方指定「每个插件推送到哪个 Bot」。Token 从 @BotFather 获取；新增/删除 Bot 需重启平台生效。
         </div>
 
-        <!-- 默认 Bot -->
+        <!-- 通知 Bot 卡片网格 -->
         <div class="field">
-          <label>默认 Bot · BOT TOKEN</label>
-          <input class="input" v-model="s.BOT_TOKEN" placeholder="从 @BotFather 获取" />
-        </div>
+          <label>通知 Bot</label>
+          <div class="bot-grid">
+            <!-- 默认 Bot -->
+            <div class="bot-card">
+              <div class="bot-card-head">
+                <span class="bot-ava">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                </span>
+                <div class="bot-id">
+                  <div class="bot-name-row">
+                    <span class="bot-name-text">默认 Bot</span>
+                    <span class="badge badge-default">默认</span>
+                  </div>
+                  <div class="bot-status">
+                    <span class="dot" :class="{ on: botStatus('default')?.online }"></span>
+                    <span class="muted">{{ botStatus('default')?.online ? '在线' : (botStatus('default') ? '离线' : '未连接') }}</span>
+                    <span v-if="botStatus('default')?.username" class="muted mono">@{{ botStatus('default').username }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="secret-field">
+                <input class="input" :type="reveal['default'] ? 'text' : 'password'"
+                       v-model="s.BOT_TOKEN" placeholder="从 @BotFather 获取 Token" />
+                <button class="eye" type="button" @click="toggleReveal('default')"
+                        :title="reveal['default'] ? '隐藏' : '显示'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+                    <line v-if="reveal['default']" x1="3" y1="3" x2="21" y2="21"/>
+                  </svg>
+                </button>
+              </div>
+              <input class="input bot-chat" v-model="s.DEFAULT_BOT_CHAT_ID" placeholder="通知 Chat ID（留空=发给管理员）" />
+            </div>
 
-        <!-- 额外 Bot 列表 -->
-        <div class="field" style="margin-top:6px">
-          <label>额外 Bot</label>
-          <div class="hint muted small" style="margin-bottom:8px">给不同插件分流通知时使用。名称仅用于识别，Token 从 @BotFather 获取。</div>
-          <div v-for="(b, i) in s.BOTS" :key="i" class="bot-row">
-            <input class="input bot-name" v-model="b.name" placeholder="名称（如 订单Bot）" />
-            <input class="input" v-model="b.token" placeholder="Bot Token" />
-            <button class="btn sm danger" @click="removeBot(i)">删除</button>
+            <!-- 额外 Bot -->
+            <div v-for="(b, i) in s.BOTS" :key="b.id || i" class="bot-card">
+              <button class="bot-del" type="button" title="删除此 Bot" @click="removeBot(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+              <div class="bot-card-head">
+                <span class="bot-ava">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                </span>
+                <div class="bot-id">
+                  <input class="input bot-name-input" v-model="b.name" placeholder="名称（如 订单Bot）" />
+                  <div class="bot-status">
+                    <span class="dot" :class="{ on: botStatus(b.id)?.online }"></span>
+                    <span class="muted">{{ botStatus(b.id)?.online ? '在线' : (botStatus(b.id) ? '离线' : '未连接（需保存并重启）') }}</span>
+                    <span v-if="botStatus(b.id)?.username" class="muted mono">@{{ botStatus(b.id).username }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="secret-field">
+                <input class="input" :type="reveal[b.id] ? 'text' : 'password'"
+                       v-model="b.token" placeholder="Bot Token" />
+                <button class="eye" type="button" @click="toggleReveal(b.id)"
+                        :title="reveal[b.id] ? '隐藏' : '显示'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+                    <line v-if="reveal[b.id]" x1="3" y1="3" x2="21" y2="21"/>
+                  </svg>
+                </button>
+              </div>
+              <input class="input bot-chat" v-model="b.chat_id" placeholder="通知 Chat ID（留空=发给管理员）" />
+            </div>
+
+            <!-- 添加 Bot -->
+            <button class="bot-card bot-add" type="button" @click="addBot">
+              <span class="bot-add-plus">+</span>
+              <span>添加 Bot</span>
+            </button>
           </div>
-          <button class="btn sm" @click="addBot">+ 添加 Bot</button>
+          <div class="hint muted small" style="margin-top:2px">额外 Bot 用于给不同插件分流通知；名称仅用于识别。修改后点右上「保存设置」。</div>
         </div>
 
         <!-- 推送路由 -->
@@ -201,17 +383,21 @@ onMounted(() => { load(); loadUsername() })
           <div class="hint muted small" style="margin-bottom:8px">选择每个插件的通知发到哪个 Bot；选择立即生效（无需保存设置）。默认 = 默认 Bot。</div>
           <div v-if="routingLoading" class="muted small">加载中…</div>
           <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
-          <div v-else class="route-table">
-            <div v-for="p in routing.plugins" :key="p.id" class="route-row">
-              <span class="route-name" :title="p.id">{{ p.name }}</span>
-              <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
-                <option value="">默认 Bot</option>
-                <option v-for="b in routing.bots.filter(x => !x.is_default)" :key="b.id" :value="b.id">
-                  {{ b.name }}{{ b.online ? '' : '（离线）' }}
-                </option>
-              </select>
+          <template v-else>
+            <input class="input route-search" v-model="routeSearch" placeholder="搜索插件名称 / id…" />
+            <div v-if="filteredRoutePlugins.length === 0" class="muted small" style="margin-top:8px">没有匹配的插件。</div>
+            <div v-else class="route-table">
+              <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row">
+                <span class="route-name" :title="p.id">{{ p.name }}</span>
+                <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
+                  <option value="">默认 Bot</option>
+                  <option v-for="b in routing.bots.filter(x => !x.is_default)" :key="b.id" :value="b.id">
+                    {{ b.name }}{{ b.online ? '' : '（离线）' }}
+                  </option>
+                </select>
+              </div>
             </div>
-          </div>
+          </template>
         </div>
 
         <!-- 平台 Webhook -->
@@ -222,8 +408,24 @@ onMounted(() => { load(); loadUsername() })
             平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
           </div>
           <div class="row gap">
-            <input class="input" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥（≥8 位）" />
-            <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">🎲 随机</button>
+            <div class="secret-field" style="flex:1">
+              <input class="input" :type="reveal['webhook'] ? 'text' : 'password'"
+                     v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
+              <button class="eye" type="button" @click="toggleReveal('webhook')"
+                      :title="reveal['webhook'] ? '隐藏' : '显示'">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+                  <line v-if="reveal['webhook']" x1="3" y1="3" x2="21" y2="21"/>
+                </svg>
+              </button>
+            </div>
+            <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">
+              <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              </svg>随机
+            </button>
           </div>
           <div v-if="platformWebhookUrl" class="webhook-url mono">{{ platformWebhookUrl }}</div>
           <button v-if="platformWebhookUrl" class="btn sm" style="align-self:flex-start" @click="copyPlatformWebhook">复制地址</button>
@@ -239,12 +441,7 @@ onMounted(() => { load(); loadUsername() })
           <div class="field"><label>外部地址 (WEB_UI_URL，可空)</label>
             <input class="input" v-model="s.WEB_UI_URL" /></div>
         </div>
-        <div class="row between">
-          <span>启用 ngrok 公网映射</span>
-          <div class="toggle" :class="{ on: s.NGROK_ENABLE }" @click="s.NGROK_ENABLE = !s.NGROK_ENABLE"></div>
-        </div>
-        <div class="field" v-if="s.NGROK_ENABLE"><label>ngrok Token</label>
-          <input class="input" v-model="s.NGROK_TOKEN" /></div>
+        <div class="hint muted small">需要公网访问请自行用 Nginx / Caddy 等反向代理到本机端口。</div>
       </div>
 
       <!-- 运行代理 -->
@@ -270,7 +467,21 @@ onMounted(() => { load(); loadUsername() })
             <div class="field"><label>用户名 (可空)</label>
               <input class="input" v-model="s.proxy_set.proxy.username" /></div>
             <div class="field"><label>密码 (可空)</label>
-              <input class="input" type="password" v-model="s.proxy_set.proxy.password" /></div>
+              <div class="secret-field">
+                <input class="input" :type="reveal['proxy_pw'] ? 'text' : 'password'" v-model="s.proxy_set.proxy.password" />
+                <button class="eye" type="button" @click="toggleReveal('proxy_pw')" :title="reveal['proxy_pw'] ? '隐藏' : '显示'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+                    <line v-if="reveal['proxy_pw']" x1="3" y1="3" x2="21" y2="21"/>
+                  </svg>
+                </button>
+              </div></div>
+          </div>
+          <div class="test-row">
+            <button class="btn sm" @click="testProxy" :disabled="proxyTesting">
+              {{ proxyTesting ? '测试中…' : '测试代理' }}
+            </button>
+            <span v-if="proxyTest" class="test-result" :class="proxyTest.ok ? 'ok' : 'bad'">{{ proxyTest.message }}</span>
           </div>
         </template>
         <div class="field" style="margin-top:14px">
@@ -297,9 +508,24 @@ onMounted(() => { load(); loadUsername() })
             <div class="field"><label>地址</label><input class="input" v-model="s.DB_INFO.address" /></div>
             <div class="field"><label>端口</label><input class="input" type="number" v-model.number="s.DB_INFO.port" /></div>
             <div class="field"><label>用户</label><input class="input" v-model="s.DB_INFO.user" /></div>
-            <div class="field"><label>密码</label><input class="input" type="password" v-model="s.DB_INFO.password" /></div>
+            <div class="field"><label>密码</label>
+              <div class="secret-field">
+                <input class="input" :type="reveal['db_pw'] ? 'text' : 'password'" v-model="s.DB_INFO.password" />
+                <button class="eye" type="button" @click="toggleReveal('db_pw')" :title="reveal['db_pw'] ? '隐藏' : '显示'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
+                    <line v-if="reveal['db_pw']" x1="3" y1="3" x2="21" y2="21"/>
+                  </svg>
+                </button>
+              </div></div>
           </div>
         </template>
+        <div class="test-row">
+          <button class="btn sm" @click="testDb" :disabled="dbTesting">
+            {{ dbTesting ? '测试中…' : '测试连接' }}
+          </button>
+          <span v-if="dbTest" class="test-result" :class="dbTest.ok ? 'ok' : 'bad'">{{ dbTest.message }}</span>
+        </div>
       </div>
 
       <div class="hint muted foot" v-if="tab === 'telegram'">提示：账号登录在「账号管理」页完成，账号列表会随登录自动写入。</div>
@@ -324,6 +550,23 @@ onMounted(() => { load(); loadUsername() })
 
 .panel { max-width: 760px; }
 .center { text-align: center; padding: 40px; }
+
+/* 未保存改动小圆点 */
+.dirty-dot { width: 7px; height: 7px; border-radius: 50%; background: #fff; margin-right: 2px; flex-shrink: 0; }
+
+/* 保存后需重启横幅 */
+.restart-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;
+  background: var(--accent-dim); color: var(--text-primary);
+  border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  padding: 10px 14px; font-size: 13px; margin-bottom: 14px;
+}
+
+/* 连接测试行 */
+.test-row { display: flex; align-items: center; gap: 12px; margin-top: 14px; flex-wrap: wrap; }
+.test-result { font-size: 12px; }
+.test-result.ok { color: var(--accent-2); }
+.test-result.bad { color: var(--danger); }
 .alert { padding: 10px 14px; border-radius: var(--radius-sm); font-size: 13px; margin-bottom: 14px; }
 .alert.err { background: var(--danger-dim); color: var(--danger); }
 .alert.ok { background: var(--accent-2-dim); color: var(--accent-2); }
@@ -337,13 +580,64 @@ onMounted(() => { load(); loadUsername() })
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 
-/* 通知：额外 Bot 行 + 推送路由表 */
-.bot-row { display: flex; gap: 8px; margin-bottom: 8px; }
-.bot-row .input { flex: 1; }
-.bot-row .bot-name { max-width: 200px; flex: 0 0 auto; }
+/* 通知：Bot 卡片网格 + 推送路由表 */
 .btn.sm { padding: 6px 12px; font-size: 13px; }
 .btn.sm.danger { color: var(--danger); }
-.route-table { display: flex; flex-direction: column; gap: 8px; }
+
+.bot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.bot-card {
+  position: relative;
+  background: var(--bg-elevated); border: 1px solid var(--border-light);
+  border-radius: var(--radius); padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.bot-card-head { display: flex; align-items: flex-start; gap: 10px; }
+.bot-ava {
+  flex-shrink: 0; width: 38px; height: 38px; border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent-dim); color: var(--accent);
+}
+.bot-ava svg { width: 20px; height: 20px; }
+.bot-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.bot-name-row { display: flex; align-items: center; gap: 8px; }
+.bot-name-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.badge-default { background: var(--accent-dim); color: var(--accent); font-size: 10px; padding: 1px 8px; }
+.bot-name-input { padding: 6px 10px; font-size: 13px; }
+.bot-chat { padding: 6px 10px; font-size: 12px; }
+.bot-status { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+.bot-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
+.bot-status .dot.on { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.bot-status .mono { font-size: 11px; }
+.bot-del {
+  position: absolute; top: 8px; right: 8px;
+  width: 22px; height: 22px; border-radius: 6px; border: none;
+  background: transparent; color: var(--text-muted); cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; justify-content: center; transition: all 0.15s;
+}
+.bot-del:hover { background: var(--danger-dim); color: var(--danger); }
+.bot-del .x-ico { width: 14px; height: 14px; }
+.btn-ico { width: 14px; height: 14px; flex-shrink: 0; }
+.bot-add {
+  align-items: center; justify-content: center; gap: 6px;
+  border-style: dashed; color: var(--text-secondary); cursor: pointer;
+  min-height: 96px; font-size: 13px; font-weight: 600;
+}
+.bot-add:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.bot-add-plus { font-size: 22px; line-height: 1; }
+
+/* 带眼睛切换的密钥输入 */
+.secret-field { position: relative; }
+.secret-field .input { padding-right: 38px; }
+.eye {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; border: none; background: transparent; cursor: pointer;
+  color: var(--text-muted); display: flex; align-items: center; justify-content: center; border-radius: 6px;
+}
+.eye:hover { color: var(--text-secondary); background: var(--bg-hover); }
+.eye svg { width: 17px; height: 17px; }
+
+.route-search { margin-bottom: 8px; }
+.route-table { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
 .route-row { display: flex; align-items: center; gap: 10px; }
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route-sel { max-width: 220px; flex: 0 0 auto; }
@@ -357,7 +651,7 @@ onMounted(() => { load(); loadUsername() })
   background: #07090f; border-radius: var(--radius-sm); color: var(--text-primary);
 }
 .mono { font-family: 'SFMono-Regular', Consolas, monospace; }
-@media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } .bot-grid { grid-template-columns: 1fr; } }
 
 /* 手机适配 */
 @media (max-width: 768px) {
