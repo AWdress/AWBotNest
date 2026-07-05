@@ -20,9 +20,6 @@ const s = ref(null)
 const loading = ref(true)
 const saving = ref(false)
 const err = ref('')          // 仅用于加载失败（页面无数据时内联提示）
-// 敏感字段显示/隐藏切换：key -> bool（true=明文）。key 见模板：'default'/bot.id/'webhook'/'api_hash'/'proxy_pw'/'db_pw'
-const reveal = ref({})
-function toggleReveal(key) { reveal.value[key] = !reveal.value[key] }
 
 // 未保存改动检测：快照 vs 当前
 const savedSnap = ref('')
@@ -278,15 +275,7 @@ onBeforeRouteLeave(async () => {
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
           <div class="field"><label>API HASH</label>
-            <div class="secret-field">
-              <input class="input" :type="reveal['api_hash'] ? 'text' : 'password'" v-model="s.API_HASH" />
-              <button class="eye" type="button" @click="toggleReveal('api_hash')" :title="reveal['api_hash'] ? '隐藏' : '显示'">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                  <line v-if="reveal['api_hash']" x1="3" y1="3" x2="21" y2="21"/>
-                </svg>
-              </button>
-            </div></div>
+            <input class="input" v-model="s.API_HASH" /></div>
         </div>
       </div>
 
@@ -321,18 +310,7 @@ onBeforeRouteLeave(async () => {
                   </div>
                 </div>
               </div>
-              <div class="secret-field">
-                <input class="input" :type="reveal['default'] ? 'text' : 'password'"
-                       v-model="s.BOT_TOKEN" placeholder="从 @BotFather 获取 Token" />
-                <button class="eye" type="button" @click="toggleReveal('default')"
-                        :title="reveal['default'] ? '隐藏' : '显示'">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                    <line v-if="reveal['default']" x1="3" y1="3" x2="21" y2="21"/>
-                  </svg>
-                </button>
-              </div>
+              <input class="input" v-model="s.BOT_TOKEN" placeholder="从 @BotFather 获取 Token" />
               <input class="input bot-chat" v-model="s.DEFAULT_BOT_CHAT_ID" placeholder="通知 Chat ID（留空=发给管理员）" />
             </div>
 
@@ -353,18 +331,7 @@ onBeforeRouteLeave(async () => {
                   </div>
                 </div>
               </div>
-              <div class="secret-field">
-                <input class="input" :type="reveal[b.id] ? 'text' : 'password'"
-                       v-model="b.token" placeholder="Bot Token" />
-                <button class="eye" type="button" @click="toggleReveal(b.id)"
-                        :title="reveal[b.id] ? '隐藏' : '显示'">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                    <line v-if="reveal[b.id]" x1="3" y1="3" x2="21" y2="21"/>
-                  </svg>
-                </button>
-              </div>
+              <input class="input" v-model="b.token" placeholder="Bot Token" />
               <input class="input bot-chat" v-model="b.chat_id" placeholder="通知 Chat ID（留空=发给管理员）" />
             </div>
 
@@ -408,18 +375,7 @@ onBeforeRouteLeave(async () => {
             平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
           </div>
           <div class="row gap">
-            <div class="secret-field" style="flex:1">
-              <input class="input" :type="reveal['webhook'] ? 'text' : 'password'"
-                     v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
-              <button class="eye" type="button" @click="toggleReveal('webhook')"
-                      :title="reveal['webhook'] ? '隐藏' : '显示'">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                     stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                  <line v-if="reveal['webhook']" x1="3" y1="3" x2="21" y2="21"/>
-                </svg>
-              </button>
-            </div>
+            <input class="input" style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
             <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">
               <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                    stroke-linecap="round" stroke-linejoin="round">
@@ -467,15 +423,7 @@ onBeforeRouteLeave(async () => {
             <div class="field"><label>用户名 (可空)</label>
               <input class="input" v-model="s.proxy_set.proxy.username" /></div>
             <div class="field"><label>密码 (可空)</label>
-              <div class="secret-field">
-                <input class="input" :type="reveal['proxy_pw'] ? 'text' : 'password'" v-model="s.proxy_set.proxy.password" />
-                <button class="eye" type="button" @click="toggleReveal('proxy_pw')" :title="reveal['proxy_pw'] ? '隐藏' : '显示'">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                    <line v-if="reveal['proxy_pw']" x1="3" y1="3" x2="21" y2="21"/>
-                  </svg>
-                </button>
-              </div></div>
+              <input class="input" type="password" v-model="s.proxy_set.proxy.password" /></div>
           </div>
           <div class="test-row">
             <button class="btn sm" @click="testProxy" :disabled="proxyTesting">
@@ -509,15 +457,7 @@ onBeforeRouteLeave(async () => {
             <div class="field"><label>端口</label><input class="input" type="number" v-model.number="s.DB_INFO.port" /></div>
             <div class="field"><label>用户</label><input class="input" v-model="s.DB_INFO.user" /></div>
             <div class="field"><label>密码</label>
-              <div class="secret-field">
-                <input class="input" :type="reveal['db_pw'] ? 'text' : 'password'" v-model="s.DB_INFO.password" />
-                <button class="eye" type="button" @click="toggleReveal('db_pw')" :title="reveal['db_pw'] ? '隐藏' : '显示'">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>
-                    <line v-if="reveal['db_pw']" x1="3" y1="3" x2="21" y2="21"/>
-                  </svg>
-                </button>
-              </div></div>
+              <input class="input" type="password" v-model="s.DB_INFO.password" /></div>
           </div>
         </template>
         <div class="test-row">
@@ -624,17 +564,6 @@ onBeforeRouteLeave(async () => {
 }
 .bot-add:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
 .bot-add-plus { font-size: 22px; line-height: 1; }
-
-/* 带眼睛切换的密钥输入 */
-.secret-field { position: relative; }
-.secret-field .input { padding-right: 38px; }
-.eye {
-  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-  width: 28px; height: 28px; border: none; background: transparent; cursor: pointer;
-  color: var(--text-muted); display: flex; align-items: center; justify-content: center; border-radius: 6px;
-}
-.eye:hover { color: var(--text-secondary); background: var(--bg-hover); }
-.eye svg { width: 17px; height: 17px; }
 
 .route-search { margin-bottom: 8px; }
 .route-table { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
