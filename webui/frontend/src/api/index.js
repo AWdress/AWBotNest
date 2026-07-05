@@ -51,7 +51,6 @@ export const api = {
   getPluginAccounts: (id) => request('GET', `/api/plugins/${id}/accounts`),
   setPluginAccounts: (id, sessions) => request('PUT', `/api/plugins/${id}/accounts`, { sessions }),
   getPluginWebhook: (id) => request('GET', `/api/plugins/${id}/webhook`),
-  setPluginWebhook: (id, key) => request('PUT', `/api/plugins/${id}/webhook`, { key }),
 
   // GitHub 导入
   githubList: (source, token) => request('POST', '/api/plugins/github/list', { source, token }),

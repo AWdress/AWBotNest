@@ -34,10 +34,11 @@ __plugin__ = {
     "default_enabled": False,
 
     # ── HTTP Webhook（可选）──
-    # 声明 True 后，前端「配置」弹窗会出现 Webhook 区：可生成每插件独立密钥并拿到入站地址
+    # 声明 True 后，前端「配置」弹窗会出现 Webhook 区，显示本插件的入站地址：
     #   http(s)://<平台地址>/api/v1/plugin/<插件id>/webhook?apikey=<密钥>
+    # apikey 是平台统一密钥（在「系统设置 → 通知」生成一次，所有插件共用），
     # 外部服务 POST 到该地址即触发下面 setup 里 @ctx.on_webhook 注册的处理器。
-    # 未声明或未生成密钥则不开启。
+    # 未声明或平台未生成密钥则不开启。
     # "webhook": True,
 
     # ── 第三方依赖（可选）──
@@ -122,7 +123,7 @@ async def setup(ctx):
     ctx.schedule(heartbeat, "interval", minutes=10, id="示例心跳")
     # 也可用 cron：ctx.schedule(daily, "cron", hour=9, minute=0, id="每日早报")
 
-    # Webhook 处理器示例（需在上面 __plugin__ 声明 "webhook": True 并在前端生成密钥）：
+    # Webhook 处理器示例（需在上面 __plugin__ 声明 "webhook": True，并在「系统设置 → 通知」生成密钥）：
     # req 是 WebhookRequest —— req.method / req.query / req.headers / req.json / req.text / req.body
     # 返回值：dict→JSON 响应 / str→文本 / None→{"ok": true}
     @ctx.on_webhook

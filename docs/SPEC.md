@@ -325,7 +325,7 @@ async def setup(ctx):
 | 可写目录 | `ctx.data_dir`（`Path`，每插件独立 `data/plugin_data/<id>/`） |
 | 日志 | `ctx.log.info/debug/warning/error`（自动带 `[插件id]` 前缀，前端日志页可见） |
 | 定时任务 | `ctx.schedule(fn, "interval", seconds=60)`（可传 `id="名称"`，自动归属本插件并显示在系统状态页） |
-| Webhook | `@ctx.on_webhook`（需 `__plugin__` 声明 `"webhook": True`；入站 `…/api/v1/plugin/<id>/webhook?apikey=<密钥>`，处理器收 `WebhookRequest`，返回 dict/str/None） |
+| Webhook | `@ctx.on_webhook`（需 `__plugin__` 声明 `"webhook": True`；入站 `…/api/v1/plugin/<id>/webhook?apikey=<密钥>`，apikey 用平台统一的 `WEBHOOK_SECRET`，处理器收 `WebhookRequest`，返回 dict/str/None） |
 | 清理回调 | `ctx.add_cleanup(fn)` |
 
 `target`: `"user"` / `"bot"` / `"both"` / `"auto"`（按插件 scope 自动选择）。
