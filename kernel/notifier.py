@@ -120,7 +120,7 @@ async def submit(
 
 
 def _resolve_plugin_bot(accounts: Any, plugin_id: str) -> Any:
-    """按插件在「系统设置 → 通知 Bot」的推送路由取 Bot；未分配 / 取不到则回退默认 Bot。"""
+    """按插件在「系统设置 → 通知」的推送路由取 Bot；未分配 / 取不到则回退默认 Bot。"""
     get_bot = getattr(accounts, "get_bot", None)
     if not callable(get_bot):
         # 兼容极旧的 accounts 对象（无多 Bot 能力）
