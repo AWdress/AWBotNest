@@ -9,12 +9,13 @@ webui/api.py
 """
 from __future__ import annotations
 
+import hmac
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from core import config, logger
 from webui import auth as _authmod
@@ -23,7 +24,7 @@ from webui.auth import require_password_changed as _auth_pwc
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.0.5"
+APP_VERSION = "1.0.6"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -329,6 +330,35 @@ async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends
 
 
 # ──────────────────────────────────────────────
+# 插件 webhook（每插件独立密钥；入站地址见 /api/v1/plugin/<id>/webhook）
+# ──────────────────────────────────────────────
+@app.get("/api/plugins/{plugin_id}/webhook")
+async def get_plugin_webhook(plugin_id: str, user=Depends(_auth)):
+    """读取插件 webhook 信息：是否声明支持、当前密钥（空=未开启）、入站路径。
+    密钥需明文回显供管理员复制到外部服务，接口已经过鉴权。"""
+    meta = registry.get_meta(plugin_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    return {
+        "webhook": bool(meta.webhook),
+        "key": registry.get_webhook_key(plugin_id),
+        "path": f"/api/v1/plugin/{plugin_id}/webhook",
+    }
+
+
+@app.put("/api/plugins/{plugin_id}/webhook")
+async def set_plugin_webhook(plugin_id: str, body: Dict[str, Any], user=Depends(_auth_pwc)):
+    """设置/更新插件 webhook 密钥。body: {key}；key 为空=关闭该插件 webhook。"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    key = str((body or {}).get("key") or "").strip()
+    if key and len(key) < 8:
+        raise HTTPException(status_code=400, detail="密钥太短，至少 8 位")
+    registry.set_webhook_key(plugin_id, key)
+    return {"status": "success", "key": registry.get_webhook_key(plugin_id)}
+
+
+# ──────────────────────────────────────────────
 # 多 Bot / 通知推送路由（平台集中管理：哪个插件推送到哪个 Bot）
 # ──────────────────────────────────────────────
 @app.get("/api/bots")
@@ -627,6 +657,101 @@ async def restart_platform(user=Depends(_auth_pwc)):
 
     _aio.create_task(_delayed_exit())
     return {"status": "success", "message": "平台正在重启，请稍候刷新页面"}
+
+
+# ──────────────────────────────────────────────
+# Webhook 入站端点（公开，靠 apikey 查询串鉴权，不走登录令牌）
+#   平台级：/api/v1/webhook?apikey=<WEBHOOK_SECRET>   → 推送给管理员
+#   插件级：/api/v1/plugin/<id>/webhook?apikey=<插件密钥> → 交插件处理器
+# ──────────────────────────────────────────────
+async def _build_webhook_request(request: Request):
+    """把 FastAPI Request 转成给插件的轻量 WebhookRequest（剔除 apikey）。"""
+    from kernel.context import WebhookRequest
+    import json as _json
+
+    query = {k: v for k, v in request.query_params.items() if k != "apikey"}
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    body = await request.body()
+    json_data = None
+    if body:
+        try:
+            json_data = _json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            json_data = None
+    return WebhookRequest(request.method, query, headers, body, json_data)
+
+
+def _webhook_result_response(result: Any):
+    """把插件处理器返回值转成 HTTP 响应：dict→JSON / str→文本 / None→{"ok":true}。"""
+    if result is None:
+        return {"ok": True}
+    if isinstance(result, (dict, list)):
+        return JSONResponse(result)
+    return PlainTextResponse(str(result))
+
+
+@app.api_route("/api/v1/plugin/{plugin_id}/webhook", methods=["GET", "POST"])
+async def plugin_webhook(plugin_id: str, request: Request):
+    """插件 webhook 入站：校验密钥 → 交给插件 ctx.on_webhook 注册的处理器。"""
+    key = registry.get_webhook_key(plugin_id)
+    if not key:
+        # 未设密钥即视为未开启，不泄露插件是否存在
+        raise HTTPException(status_code=404, detail="webhook 未开启")
+    given = request.query_params.get("apikey", "")
+    if not hmac.compare_digest(given, key):
+        raise HTTPException(status_code=401, detail="apikey 无效")
+
+    runtime = _get_runtime()
+    handler = runtime.get_webhook_handler(plugin_id)
+    if handler is None:
+        raise HTTPException(status_code=503, detail="插件未启用或未注册 webhook 处理器")
+
+    wreq = await _build_webhook_request(request)
+    try:
+        result = await handler(wreq)
+    except Exception as e:  # noqa: BLE001 - 插件处理器异常不外泄堆栈
+        logger.exception("插件 webhook 处理失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail="webhook 处理失败") from e
+    return _webhook_result_response(result)
+
+
+@app.api_route("/api/v1/webhook", methods=["GET", "POST"])
+async def platform_webhook(request: Request):
+    """平台 webhook 入站：校验 WEBHOOK_SECRET → 把内容推送给平台管理员。
+    JSON 里若带 text/message/content 字段用其内容，否则推整段文本/JSON。
+    可选 title/category 字段作为标题分类。"""
+    import config.config as cfg
+    secret = str((cfg.load().get("WEBHOOK_SECRET") or "")).strip()
+    if not secret:
+        raise HTTPException(status_code=404, detail="平台 webhook 未开启")
+    given = request.query_params.get("apikey", "")
+    if not hmac.compare_digest(given, secret):
+        raise HTTPException(status_code=401, detail="apikey 无效")
+
+    wreq = await _build_webhook_request(request)
+    data = wreq.json if isinstance(wreq.json, dict) else None
+    if data:
+        text = str(data.get("text") or data.get("message") or data.get("content") or "").strip()
+        if not text:
+            import json as _json
+            text = _json.dumps(data, ensure_ascii=False, indent=2)
+        title = str(data.get("title") or "").strip()
+        category = str(data.get("category") or "").strip() or None
+        body_text = f"{title}\n{text}" if title else text
+    else:
+        body_text = wreq.text.strip() or "(空内容)"
+        category = None
+
+    from kernel import notifier
+    accounts = _get_accounts()
+    try:
+        await notifier.submit(
+            accounts, "__platform_webhook__", "平台 Webhook", body_text,
+            level="info", category=category,
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    return {"ok": True}
 
 
 # ──────────────────────────────────────────────

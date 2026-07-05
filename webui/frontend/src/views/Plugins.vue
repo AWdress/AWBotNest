@@ -133,9 +133,49 @@ async function openConfig(p) {
     configSchema.value = data.schema || {}
     configValues.value = data.values || {}
     configOpen.value = true
+    loadWebhook()
   } catch (e) {
     error.value = e.message
   }
+}
+
+// ── 插件 webhook（每插件独立密钥） ──
+const webhookKey = ref('')
+const webhookBusy = ref(false)
+
+function randomHex(bytesLen = 24) {
+  const bytes = new Uint8Array(bytesLen)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+const webhookUrl = computed(() => {
+  if (!configTarget.value || !webhookKey.value) return ''
+  return `${location.origin}/api/v1/plugin/${configTarget.value.id}/webhook?apikey=${webhookKey.value}`
+})
+
+async function loadWebhook() {
+  webhookKey.value = ''
+  if (!configTarget.value?.webhook) return
+  try {
+    const d = await api.getPluginWebhook(configTarget.value.id)
+    webhookKey.value = d.key || ''
+  } catch { /* 配置弹窗照常打开，webhook 区留空 */ }
+}
+
+async function saveWebhookKey(key) {
+  webhookBusy.value = true
+  try {
+    const d = await api.setPluginWebhook(configTarget.value.id, key)
+    webhookKey.value = d.key || ''
+  } catch (e) { toast.error('保存失败：' + e.message) } finally { webhookBusy.value = false }
+}
+function genWebhookKey() { saveWebhookKey(randomHex(24)) }
+function clearWebhookKey() { saveWebhookKey('') }
+async function copyWebhookUrl() {
+  if (!webhookUrl.value) return
+  try { await navigator.clipboard.writeText(webhookUrl.value); toast.success('已复制 webhook 地址') }
+  catch { toast.error('复制失败，请手动选择复制') }
 }
 
 async function saveConfig() {
@@ -589,6 +629,29 @@ onUnmounted(() => {
         </div>
         <ConfigForm v-if="Object.keys(configSchema).length" v-model="configValues" :schema="configSchema" />
         <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
+
+        <!-- Webhook（仅插件声明 "webhook": True 时显示） -->
+        <div v-if="configTarget?.webhook" class="webhook-box">
+          <div class="webhook-title">Webhook 入站地址</div>
+          <div class="hint muted small">
+            外部服务可 POST 到此地址触发本插件（每个插件独立密钥）。生成密钥后即开启；
+            需插件已启用并实现了处理器才会真正响应。
+          </div>
+          <template v-if="webhookKey">
+            <div class="webhook-url mono">{{ webhookUrl }}</div>
+            <div class="webhook-actions">
+              <button class="btn sm" @click="copyWebhookUrl">复制地址</button>
+              <button class="btn sm" @click="genWebhookKey" :disabled="webhookBusy" title="重新生成随机密钥">🎲 随机</button>
+              <button class="btn sm danger" @click="clearWebhookKey" :disabled="webhookBusy">关闭</button>
+            </div>
+          </template>
+          <template v-else>
+            <div class="muted small">尚未开启。点「随机」生成密钥即可启用。</div>
+            <div class="webhook-actions">
+              <button class="btn sm btn-primary" @click="genWebhookKey" :disabled="webhookBusy">🎲 生成密钥并开启</button>
+            </div>
+          </template>
+        </div>
         <div class="modal-foot">
           <button class="btn" @click="configOpen=false">取消</button>
           <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
@@ -853,6 +916,21 @@ onUnmounted(() => {
 .acct-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
 .acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .acct-item .small { margin-left: auto; }
+
+/* Webhook 区（配置弹窗内） */
+.webhook-box {
+  margin-top: 18px; padding: 14px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-elevated);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.webhook-title { font-size: 13px; font-weight: 600; color: var(--accent); }
+.webhook-url {
+  font-size: 12px; word-break: break-all; padding: 8px 10px;
+  background: #07090f; border-radius: var(--radius-sm); color: var(--text-primary);
+}
+.webhook-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.mono { font-family: 'SFMono-Regular', Consolas, monospace; }
+.btn.sm.danger { color: var(--danger); }
 
 /* 插件日志弹窗 */
 .logs-modal { width: 720px; display: flex; flex-direction: column; }

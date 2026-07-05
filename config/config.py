@@ -32,6 +32,9 @@ _DEFAULTS: dict[str, Any] = {
     "WEB_UI_PORT": 18001,
     "NGROK_ENABLE": False,
     "NGROK_TOKEN": "",
+    # 平台级 webhook 密钥：外部服务 POST /api/v1/webhook?apikey=<此值> 即可把内容
+    # 推给平台管理员（经默认 Bot，回退主账号收藏夹）。留空=关闭平台 webhook。
+    "WEBHOOK_SECRET": "",
     "proxy_set": {
         "proxy_enable": False,
         "proxy": {"scheme": "http", "hostname": "127.0.0.1", "port": 7890, "username": "", "password": ""},

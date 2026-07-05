@@ -46,6 +46,36 @@ class _PluginLoggerAdapter:
 def _make_plugin_logger(plugin_id: str):
     return _PluginLoggerAdapter(plugin_id)
 
+
+class WebhookRequest:
+    """
+    传给插件 webhook 处理器的入站请求封装（插件不直接接触 fastapi/starlette）。
+
+    属性：
+      method  —— HTTP 方法（GET/POST…）
+      query   —— 查询串参数 dict（已剔除鉴权用的 apikey）
+      headers —— 请求头 dict（键小写）
+      body    —— 原始请求体 bytes
+      text    —— 请求体按 UTF-8 解码的字符串（解码失败为 ""）
+      json    —— 请求体解析出的 JSON（非 JSON 或解析失败为 None）
+    """
+
+    def __init__(self, method: str, query: dict, headers: dict,
+                 body: bytes, json_data: Any = None):
+        self.method = method
+        self.query = query
+        self.headers = headers
+        self.body = body
+        self.json = json_data
+
+    @property
+    def text(self) -> str:
+        try:
+            return self.body.decode("utf-8")
+        except (UnicodeDecodeError, AttributeError):
+            return ""
+
+
 if TYPE_CHECKING:
     from kernel.account_manager import AccountManager
     from kernel.registry import PluginRegistry
@@ -144,6 +174,8 @@ class PlatformContext:
         self._handles: list[tuple[object, object, int]] = []
         # teardown 时要调用的清理回调（如取消定时任务）
         self._cleanups: list[Callable[[], Any]] = []
+        # webhook 处理器（ctx.on_webhook 注册；一个插件一个）。热卸载/重载时清空。
+        self._webhook_handler: Optional[Callable] = None
 
         # 暴露给插件的能力
         self.filters = _filters
@@ -304,6 +336,26 @@ class PlatformContext:
             return func
         return decorator
 
+    def on_webhook(self, func: Callable) -> Callable:
+        """
+        注册本插件的 HTTP webhook 处理器（供外部服务回调）。用法：
+
+            @ctx.on_webhook
+            async def handle(req):
+                data = req.json or {}
+                await ctx.notify(f"收到事件：{data}")
+                return {"ok": True}        # 返回 dict→JSON / str→文本 / None→{"ok":true}
+
+        平台会暴露一个每插件独立的入站地址：
+            http(s)://<平台地址>/api/v1/plugin/<插件id>/webhook?apikey=<密钥>
+        地址与密钥在「插件 → 配置」弹窗里查看/生成（需在 __plugin__ 声明 "webhook": True）。
+
+        req 是 WebhookRequest（.method/.query/.headers/.json/.text/.body）。
+        一个插件只有一个处理器，重复注册后者覆盖前者；停用/重载时自动失效。
+        """
+        self._webhook_handler = self._track(func)
+        return func
+
     def _track(self, func: Callable) -> Callable:
         """包一层：进入 handler 时把「当前插件」设进 contextvar，
         使该 handler 内部的出站发送（send/reply/edit）能归属到本插件并计入活跃。
@@ -397,3 +449,6 @@ class PlatformContext:
             except Exception as e:  # noqa: BLE001
                 _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, e)
         self._cleanups.clear()
+
+        # webhook 处理器随插件卸载失效，避免热重载后调用到旧闭包
+        self._webhook_handler = None

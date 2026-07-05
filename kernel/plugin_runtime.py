@@ -75,6 +75,14 @@ class PluginRuntime:
     def is_loaded(self, plugin_id: str) -> bool:
         return plugin_id in self._loaded
 
+    def get_webhook_handler(self, plugin_id: str) -> Optional[object]:
+        """取已加载插件注册的 webhook 处理器（ctx.on_webhook）。
+        插件未加载或未注册处理器时返回 None。"""
+        loaded = self._loaded.get(plugin_id)
+        if loaded is None:
+            return None
+        return getattr(loaded.ctx, "_webhook_handler", None)
+
     # ──────────────────────────────────────────────
     # 加载（启用）
     # ──────────────────────────────────────────────

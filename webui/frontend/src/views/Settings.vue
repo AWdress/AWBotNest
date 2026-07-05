@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { api } from '../api'
 import { toast } from '../composables/toast'
 
@@ -32,6 +32,7 @@ async function load() {
     s.value.DB_INFO = s.value.DB_INFO || {}
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
+    if (s.value.WEBHOOK_SECRET === undefined) s.value.WEBHOOK_SECRET = ''
   } catch (e) { err.value = e.message } finally { loading.value = false }
 }
 
@@ -52,6 +53,23 @@ function addBot() {
   s.value.BOTS.push({ id: 'bot_' + Date.now().toString(36), name: '', token: '' })
 }
 function removeBot(i) { s.value.BOTS.splice(i, 1) }
+
+// ── 平台 Webhook（密钥 + 随机按钮 + 地址展示） ──
+function randomHex(bytesLen = 24) {
+  const bytes = new Uint8Array(bytesLen)
+  crypto.getRandomValues(bytes)
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+}
+function genWebhookSecret() { s.value.WEBHOOK_SECRET = randomHex(24) }
+const platformWebhookUrl = computed(() => {
+  if (!s.value?.WEBHOOK_SECRET) return ''
+  return `${location.origin}/api/v1/webhook?apikey=${s.value.WEBHOOK_SECRET}`
+})
+async function copyPlatformWebhook() {
+  if (!platformWebhookUrl.value) return
+  try { await navigator.clipboard.writeText(platformWebhookUrl.value); toast.success('已复制平台 webhook 地址') }
+  catch { toast.error('复制失败，请手动选择复制') }
+}
 
 // ── 通知推送路由（哪个插件推到哪个 Bot） ──
 const routing = ref({ bots: [], plugins: [] })
@@ -195,6 +213,21 @@ onMounted(() => { load(); loadUsername() })
             </div>
           </div>
         </div>
+
+        <!-- 平台 Webhook -->
+        <div class="field" style="margin-top:10px">
+          <label>平台 Webhook</label>
+          <div class="hint muted small" style="margin-bottom:8px">
+            外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
+            平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
+          </div>
+          <div class="row gap">
+            <input class="input" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥（≥8 位）" />
+            <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">🎲 随机</button>
+          </div>
+          <div v-if="platformWebhookUrl" class="webhook-url mono">{{ platformWebhookUrl }}</div>
+          <button v-if="platformWebhookUrl" class="btn sm" style="align-self:flex-start" @click="copyPlatformWebhook">复制地址</button>
+        </div>
       </div>
 
       <!-- Web 控制台 -->
@@ -315,6 +348,15 @@ onMounted(() => { load(); loadUsername() })
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route-sel { max-width: 220px; flex: 0 0 auto; }
 .small { font-size: 12px; }
+
+/* 平台 webhook 地址展示 */
+.row.gap { display: flex; align-items: center; gap: 8px; }
+.row.gap .input { flex: 1; }
+.webhook-url {
+  margin-top: 8px; font-size: 12px; word-break: break-all; padding: 8px 10px;
+  background: #07090f; border-radius: var(--radius-sm); color: var(--text-primary);
+}
+.mono { font-family: 'SFMono-Regular', Consolas, monospace; }
 @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } }
 
 /* 手机适配 */
