@@ -354,6 +354,7 @@ async def setup(ctx):
 - `list` 取值为 list-of-dict，`ctx.config["items"]` 直接拿到 `[{"name":..., ...}, ...]` 遍历即可。行内子字段暂不支持 `show_if`，也不建议 `list` 再嵌套 `list`。
 - `chat` 取值为会话 id（`multi` 时为 id 数组），插件里 `ctx.config["target"]` 直接当 chat_id 用。管理员没连账号时可手填 id 兜底。
 - `info` 只展示不收集输入。要显示动态状态（如「上次运行时间」），让插件用 `ctx.update_config` 写回同名键即可。
+- **表单布局由平台自动排布，插件不用关心宽度**：配置弹窗是一块大画布（桌面约 1000px，窄屏自动全屏）。同一 `section` 内的短字段（string/password/number/boolean/select/slider）会自动并排成多列，大字段（text/list/multiselect/chat）占整行，窗口变窄时回落单列。插件只管声明字段与 `section` 分区即可。
 
 插件的全部配置均通过 `config_schema` 声明，不得修改平台配置。
 
@@ -414,6 +415,8 @@ props.host.toast.success('已保存')            // 弹平台提示（success / 
 ```
 
 vue 模式下配置弹窗不再显示平台的「保存」按钮——由你的组件自己调用 `host.saveConfig`。配置值仍存平台统一存储，插件里照常用 `ctx.config` 读取。
+
+平台给 vue 界面的画布：桌面约 1000px 宽、窄屏（≤768px）自动全屏。请用响应式布局（百分比 / 栅格 / 媒体查询）适配，让界面能在这块画布里铺开，不要写死过窄或过宽的固定尺寸，否则窄屏会溢出。
 
 ### 后端接口 ctx.on_api
 
