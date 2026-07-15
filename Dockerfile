@@ -49,6 +49,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 浏览器自动化（供插件 ctx.browser 用）：
+# 装 Playwright 的系统依赖库 + 下载 chromium 内核到固定路径 /ms-playwright，
+# 运行时用同一路径查找（main.py 会设置 PLAYWRIGHT_BROWSERS_PATH），不受 HOME 改动影响。
+# CloakBrowser（优先引擎）不在此内置，由平台启动时后台按需下载（见 kernel/browser.py）。
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN playwright install-deps chromium \
+    && playwright install chromium \
+    && rm -rf /var/lib/apt/lists/*
+
 # 拷项目代码
 COPY . .
 

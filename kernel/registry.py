@@ -26,6 +26,11 @@ STATE_FILE = Path("data/plugins_state.json")
 REQUIRED_FIELDS = ("name", "id", "version", "scope")
 # scope 合法值
 VALID_SCOPES = ("user", "bot", "both")
+# 配置界面渲染方式合法值
+VALID_RENDER_MODES = ("schema", "vue")
+# 插件自带前端（vue 模式）联邦产物约定路径（相对插件目录）
+FRONTEND_DIST = "frontend/dist"
+FRONTEND_ENTRY = "frontend/dist/assets/remoteEntry.js"
 
 
 @dataclass
@@ -41,6 +46,10 @@ class PluginMeta:
     scope: str = "user"  # user | bot | both
     default_enabled: bool = False
     webhook: bool = False  # 是否提供 HTTP webhook 入站端点（配 ctx.on_webhook 使用）
+    # 配置界面渲染方式：
+    #   "schema" —— 默认，平台按 config_schema 自动生成表单（声明式）
+    #   "vue"    —— 插件自带 Vue 联邦组件，平台运行时加载其 ./Config 组件（仅目录包）
+    render_mode: str = "schema"
     config_schema: dict[str, Any] = field(default_factory=dict)
     requirements: list[str] = field(default_factory=list)  # 第三方依赖(PEP 508)，启用时由平台代装
 
@@ -128,6 +137,15 @@ class PluginRegistry:
         """该插件是否为文件夹形态"""
         return (self.plugins_dir / plugin_id / "__init__.py").exists()
 
+    def frontend_dist_dir(self, plugin_id: str) -> Path:
+        """vue 模式插件的前端构建产物目录 plugins/<id>/frontend/dist/。"""
+        return self.plugins_dir / plugin_id / FRONTEND_DIST
+
+    def has_frontend(self, plugin_id: str) -> bool:
+        """vue 模式插件是否已构建出联邦入口（frontend/dist/assets/remoteEntry.js）。
+        未构建时前端应提示「插件未随附前端构建产物」，而非白屏。"""
+        return (self.plugins_dir / plugin_id / FRONTEND_ENTRY).exists()
+
     def parse_meta(self, file_path: Path, plugin_id: Optional[str] = None) -> PluginMeta:
         """
         静态解析插件入口文件的 __plugin__ 元数据。
@@ -169,6 +187,19 @@ class PluginRegistry:
                 error=f"scope 非法: {scope}（应为 {'/'.join(VALID_SCOPES)}）",
             )
 
+        render_mode = str(raw.get("render_mode", "schema") or "schema")
+        if render_mode not in VALID_RENDER_MODES:
+            return PluginMeta(
+                id=plugin_id, name=raw.get("name", plugin_id), file=rel,
+                error=f"render_mode 非法: {render_mode}（应为 {'/'.join(VALID_RENDER_MODES)}）",
+            )
+        # vue 模式需目录包形态（自带 frontend 构建产物），单文件放不下前端工程
+        if render_mode == "vue" and file_path.name != "__init__.py":
+            return PluginMeta(
+                id=plugin_id, name=raw.get("name", plugin_id), file=rel,
+                error="render_mode=vue 仅支持目录包插件（需自带 frontend/ 前端工程）",
+            )
+
         # ID 必须与文件名/目录名一致（单文件单插件约定）
         if raw.get("id") != plugin_id:
             return PluginMeta(
@@ -187,6 +218,7 @@ class PluginRegistry:
             scope=scope,
             default_enabled=bool(raw.get("default_enabled", False)),
             webhook=bool(raw.get("webhook", False)),
+            render_mode=render_mode,
             config_schema=raw.get("config_schema", {}) or {},
             requirements=self._coerce_requirements(raw.get("requirements")),
             file=rel,

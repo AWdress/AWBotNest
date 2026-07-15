@@ -91,6 +91,16 @@ class PluginRuntime:
             return None
         return getattr(loaded.ctx, "_action_handlers", {}).get(action)
 
+    def get_api_handler(self, plugin_id: str, method: str, path: str) -> Optional[object]:
+        """取已加载插件注册的 API 处理器（ctx.on_api）。
+        插件未加载或未注册该 (方法, 路径) 时返回 None。"""
+        loaded = self._loaded.get(plugin_id)
+        if loaded is None:
+            return None
+        handlers = getattr(loaded.ctx, "_api_handlers", {})
+        norm = "/" + str(path or "").strip().strip("/")
+        return handlers.get((str(method).upper(), norm))
+
     # ──────────────────────────────────────────────
     # 加载（启用）
     # ──────────────────────────────────────────────

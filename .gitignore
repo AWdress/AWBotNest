@@ -20,6 +20,9 @@ webui/static/
 plugins/*
 !plugins/__init__.py
 !plugins/_TEMPLATE.py
+# Vue 模式插件模板（目录）：整目录随仓库发布，node_modules 由其内 .gitignore 排除
+!plugins/_TEMPLATE_VUE/
+!plugins/_TEMPLATE_VUE/**
 
 # ── 敏感配置（绝不提交）──
 # config/config.py 是加载垫片(代码)，应提交；真实配置在 data/config.json

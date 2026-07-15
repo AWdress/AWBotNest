@@ -28,6 +28,7 @@ const pwdErr = ref('')
 
 async function onAuthed() {
   authed.value = true
+  api.ensureResourceToken().catch(() => {})   // 确保资源 Cookie 就绪（加载 vue 模式插件前端用）
   try {
     const st = await api.authStatus()
     mustChangePwd.value = !!st.must_change_password
@@ -153,7 +154,8 @@ const icons = {
 }
 
 onMounted(() => {
-  if (authed.value) { ping(); checkUpdate() }   // 恢复登录态后立即校验令牌 + 查一次更新
+  // 恢复登录态（localStorage 令牌）后补种资源 Cookie，确保能加载 vue 模式插件前端
+  if (authed.value) { api.ensureResourceToken().catch(() => {}); ping(); checkUpdate() }
   setInterval(() => { if (authed.value) ping() }, 10000)
   // 查更新独立低频：每 6 小时一次，避免打满 GitHub 限流
   setInterval(() => { if (authed.value) checkUpdate() }, 6 * 3600 * 1000)

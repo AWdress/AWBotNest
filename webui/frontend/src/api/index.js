@@ -37,6 +37,8 @@ export const api = {
   // 鉴权
   authStatus: () => request('GET', '/api/auth/status'),
   authLogin: (username, password) => request('POST', '/api/auth/login', { username, password }),
+  // 恢复登录态（localStorage 令牌）后补种资源 Cookie，确保能加载 vue 模式插件前端
+  ensureResourceToken: () => request('POST', '/api/auth/resource_token'),
   changeCredentials: (old_password, new_username, new_password) =>
     request('POST', '/api/auth/change_credentials', { old_password, new_username, new_password }),
 
@@ -54,6 +56,9 @@ export const api = {
   listPluginChats: (id, session = '') =>
     request('GET', `/api/plugins/${id}/dialogs${session ? `?session=${encodeURIComponent(session)}` : ''}`),
   invokePluginAction: (id, action) => request('POST', `/api/plugins/${id}/action/${encodeURIComponent(action)}`),
+  // vue 模式插件：调用其 ctx.on_api 注册的端点（管理员令牌鉴权）
+  callPluginApi: (id, path, method = 'GET', body) =>
+    request(method, `/api/plugins/${id}/api/${String(path).replace(/^\/+/, '')}`, body),
 
   // GitHub 导入
   githubList: (source, token) => request('POST', '/api/plugins/github/list', { source, token }),

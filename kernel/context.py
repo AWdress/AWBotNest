@@ -61,12 +61,14 @@ class WebhookRequest:
     """
 
     def __init__(self, method: str, query: dict, headers: dict,
-                 body: bytes, json_data: Any = None):
+                 body: bytes, json_data: Any = None, path: str = ""):
         self.method = method
         self.query = query
         self.headers = headers
         self.body = body
         self.json = json_data
+        # 插件 API（ctx.on_api）用：命中的相对路径（webhook 场景为空串）
+        self.path = path
 
     @property
     def text(self) -> str:
@@ -178,6 +180,9 @@ class PlatformContext:
         self._webhook_handler: Optional[Callable] = None
         # 动作处理器（ctx.action 注册；name -> 处理函数）。供配置表单里的「动作按钮」触发。
         self._action_handlers: dict[str, Callable] = {}
+        # 插件 API 处理器（ctx.on_api 注册；(METHOD, 相对路径) -> 处理函数）。
+        # 供 vue 模式自带前端组件调用；经管理员登录态鉴权，热卸载/重载时清空。
+        self._api_handlers: dict[tuple[str, str], Callable] = {}
 
         # 暴露给插件的能力
         self.filters = _filters
@@ -285,6 +290,26 @@ class PlatformContext:
         merged = {**self._registry.get_config(self.plugin_id), **patch}
         self._registry.set_config(self.plugin_id, merged)
         return merged
+
+    # ──────────────────────────────────────────────
+    # 浏览器自动化（平台托管，优先 CloakBrowser 停用浏览器，回退 Playwright）
+    # ──────────────────────────────────────────────
+    @property
+    def browser(self):
+        """
+        平台托管的浏览器能力，插件无需自己装浏览器。async 用法：
+
+            html = await ctx.browser.page_source("https://example.com")
+            # 需要交互时传同步 action(page)：
+            def grab(page):
+                page.click("#more"); return page.inner_text("#list")
+            data = await ctx.browser.run("https://example.com", grab)
+
+        引擎优先 CloakBrowser（过反爬/指纹检测），未就绪时自动回退平台内置 Playwright。
+        `ctx.browser.engine` 可查当前引擎名。
+        """
+        from kernel import browser as _browser
+        return _browser.browser
 
     # ──────────────────────────────────────────────
     # 可写目录（SPEC §5.5）
@@ -430,6 +455,62 @@ class PlatformContext:
 
         return decorator
 
+    @staticmethod
+    def _norm_api_path(path: str) -> str:
+        """规整插件 API 相对路径：确保前导 /，去掉尾部 /（根路径保留为 '/'）。"""
+        p = "/" + str(path or "").strip().strip("/")
+        return p
+
+    def on_api(self, path: str, methods: list[str] | tuple[str, ...] = ("GET",)) -> Callable:
+        """
+        注册一个插件 API 端点，供 vue 模式自带的前端组件调用。用法：
+
+            @ctx.on_api("/config", methods=["GET"])
+            async def read_config(req):
+                return {"values": ctx.config}          # dict→JSON / str→文本 / None→{"ok":true}
+
+            @ctx.on_api("/config", methods=["POST"])
+            async def save_config(req):
+                ctx.update_config(req.json or {})
+                return {"ok": True}
+
+        前端组件通过平台注入的 host.api 调用，实际地址为：
+            /api/plugins/<插件id>/api/<path>
+        由已登录管理员经 Bearer 令牌鉴权（非公开，外部无法直接访问）。
+
+        req 是 WebhookRequest：req.method / req.query / req.headers / req.json / req.text /
+        req.body / req.path。处理函数返回 dict / str / None。
+        同一 (方法, 路径) 重复注册后者覆盖前者；停用/重载时自动失效。
+        """
+        import asyncio
+        import functools
+        from kernel import activity
+
+        pid = self.plugin_id
+        norm = self._norm_api_path(path)
+        # 容错：methods 传成单个字符串（如 "GET"）时按单元素处理，避免被逐字符拆成 G/E/T
+        if isinstance(methods, str):
+            methods = [methods]
+        method_list = [str(m).upper() for m in (methods or ["GET"])]
+
+        def decorator(func: Callable) -> Callable:
+            @functools.wraps(func)
+            async def wrapper(req):
+                token = activity.set_current(pid)
+                try:
+                    result = func(req)
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                    return result
+                finally:
+                    activity.reset_current(token)
+
+            for m in method_list:
+                self._api_handlers[(m, norm)] = wrapper
+            return func
+
+        return decorator
+
     async def download(self, message: Any, subdir: str | None = None) -> Path:
         """
         下载消息里的媒体（图片/文件/视频等）到本插件目录，返回落盘 Path。
@@ -543,6 +624,7 @@ class PlatformContext:
                 _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, e)
         self._cleanups.clear()
 
-        # webhook / 动作处理器随插件卸载失效，避免热重载后调用到旧闭包
+        # webhook / 动作 / API 处理器随插件卸载失效，避免热重载后调用到旧闭包
         self._webhook_handler = None
         self._action_handlers.clear()
+        self._api_handlers.clear()

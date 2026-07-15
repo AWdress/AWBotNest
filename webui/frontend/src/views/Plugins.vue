@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
+import RemotePluginConfig from '../components/RemotePluginConfig.vue'
 import { confirm } from '../composables/confirm'
 import { toast } from '../composables/toast'
 import logo from '../assets/logo.png'
@@ -20,6 +21,8 @@ const configTarget = ref(null)
 const configSchema = ref({})
 const configValues = ref({})
 const configSaving = ref(false)
+const configRenderMode = ref('schema')   // schema | vue
+const configHasFrontend = ref(false)
 
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
@@ -132,6 +135,8 @@ async function openConfig(p) {
     const data = await api.getPluginConfig(p.id)
     configSchema.value = data.schema || {}
     configValues.value = data.values || {}
+    configRenderMode.value = data.render_mode || 'schema'
+    configHasFrontend.value = !!data.has_frontend
     configOpen.value = true
     loadWebhook()
   } catch (e) {
@@ -655,7 +660,10 @@ onUnmounted(() => {
           <h2>{{ configTarget?.name }} · 配置</h2>
           <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
-        <ConfigForm v-if="Object.keys(configSchema).length" ref="configFormRef"
+        <RemotePluginConfig v-if="configRenderMode === 'vue'"
+                    :key="configTarget?.id"
+                    :plugin-id="configTarget?.id" :has-frontend="configHasFrontend" />
+        <ConfigForm v-else-if="Object.keys(configSchema).length" ref="configFormRef"
                     v-model="configValues" :schema="configSchema" :plugin-id="configTarget?.id" />
         <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
 
@@ -676,11 +684,17 @@ onUnmounted(() => {
             尚未设置 Webhook 密钥。请先到「系统设置 → 通知 → 平台 Webhook」生成密钥。
           </div>
         </div>
+        <!-- vue 模式由插件组件自己管保存，这里只留关闭；schema 模式给平台保存按钮 -->
         <div class="modal-foot">
-          <button class="btn" @click="configOpen=false">取消</button>
-          <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
-            {{ configSaving ? '保存中…' : '保存并应用' }}
-          </button>
+          <template v-if="configRenderMode === 'vue'">
+            <button class="btn" @click="configOpen=false">关闭</button>
+          </template>
+          <template v-else>
+            <button class="btn" @click="configOpen=false">取消</button>
+            <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
+              {{ configSaving ? '保存中…' : '保存并应用' }}
+            </button>
+          </template>
         </div>
       </div>
     </div>
