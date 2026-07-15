@@ -27,15 +27,14 @@ os.makedirs(_plugin_deps, exist_ok=True)
 if _plugin_deps not in sys.path:
     sys.path.append(_plugin_deps)
 
-# 浏览器内核缓存（供插件 ctx.browser 用）。
-# Playwright 内核在镜像构建期装到固定路径 /ms-playwright（见 Dockerfile），
-# 运行时用同一路径查找，不受下面 HOME 改动影响；
-# CloakBrowser 内核放 ~/.cloakbrowser，把 HOME 指到 data/browser_cache 使其随卷持久化，
-# 容器重建后不必重下。仅非 Windows（容器）生效，本地开发不动 HOME。
+# 浏览器内核缓存（供插件 ctx.browser 用）。镜像不烤浏览器二进制，内核由平台启动时
+# 下载到此目录（随 data/ 卷持久化，容器重建不必重下）。
+# - Playwright chromium：装到 PLAYWRIGHT_BROWSERS_PATH（指到卷内 ms-playwright 子目录）。
+# - CloakBrowser 内核：放 ~/.cloakbrowser，故把 HOME 指到 data/browser_cache（仅容器内）。
 _browser_cache = os.path.join(_base, "data", "browser_cache")
 os.makedirs(_browser_cache, exist_ok=True)
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", os.path.join(_browser_cache, "ms-playwright"))
 if sys.platform != "win32":
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/ms-playwright")
     os.environ["HOME"] = _browser_cache
 
 # 配置数据源是 data/config.json（data/ 是卷映射的运行时目录；config/ 只放代码）。
@@ -163,17 +162,12 @@ async def start_platform() -> None:
     except Exception as e:  # noqa: BLE001 - 同步失败不影响平台启动
         logger.error("插件仓库轮询初始化失败: %r", e)
 
-    # 6) 浏览器内核后台预热：装 cloakbrowser + 下内核，不阻塞启动，失败自动回退 Playwright。
-    #    插件 ctx.browser 在预热完成前调用会自动走 Playwright，无需等待。
-    try:
-        from kernel import browser as _browser
-        asyncio.create_task(_browser.ensure_cloakbrowser())
-    except Exception as e:  # noqa: BLE001 - 预热调度失败不影响平台启动
-        logger.warning("浏览器内核预热调度失败: %r", e)
+    # 浏览器内核不在启动时预热：改为懒加载——插件首次真正调用 ctx.browser 时才
+    # 下载内核（见 kernel/browser.py）。不用浏览器的部署零开销、零额外磁盘占用。
 
     logger.info("AWBotNest 平台启动完成")
 
-    # 7) idle 等待
+    # 6) idle 等待
     from core import idle
     try:
         await idle()
