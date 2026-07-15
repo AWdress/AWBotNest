@@ -56,6 +56,32 @@ def _playwright_importable() -> bool:
 # ──────────────────────────────────────────────
 # 启动预热：装 cloakbrowser + 下内核（后台、容错）
 # ──────────────────────────────────────────────
+def _subprocess_env() -> dict:
+    """构造装内核子进程的环境变量：
+    - PYTHONPATH 带上 data/plugin_deps —— cloakbrowser 是用 `pip --target` 装到那里的，
+      新起的 `python -m cloakbrowser` 子进程默认看不到，必须显式加进 PYTHONPATH，
+      否则报 "No module named cloakbrowser"。
+    - 出站套平台代理（墙内拉内核需要）。
+    """
+    env = dict(os.environ)
+    try:
+        from kernel import deps
+        target = str(deps.PLUGIN_DEPS_DIR.resolve())
+        prev = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = target + (os.pathsep + prev if prev else "")
+    except Exception:  # noqa: BLE001 - 取不到目录也不致命
+        pass
+    try:
+        from libs.proxy import proxy_url
+        px = proxy_url()
+        if px:
+            env.setdefault("HTTPS_PROXY", px)
+            env.setdefault("https_proxy", px)
+    except Exception:  # noqa: BLE001
+        pass
+    return env
+
+
 def _ensure_cloakbrowser_sync() -> None:
     """同步安装 cloakbrowser（缺失则 pip 装到 plugin_deps）并下载内核。全程容错。"""
     global _cloak_kernel_ready
@@ -78,13 +104,9 @@ def _ensure_cloakbrowser_sync() -> None:
 
     # 2) 下载 CloakBrowser 内核（等价 MoviePilot 的 `python -m cloakbrowser install`）。
     #    HOME 已在 main.py 指向 data/browser_cache，内核落在卷内、可持久化。
+    #    PYTHONPATH 必须带上 plugin_deps，否则子进程找不到刚 --target 装的 cloakbrowser。
     try:
-        env = dict(os.environ)
-        from libs.proxy import proxy_url
-        px = proxy_url()
-        if px:
-            env.setdefault("HTTPS_PROXY", px)
-            env.setdefault("https_proxy", px)
+        env = _subprocess_env()
         proc = subprocess.run(
             [sys.executable, "-m", "cloakbrowser", "install"],
             capture_output=True, text=True, timeout=1800, env=env,
@@ -106,12 +128,7 @@ def _ensure_playwright_chromium_sync() -> None:
     if not _playwright_importable():
         return
     try:
-        env = dict(os.environ)
-        from libs.proxy import proxy_url
-        px = proxy_url()
-        if px:
-            env.setdefault("HTTPS_PROXY", px)
-            env.setdefault("https_proxy", px)
+        env = _subprocess_env()
         proc = subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
             capture_output=True, text=True, timeout=1800, env=env,
