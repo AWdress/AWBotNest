@@ -255,3 +255,4 @@ docker compose up -d        # 访问 http://服务器IP:18001
 - 2026-07-15：创建本文件。通读全项目，梳理平台内核+单文件插件架构、六边形底座、前后端结构与各文件职责，形成完整项目说明文档。
 - 2026-07-15：修复 vue 模式插件前端 chunk 加载 404。`webui/api.py` 的 `plugin_frontend_asset` 按文件区分缓存头——`remoteEntry.js`(固定名联邦入口) 设 `no-cache` 每次校验新鲜度，避免缓存旧入口指向已删除的 hash chunk；带 hash 的 chunk 设长缓存 `immutable`。影响文件：`webui/api.py`。
 - 2026-07-15：本文件从根目录移到 `docs/CLAUDE.md`，同步修正文首指向 SPEC/PLUGIN_GUIDE 的相对链接。
+- 2026-07-15：进一步修复 vue 插件配置界面加载 404（`Failed to fetch dynamically imported module`）。上一版的 `no-cache` 只对新响应生效，浏览器早先缓存的旧 `remoteEntry.js` 仍可能被复用、指向已删除的 hash chunk。改为在客户端给 remoteEntry URL 加时间戳 `?t=Date.now()`，强制每次打开配置都取最新入口（chunk 按加载路径相对解析，查询串不带到 chunk，长缓存不受影响）。影响文件：`webui/frontend/src/components/RemotePluginConfig.vue`。
