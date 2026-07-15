@@ -331,11 +331,19 @@ async def plugin_frontend_asset(
     """
     import os, mimetypes
     dist = registry.frontend_dist_dir(plugin_id).resolve()
-    target = (dist / path).resolve()
-    # 防路径穿越：target 必须在 dist 目录内
-    if target != dist and not str(target).startswith(str(dist) + os.sep):
-        raise HTTPException(status_code=400, detail="非法资源路径")
-    if not target.is_file():
+
+    def _resolve(rel: str):
+        """在 dist 下解析 rel，带路径穿越防护；不是 dist 内的文件返回 None。"""
+        t = (dist / rel).resolve()
+        if t != dist and not str(t).startswith(str(dist) + os.sep):
+            raise HTTPException(status_code=400, detail="非法资源路径")
+        return t if t.is_file() else None
+
+    # 先按原样在 dist 下找；找不到再回退到 dist/assets/ 下。
+    # 兼容两种联邦产物布局：remoteEntry 在 dist 根，或在 dist/assets/ 内。
+    # 关键是宿主用「根 URL」加载 remoteEntry，使其内部 ./assets/xxx 相对引用正确解析。
+    target = _resolve(path) or _resolve(f"assets/{path}")
+    if target is None:
         raise HTTPException(status_code=404, detail="资源不存在")
     # 强制修正 JS/CSS 的 MIME：ESM 动态 import 对 .mjs/.js 的类型敏感，
     # 若被 guess 成 octet-stream 浏览器会拒绝执行模块。

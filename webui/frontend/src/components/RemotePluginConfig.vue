@@ -42,9 +42,14 @@ async function loadRemote() {
     if (!props.hasFrontend) {
       throw new Error('该插件未随附前端构建产物（frontend/dist）。请让作者构建后再发布。')
     }
+    // 从「dist 根」URL 加载 remoteEntry（即使文件物理在 dist/assets/ 内，也用根 URL）。
+    // 因为 remoteEntry 内部把 chunk 引成 ./assets/xxx，是相对「加载 URL」解析的：
+    // 从 /fe/remoteEntry.js 加载 → ./assets/xxx 正确解析为 /fe/assets/xxx；
+    // 若从 /fe/assets/remoteEntry.js 加载则会叠成 /fe/assets/assets/xxx（404）。
+    // 后端对 /fe/remoteEntry.js 找不到时会回退到 dist/assets/remoteEntry.js，兼容两种产物布局。
     const name = `plugin_${props.pluginId}`
     __federation_method_setRemote(name, {
-      url: () => Promise.resolve(`/api/plugins/${props.pluginId}/fe/assets/remoteEntry.js`),
+      url: () => Promise.resolve(`/api/plugins/${props.pluginId}/fe/remoteEntry.js`),
       format: 'esm',
       from: 'vite',
     })
