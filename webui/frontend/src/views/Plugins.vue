@@ -519,6 +519,7 @@ onUnmounted(() => {
               <div class="card-title">
                 <span class="name">{{ p.name }}
                   <span v-if="isOfficial(p)" class="badge-official">官方</span>
+                  <span v-if="p.render_mode === 'vue'" class="badge-vue">Vue</span>
                 </span>
                 <span class="badge" :class="p.error ? 'badge-err' : (p.enabled ? 'badge-on' : 'badge-off')">
                   {{ p.error ? '异常' : (p.enabled ? '已启用' : '未启用') }}
@@ -890,6 +891,12 @@ onUnmounted(() => {
   font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: #fff; letter-spacing: 0.5px;
+}
+
+/* vue 插件：标明该插件配置界面是插件自带的自定义界面，跟「官方」徽章同款圆角小标 */
+.badge-vue {
+  font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
+  background: var(--accent-2); color: #fff; letter-spacing: 0.5px;
 }
 
 .store-title { display: flex; align-items: center; gap: 10px; }
