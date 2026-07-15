@@ -1008,10 +1008,11 @@ onUnmounted(() => {
   .grid { grid-template-columns: 1fr; }
   .repo-row { flex-wrap: wrap; }
   .repo-row .repo-token { max-width: none; flex: 1 1 100%; }
-  /* vue 模式：窄屏照 MoviePilot 直接铺满视口（fullscreen） */
-  .modal-wide {
-    width: 100vw; max-width: 100vw;
-    height: 100dvh; max-height: 100dvh;
+  /* 窄屏照 MoviePilot 直接铺满视口（fullscreen）。
+     用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
+  .modal.modal-wide {
+    width: 100vw !important; max-width: 100vw !important;
+    height: 100dvh !important; max-height: 100dvh !important;
     border-radius: 0;
   }
 }

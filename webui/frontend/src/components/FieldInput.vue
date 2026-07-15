@@ -159,10 +159,15 @@ const infoText = computed(() => {
 })
 
 const showHead = computed(() => props.spec.type !== 'action')
+
+// 框型单控件（文本/密码/数字/下拉/多行）用 outlined 浮动 label（贴近 MoviePilot）；
+// 其余（开关/滑块/多选/会话/列表/说明/按钮）保持 label 在上或各自样式
+const BOX_TYPES = ['string', 'password', 'number', 'select', 'text']
+const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 </script>
 
 <template>
-  <div class="field" :class="{ inline: spec.type === 'boolean' }">
+  <div class="field" :class="{ inline: spec.type === 'boolean', box: isBoxField }">
     <div v-if="showHead" class="field-head">
       <label class="field-label">{{ spec.label || name }}<span v-if="spec.required" class="req">*</span></label>
       <!-- boolean → 开关（跟随标签行内） -->
@@ -171,10 +176,11 @@ const showHead = computed(() => props.spec.type !== 'action')
       <!-- slider 当前值 -->
       <span v-else-if="spec.type === 'slider'" class="slider-val">{{ value }}</span>
     </div>
-    <div v-if="spec.help" class="field-help">{{ spec.help }}</div>
-
     <!-- info → 只读展示 -->
-    <div v-if="spec.type === 'info'" class="info-box">{{ infoText || '—' }}</div>
+    <div v-if="spec.type === 'info'" class="info-box">
+      <svg class="info-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <span>{{ infoText || '—' }}</span>
+    </div>
 
     <!-- action → 动作按钮 -->
     <button v-else-if="spec.type === 'action'" type="button" class="action-btn"
@@ -262,6 +268,9 @@ const showHead = computed(() => props.spec.type !== 'action')
     <input v-else-if="!['boolean', 'slider'].includes(spec.type)" class="input" type="text"
            :value="value" @input="set($event.target.value)" />
 
+    <!-- 字段说明（挪到控件下方） -->
+    <div v-if="spec.help" class="field-help">{{ spec.help }}</div>
+
     <!-- 校验错误 -->
     <div v-if="error" class="field-err">{{ error }}</div>
   </div>
@@ -272,7 +281,23 @@ const showHead = computed(() => props.spec.type !== 'action')
 .field.inline .field-head { margin-bottom: 0; }
 .field-head { display: flex; align-items: center; justify-content: space-between; }
 .field-label { font-size: 13px; color: var(--text-secondary); }
-.field-help { font-size: 12px; color: var(--text-muted); margin-top: -2px; }
+.field-help { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+/* outlined 浮动 label（框型字段）：label 骑在控件左上边框缺口上、控件透明填充（参考 MoviePilot） */
+.field.box { position: relative; }
+.field.box .field-head {
+  position: absolute; top: -8px; left: 9px; z-index: 1;
+  width: auto; margin: 0; padding: 0 5px;
+  background: var(--bg-card);
+}
+.field.box .field-label { font-size: 11px; color: var(--text-muted); }
+.field.box .input,
+.field.box .select,
+.field.box .textarea { background: transparent; }
+.field.box:focus-within .field-label { color: var(--accent); }
+.field.box:focus-within .input,
+.field.box:focus-within .select,
+.field.box:focus-within .textarea { border-color: var(--accent); }
 .req { color: var(--danger, #e5484d); margin-left: 2px; }
 .field-err { font-size: 12px; color: var(--danger, #e5484d); }
 .muted-sm { font-size: 12px; color: var(--text-muted); }
@@ -286,12 +311,14 @@ const showHead = computed(() => props.spec.type !== 'action')
 .slider { width: 100%; accent-color: var(--accent); }
 .slider-val { font-size: 13px; color: var(--accent); font-weight: 600; }
 
-/* ── info ── */
+/* ── info → 蓝色提示条（参考 MoviePilot 的 alert）── */
 .info-box {
+  display: flex; gap: 10px; align-items: flex-start;
   font-size: 13px; color: var(--text-secondary); line-height: 1.5;
-  padding: 10px 12px; border-radius: var(--radius-sm);
-  background: var(--bg-elevated); border: 1px solid var(--border-light); white-space: pre-wrap;
+  padding: 12px 14px; border-radius: var(--radius-sm);
+  background: var(--accent-dim); border: 1px solid rgba(48, 128, 240, 0.25); white-space: pre-wrap;
 }
+.info-ico { width: 18px; height: 18px; flex-shrink: 0; margin-top: 1px; color: var(--accent); }
 
 /* ── action ── */
 .action-btn {
