@@ -517,7 +517,8 @@ onUnmounted(() => {
             <div class="store-title">
               <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
               <div class="card-title">
-                <span class="name">{{ p.name }}
+                <span class="name">
+                  <span class="name-text">{{ p.name }}</span>
                   <span v-if="isOfficial(p)" class="badge-official">官方</span>
                   <span v-if="p.render_mode === 'vue'" class="badge-vue">Vue</span>
                 </span>
@@ -884,8 +885,10 @@ onUnmounted(() => {
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
 
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; }
-.card-title { display: flex; flex-direction: column; gap: 6px; }
-.name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+.card-title { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 名字太长单行截断成省略号，把有限宽度让给右侧「官方 / Vue」徽章，保持一行对齐 */
+.name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 .badge-official {
   font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
@@ -901,7 +904,7 @@ onUnmounted(() => {
   flex-shrink: 0; white-space: nowrap;
 }
 
-.store-title { display: flex; align-items: center; gap: 10px; }
+.store-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 .store-icon { width: 38px; height: 38px; border-radius: 8px; object-fit: cover; flex-shrink: 0; }
 .store-icon-fallback { object-fit: contain; padding: 4px; background: var(--bg-elevated); }
 .store-card:hover { border-color: var(--accent-dim); }
