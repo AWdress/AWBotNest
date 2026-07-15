@@ -655,7 +655,7 @@ onUnmounted(() => {
 
     <!-- 配置弹窗 -->
     <div v-if="configOpen" class="modal-mask" @click.self="configOpen=false">
-      <div class="modal card">
+      <div class="modal card" :class="{ 'modal-wide': configRenderMode === 'vue' || Object.keys(configSchema).length }">
         <div class="modal-head">
           <h2>{{ configTarget?.name }} · 配置</h2>
           <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
@@ -940,6 +940,10 @@ onUnmounted(() => {
   z-index: 200;
 }
 .modal { width: 540px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
+/* 配置弹窗（vue 模式 + schema 模式）：参考 MoviePilot 给一块大而响应式的画布，
+   vue 由插件自己布局，schema 由平台表单栅格铺开
+   （用固定大宽度而非 fit-content：vue 插件多用 100%/栅格布局，fit-content 会坍缩） */
+.modal-wide { width: 1000px; max-width: 92vw; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-head h2 { font-size: 16px; }
 .modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
@@ -1004,5 +1008,11 @@ onUnmounted(() => {
   .grid { grid-template-columns: 1fr; }
   .repo-row { flex-wrap: wrap; }
   .repo-row .repo-token { max-width: none; flex: 1 1 100%; }
+  /* vue 模式：窄屏照 MoviePilot 直接铺满视口（fullscreen） */
+  .modal-wide {
+    width: 100vw; max-width: 100vw;
+    height: 100dvh; max-height: 100dvh;
+    border-radius: 0;
+  }
 }
 </style>
