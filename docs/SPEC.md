@@ -163,7 +163,7 @@ async def setup(ctx):
 2. **config_schema 字段规范**（前端据此渲染设置界面）：
    ```python
    "字段名": {
-       "type": "string|password|number|boolean|select|multiselect|slider|text",  # 必填
+       "type": "string|password|number|boolean|select|multiselect|slider|text|list|chat|action|info",  # 必填
        "default": ...,          # 必填：默认值（multiselect 用 list，slider/number 用数字）
        "label": "显示名",        # 建议
        "help": "字段说明",       # 可选：显示在字段下方
@@ -173,8 +173,9 @@ async def setup(ctx):
        "show_if": {"其他字段": 值},  # 可选：条件显示，仅当该字段当前值匹配才显示本字段
    }
    ```
-   - 字段类型：`string`(单行)/`password`(密码)/`number`(数字)/`boolean`(开关)/`select`(下拉)/`multiselect`(多选标签)/`slider`(滑块)/`text`(多行)。
+   - 字段类型：`string`(单行)/`password`(密码)/`number`(数字)/`boolean`(开关)/`select`(下拉)/`multiselect`(多选标签)/`slider`(滑块)/`text`(多行)/`list`(可增删行表格，`fields` 定义每行子字段)/`chat`(会话选择器)/`action`(动作按钮，触发插件 `ctx.action` 注册的函数)/`info`(只读展示)。
    - 用 `section` 把「功能开关」与「参数」分块；用 `show_if` 做联动（如某开关打开才显示相关参数），实现「打开插件 = 一个带分区、会联动的设置面板」。
+   - **界面布局由平台自动排布，插件不用操心宽度**：配置弹窗是一块大画布（桌面约 1000px，窄屏自动全屏）。schema 表单按 `section` 分组，同组内短字段（string/password/number/boolean/select/slider）自动并排成多列，大字段（text/list/multiselect/chat）占整行，容器变窄时回落单列。**vue 模式插件**自带界面也在这块大画布内渲染（窄屏全屏），请用响应式布局（百分比/栅格），不要写死窄宽度，否则窄屏会溢出。
 3. **数据隔离**：插件用 `ctx.kv` 存键值，每插件独立 sqlite 命名空间（`data/kv/<id>.sqlite`）。需要关系型存储时，表名/键名必须带 `plugin_id` 前缀，禁止污染他人数据。
 4. 平台级敏感配置（API_ID/HASH/BOT_TOKEN 等）存 `data/config.json`，**`data/` 禁止提交 Git**，禁止在日志/响应中回显明文（`/api/settings` 读取时打码）。
 5. **可写数据目录 `ctx.data_dir`**：需要存实际文件（如头像图片池、下载的素材）的插件用 `ctx.data_dir` 拿一个**每插件独立**的可写目录 `data/plugin_data/<id>/`（`Path`，首次访问自动建）。`ctx.kv` 只存键值，文件存这里。

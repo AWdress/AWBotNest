@@ -72,6 +72,11 @@ const sections = computed(() => {
 })
 
 const hasFields = computed(() => Object.keys(props.schema).length > 0)
+
+// 大字段（多行文本 / 可增删表格 / 多选 / 会话选择 / 说明 / 按钮）占整行，
+// 其余短字段在大画布里自动并排成多列（参考 MoviePilot 的栅格表单）
+const WIDE_TYPES = ['text', 'list', 'multiselect', 'chat', 'info', 'action']
+function isWide(spec) { return WIDE_TYPES.includes(spec.type) }
 </script>
 
 <template>
@@ -79,10 +84,13 @@ const hasFields = computed(() => Object.keys(props.schema).length > 0)
     <div v-for="(fields, sec) in sections" :key="sec" class="section">
       <div class="section-title">{{ sec }}</div>
 
-      <template v-for="[key, spec] in fields" :key="key">
-        <FieldInput v-if="visible(spec)" :spec="spec" :name="key" :plugin-id="pluginId"
-                    :value="values[key]" :error="errors[key]" @update="(v) => update(key, v)" />
-      </template>
+      <div class="fields-grid">
+        <template v-for="[key, spec] in fields" :key="key">
+          <FieldInput v-if="visible(spec)" :spec="spec" :name="key" :plugin-id="pluginId"
+                      :class="{ wide: isWide(spec) }"
+                      :value="values[key]" :error="errors[key]" @update="(v) => update(key, v)" />
+        </template>
+      </div>
     </div>
 
     <div v-if="!hasFields" class="empty muted">此插件没有可配置项。</div>
@@ -92,6 +100,9 @@ const hasFields = computed(() => Object.keys(props.schema).length > 0)
 <style scoped>
 .form { display: flex; flex-direction: column; gap: 24px; }
 .section { display: flex; flex-direction: column; gap: 16px; }
+/* 短字段自动并排成多列，大画布下铺开；容器变窄时自然回落到单列 */
+.fields-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; align-items: start; }
+.fields-grid .wide { grid-column: 1 / -1; }
 .section-title {
   font-size: 12px; font-weight: 600; color: var(--accent);
   text-transform: uppercase; letter-spacing: 0.05em;
