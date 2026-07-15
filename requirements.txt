@@ -78,3 +78,9 @@ fastapi==0.136.1
 uvicorn==0.46.0
 python-multipart==0.0.32
 websockets==15.0.1
+
+# --- 浏览器自动化（供插件 ctx.browser 用）---
+# Playwright 内置进镜像作为兜底引擎；系统库与 chromium 在 Dockerfile 里装。
+# CloakBrowser（停用浏览器，优先引擎）体积大、可能需联网拉专有内核，
+# 不写死这里，改由平台启动时后台按需安装（见 kernel/browser.py）。
+playwright==1.49.1

@@ -1,0 +1,37 @@
+
+/* 用平台主题变量（有则跟随暗色主题），带回退值以便本地 npm run dev 预览 */
+.vcfg[data-v-003f7034] { display: flex; flex-direction: column; gap: 16px;
+}
+.card[data-v-003f7034] {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 16px; border-radius: 10px;
+  background: var(--bg-elevated, #1a1d27); border: 1px solid var(--border-light, #2a2e3a);
+}
+h3[data-v-003f7034] { font-size: 13px; font-weight: 600; color: var(--accent, #6ea8fe); margin: 0;
+}
+.row[data-v-003f7034] { display: flex; align-items: center; gap: 10px;
+}
+.row > span[data-v-003f7034]:first-child { min-width: 72px; font-size: 13px; color: var(--text-secondary, #b9c0cc);
+}
+.switch[data-v-003f7034] { justify-content: flex-start;
+}
+.inp[data-v-003f7034] {
+  flex: 1; padding: 8px 10px; border-radius: 6px; font-size: 13px;
+  background: var(--bg-card, #12141c); color: var(--text-primary, #e8ebf0);
+  border: 1px solid var(--border-light, #2a2e3a);
+}
+.btn[data-v-003f7034] {
+  padding: 7px 14px; border-radius: 6px; cursor: pointer; font-size: 13px;
+  background: var(--bg-card, #12141c); color: var(--text-secondary, #b9c0cc);
+  border: 1px solid var(--border-light, #2a2e3a);
+}
+.btn[data-v-003f7034]:hover { border-color: var(--accent, #6ea8fe); color: var(--accent, #6ea8fe);
+}
+.btn.primary[data-v-003f7034] {
+  align-self: flex-start;
+  background: var(--accent-dim, #1e3a5f); border-color: var(--accent, #6ea8fe); color: var(--accent, #6ea8fe);
+}
+.btn[data-v-003f7034]:disabled { opacity: 0.5; cursor: not-allowed;
+}
+.muted[data-v-003f7034] { font-size: 12px; color: var(--text-muted, #7a8291);
+}

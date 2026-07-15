@@ -1,5 +1,5 @@
 {
-  "name": "awbotnest-frontend",
+  "name": "awbotnest-plugin-vue-template",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -9,8 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "vue": "^3.5.13",
-    "vue-router": "^4.5.0"
+    "vue": "^3.5.13"
   },
   "devDependencies": {
     "@originjs/vite-plugin-federation": "^1.4.1",

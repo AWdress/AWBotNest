@@ -21,7 +21,7 @@ from pathlib import Path
 
 from libs.log import logger
 
-from fastapi import HTTPException, Header
+from fastapi import HTTPException, Header, Cookie, Response
 
 _AUTH_FILE = Path("data") / "auth.json"   # {"username","salt","pwd_hash","secret"}
 _PBKDF_ROUNDS = 200_000
@@ -149,4 +149,46 @@ async def require_password_changed(authorization: str = Header(default="")):
     if is_default_password():
         # 428 Precondition Required：前端据此引导强制改密
         raise HTTPException(status_code=428, detail="请先修改默认密码后再操作")
+    return {"auth": True}
+
+
+# ──────────────────────────────────────────────
+# 资源 Cookie：给「静态资源类」请求鉴权
+#
+# 插件 Vue 模式的前端产物由浏览器 ESM 动态 import 加载，import 无法附带
+# Authorization 头，故沿用 MoviePilot 的思路——登录时下发一个资源 Cookie，
+# 同源请求浏览器会自动带上，用它给 /api/plugins/<id>/fe/ 这类静态资源鉴权。
+# Cookie 值即登录令牌（改用户名/密码后自动失效），HttpOnly 使 JS 读不到。
+# ──────────────────────────────────────────────
+RESOURCE_COOKIE = "awbotnest_resource"
+# 仅发往插件相关路径，缩小暴露面（/fe/ 静态资源都在此前缀下）
+_RESOURCE_COOKIE_PATH = "/api/plugins"
+
+
+def current_resource_token() -> str:
+    """当前有效的资源令牌（= 登录令牌）。"""
+    return _make_token(_ensure_default())
+
+
+def set_resource_cookie(response: Response) -> None:
+    """在响应上种下资源 Cookie（会话级：浏览器关闭即失效，刷新仍在）。"""
+    response.set_cookie(
+        RESOURCE_COOKIE, current_resource_token(),
+        httponly=True, samesite="lax", path=_RESOURCE_COOKIE_PATH,
+    )
+
+
+def clear_resource_cookie(response: Response) -> None:
+    response.delete_cookie(RESOURCE_COOKIE, path=_RESOURCE_COOKIE_PATH)
+
+
+async def require_resource_access(
+    resource: str = Cookie(default="", alias=RESOURCE_COOKIE),
+):
+    """FastAPI 依赖：校验资源 Cookie。DEV_NO_AUTH 时放行。
+    校验失败返回 403（前端 import 会失败并提示，不做跳登录处理）。"""
+    if DEV_NO_AUTH:
+        return {"dev": True}
+    if not _verify_token(resource):
+        raise HTTPException(status_code=403, detail="无权访问插件资源（请重新登录）")
     return {"auth": True}

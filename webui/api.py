@@ -13,7 +13,7 @@ import hmac
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
@@ -24,7 +24,7 @@ from webui.auth import require_password_changed as _auth_pwc
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.0.7"
+APP_VERSION = "1.0.8"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -44,11 +44,20 @@ async def auth_status():
 
 
 @app.post("/api/auth/login")
-async def auth_login(body: Dict[str, Any]):
-    """登录（用户名 + 密码），返回令牌"""
+async def auth_login(body: Dict[str, Any], response: Response):
+    """登录（用户名 + 密码），返回令牌；同时种下资源 Cookie（供插件静态资源鉴权）"""
     b = body or {}
     token = _authmod.login(b.get("username", ""), b.get("password", ""))
+    _authmod.set_resource_cookie(response)
     return {"status": "success", "token": token}
+
+
+@app.post("/api/auth/resource_token")
+async def issue_resource_token(response: Response, user=Depends(_auth)):
+    """（重新）种下资源 Cookie。前端在恢复登录态（localStorage 令牌）后调用，
+    确保未走登录接口的会话也有资源 Cookie，能加载 vue 模式插件的前端产物。"""
+    _authmod.set_resource_cookie(response)
+    return {"ok": True}
 
 
 @app.post("/api/auth/change_credentials")
@@ -124,9 +133,14 @@ async def list_plugins(user=Depends(_auth)):
     """列出所有插件及其状态"""
     runtime = _get_runtime()
     metas = registry.scan()
+    out = []
     for m in metas:
         m.loaded = runtime.is_loaded(m.id)
-    return {"plugins": [m.to_dict() for m in metas]}
+        d = m.to_dict()
+        # vue 模式：附带前端构建产物是否就绪，供前端决定「加载组件」还是「提示未构建」
+        d["has_frontend"] = registry.has_frontend(m.id) if m.render_mode == "vue" else False
+        out.append(d)
+    return {"plugins": out}
 
 
 @app.post("/api/plugins/upload")
@@ -283,7 +297,12 @@ async def get_plugin_config(plugin_id: str, user=Depends(_auth)):
     meta = registry.get_meta(plugin_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="插件不存在")
-    return {"schema": meta.config_schema, "values": registry.get_config(plugin_id)}
+    return {
+        "schema": meta.config_schema,
+        "values": registry.get_config(plugin_id),
+        "render_mode": meta.render_mode,
+        "has_frontend": registry.has_frontend(plugin_id) if meta.render_mode == "vue" else False,
+    }
 
 
 @app.put("/api/plugins/{plugin_id}/config")
@@ -296,6 +315,72 @@ async def set_plugin_config(plugin_id: str, values: Dict[str, Any], user=Depends
     if runtime.is_loaded(plugin_id):
         await runtime.reload(plugin_id)
     return {"status": "success", "values": registry.get_config(plugin_id)}
+
+
+# ── vue 模式：插件自带前端（联邦组件）静态资源 + 插件 API 分发 ──
+@app.get("/api/plugins/{plugin_id}/fe/{path:path}")
+async def plugin_frontend_asset(
+    plugin_id: str, path: str,
+    _: None = Depends(_authmod.require_resource_access),
+):
+    """
+    托管 vue 模式插件的前端构建产物（plugins/<id>/frontend/dist/ 下）。
+    浏览器 ESM 动态 import 无法附带 Authorization 头，故用登录时下发的资源 Cookie
+    鉴权（同源请求自动带上）——未登录会话拿不到插件前端产物。含路径穿越防护。
+    业务数据仍走下方需 Bearer 令牌的 /api 分发。
+    """
+    import os, mimetypes
+    dist = registry.frontend_dist_dir(plugin_id).resolve()
+    target = (dist / path).resolve()
+    # 防路径穿越：target 必须在 dist 目录内
+    if target != dist and not str(target).startswith(str(dist) + os.sep):
+        raise HTTPException(status_code=400, detail="非法资源路径")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="资源不存在")
+    # 强制修正 JS/CSS 的 MIME：ESM 动态 import 对 .mjs/.js 的类型敏感，
+    # 若被 guess 成 octet-stream 浏览器会拒绝执行模块。
+    suffix = target.suffix.lower()
+    media = {".js": "application/javascript", ".mjs": "application/javascript",
+             ".css": "text/css"}.get(suffix)
+    if media is None:
+        media = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+    return FileResponse(str(target), media_type=media)
+
+
+@app.api_route(
+    "/api/plugins/{plugin_id}/api/{path:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+)
+async def plugin_api_call(plugin_id: str, path: str, request: Request, user=Depends(_auth)):
+    """
+    分发到插件 ctx.on_api 注册的处理器。供 vue 模式自带前端组件调用。
+    经管理员登录态鉴权（Bearer 令牌），外部无法直接访问。
+    """
+    import json as _json
+    from kernel.context import WebhookRequest
+
+    runtime = _get_runtime()
+    handler = runtime.get_api_handler(plugin_id, request.method, path)
+    if handler is None:
+        raise HTTPException(status_code=404, detail="插件未启用或未注册该 API")
+
+    query = dict(request.query_params)
+    headers = {k.lower(): v for k, v in request.headers.items()}
+    body = await request.body()
+    json_data = None
+    if body:
+        try:
+            json_data = _json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            json_data = None
+    req = WebhookRequest(request.method, query, headers, body, json_data,
+                         path="/" + path.strip("/"))
+    try:
+        result = await handler(req)
+    except Exception as e:  # noqa: BLE001 - 插件处理器异常不外泄堆栈
+        logger.exception("插件 API 处理失败: %s /%s", plugin_id, path)
+        raise HTTPException(status_code=500, detail="插件 API 处理失败") from e
+    return _webhook_result_response(result)
 
 
 @app.get("/api/plugins/{plugin_id}/accounts")

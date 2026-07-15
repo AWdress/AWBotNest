@@ -193,6 +193,27 @@ async def h(client, message):
 
 消息无可下载媒体时抛 `ValueError`。
 
+### 浏览器自动化
+
+需要渲染 JS 页面、过反爬/指纹检测、抓动态内容时，用 `ctx.browser`——平台已托管浏览器，插件无需自己装。引擎优先 **CloakBrowser**（停用 Chromium，过 Cloudflare/指纹检测），未就绪时自动回退平台内置的 **Playwright Chromium**，插件无感。
+
+```python
+# 取渲染后的 HTML 源码
+html = await ctx.browser.page_source("https://example.com", timeout=60)
+
+# 需要交互时，传一个同步 action(page)，在浏览器线程里执行、返回结果
+def grab(page):
+    page.click("#more")
+    return page.inner_text("#list")
+data = await ctx.browser.run("https://example.com", grab, headless=True)
+```
+
+- 两个方法都是 `async`（内部在线程里跑同步浏览器 API，不阻塞事件循环）。
+- 参数：`cookies`（`"k=v; k2=v2"` 请求头串）、`ua`（User-Agent）、`headless`（默认 `True`）、`timeout`（秒）、`proxy`。
+- `ctx.browser.run` 的 `action` 是**同步函数**，收到同步 `page` 对象（`goto`/`click`/`fill`/`content`/`inner_text`/`screenshot` 等），页面用完平台自动关闭。
+- `ctx.browser.engine` 返回当前引擎名（`"cloakbrowser"` / `"playwright"` / `None`）。
+- CloakBrowser 内核在平台**首次启动时后台下载**到 `data/browser_cache`（随卷持久化）；下载完成前 `ctx.browser` 走 Playwright，完成后自动切到 CloakBrowser。出站默认走平台代理。
+
 ### 键值存储
 
 每个插件拥有独立命名空间，互不干扰。
@@ -335,6 +356,92 @@ async def setup(ctx):
 - `info` 只展示不收集输入。要显示动态状态（如「上次运行时间」），让插件用 `ctx.update_config` 写回同名键即可。
 
 插件的全部配置均通过 `config_schema` 声明，不得修改平台配置。
+
+---
+
+## Vue 模式（自带配置界面）
+
+`config_schema` 生成的是标准表单，覆盖绝大多数插件。若需要图表、可视化编辑器或非表单式的复杂交互，可改用 **Vue 模式**：插件自带一个用 Vue 写的配置界面，平台在运行时把它加载进配置弹窗（基于模块联邦 Module Federation）。
+
+起步最快的方式是复制模板目录 `plugins/_TEMPLATE_VUE/`，去掉下划线改成你的插件 id。
+
+### 开启
+
+仅**目录包**插件可用（需自带前端工程）。在 `__plugin__` 声明：
+
+```python
+__plugin__ = {
+    "name": "我的插件", "id": "my_plugin", "version": "1.0.0", "scope": "user",
+    "render_mode": "vue",     # ← 配置界面改由插件自带的 Vue 组件渲染
+    # vue 模式无需 config_schema
+}
+```
+
+`render_mode` 缺省为 `"schema"`（走自动表单）。写 `"vue"` 时目录下须有一个前端工程 `frontend/`。
+
+### 前端工程
+
+目录结构（模板已备好）：
+
+```
+my_plugin/
+├── __init__.py
+└── frontend/
+    ├── package.json
+    ├── vite.config.js        # 模块联邦：暴露 ./Config，共享宿主 Vue
+    ├── src/Config.vue        # ← 你的配置界面（必须暴露为 ./Config）
+    └── dist/                 # 构建产物，发布时一并提交
+```
+
+关键约定：
+
+- `vite.config.js` 用 `@originjs/vite-plugin-federation` 暴露 `./Config`，并把 `vue` 声明为 `shared`（`generate: false`）——复用平台那一份 Vue，不重复打包。
+- 平台加载的是**构建产物**：发布前必须 `cd frontend && npm install && npm run build`，并把 `frontend/dist/` 一起提交/打包。产物入口为 `frontend/dist/assets/remoteEntry.js`；未构建时配置弹窗会提示「未随附前端构建产物」。
+
+### 组件契约
+
+平台加载 `Config.vue` 时注入两个 prop：
+
+```js
+const props = defineProps({ pluginId: String, host: Object })
+
+// host 提供的能力：
+await props.host.getConfig()                 // 读取已保存配置（对象）
+await props.host.saveConfig(values)          // 保存配置（存平台统一存储，插件里 ctx.config 可读到）
+await props.host.callApi('/ping')            // 调用插件后端接口（见下）
+await props.host.callApi('/echo', { method: 'POST', body: {...} })
+props.host.toast.success('已保存')            // 弹平台提示（success / error）
+```
+
+vue 模式下配置弹窗不再显示平台的「保存」按钮——由你的组件自己调用 `host.saveConfig`。配置值仍存平台统一存储，插件里照常用 `ctx.config` 读取。
+
+### 后端接口 ctx.on_api
+
+前端要读写的业务数据，用 `ctx.on_api` 在 `setup` 里注册接口，前端用 `host.callApi` 调：
+
+```python
+async def setup(ctx):
+    @ctx.on_api("/ping", methods=["GET"])
+    async def ping(req):
+        return {"ok": True, "message": "pong"}
+
+    @ctx.on_api("/save_rule", methods=["POST"])
+    async def save_rule(req):
+        data = req.json or {}          # 前端 body
+        ctx.kv.set("rules", data.get("rules", []))
+        return {"ok": True}
+```
+
+- 实际地址 `/api/plugins/<id>/api/<path>`，经**管理员登录态鉴权**（外部访问不到，与 webhook 的 apikey 公开端点不同）。
+- `req` 是 `WebhookRequest`：`req.method` / `req.query` / `req.headers` / `req.json` / `req.text` / `req.path`。
+- 返回 `dict`→JSON、`str`→文本、`None`→`{"ok": true}`。
+- 同一 `(方法, 路径)` 重复注册后者覆盖前者；停用/重载时自动失效。
+
+### 鉴权与安全
+
+- **前端产物**（`/api/plugins/<id>/fe/...`）由登录时下发的**资源 Cookie** 鉴权（ESM 动态 import 带不了 Authorization 头，故用同源自动携带的 Cookie）。未登录会话无法下载插件前端，公网也拿不到。
+- **`ctx.on_api` 接口**需管理员 **Bearer 令牌**（与其它控制台接口同级）。
+- Vue 组件一旦加载，就运行在管理员后台的同一上下文里、能读到令牌——这是模块联邦（非沙箱隔离）的固有特性；加之插件的 Python 启用后即在服务端全权限运行。**因此务必只安装可信来源的插件。**
 
 ---
 
