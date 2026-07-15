@@ -83,6 +83,14 @@ class PluginRuntime:
             return None
         return getattr(loaded.ctx, "_webhook_handler", None)
 
+    def get_action_handler(self, plugin_id: str, action: str) -> Optional[object]:
+        """取已加载插件注册的动作处理器（ctx.action(name)）。
+        插件未加载或未注册该动作时返回 None。"""
+        loaded = self._loaded.get(plugin_id)
+        if loaded is None:
+            return None
+        return getattr(loaded.ctx, "_action_handlers", {}).get(action)
+
     # ──────────────────────────────────────────────
     # 加载（启用）
     # ──────────────────────────────────────────────

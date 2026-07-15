@@ -330,6 +330,92 @@ async def set_plugin_accounts(plugin_id: str, body: Dict[str, Any], user=Depends
 
 
 # ──────────────────────────────────────────────
+# 会话列表（供 config_schema 的 chat 选择器：让管理员从下拉里挑群/频道，不用手填 ID）
+# ──────────────────────────────────────────────
+def _chat_type_of(chat) -> str:
+    """把 Pyrogram ChatType 归一成简单字符串：private / bot / group / channel。"""
+    t = str(getattr(chat, "type", "") or "").lower()
+    if "bot" in t:
+        return "bot"
+    if "channel" in t:
+        return "channel"
+    if "group" in t:  # group / supergroup 统一为 group
+        return "group"
+    return "private"
+
+
+def _chat_title_of(chat) -> str:
+    title = getattr(chat, "title", None)
+    if title:
+        return str(title)
+    first = getattr(chat, "first_name", "") or ""
+    last = getattr(chat, "last_name", "") or ""
+    name = (first + " " + last).strip()
+    if name:
+        return name
+    uname = getattr(chat, "username", None)
+    return f"@{uname}" if uname else str(getattr(chat, "id", ""))
+
+
+@app.get("/api/plugins/{plugin_id}/dialogs")
+async def list_plugin_dialogs(plugin_id: str, session: str = "", user=Depends(_auth)):
+    """列出某用户账号的会话（群/频道/私聊），供 chat 选择器用。
+    session 指定用哪个账号枚举；不传则取本插件应用范围内首个已连接用户账号。最多返回 300 条。"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    accounts = _get_accounts()
+    apps = accounts.connected_user_apps
+    if session:
+        app_client = next((a for a in apps if getattr(a, "name", None) == session), None)
+    else:
+        scope = registry.get_account_scope(plugin_id)
+        scoped = [a for a in apps if getattr(a, "name", None) in scope] if scope else list(apps)
+        app_client = scoped[0] if scoped else None
+    if app_client is None:
+        raise HTTPException(status_code=409, detail="没有可用的已连接用户账号，请先上线账号或手填会话 ID")
+    try:
+        chats = []
+        async for d in app_client.get_dialogs(limit=300):
+            chat = getattr(d, "chat", None)
+            if chat is None:
+                continue
+            chats.append({
+                "id": chat.id,
+                "title": _chat_title_of(chat),
+                "type": _chat_type_of(chat),
+            })
+    except Exception as e:  # noqa: BLE001
+        logger.exception("列出会话失败: %s", plugin_id)
+        raise HTTPException(status_code=502, detail=f"拉取会话失败：{e}") from e
+    return {"chats": chats}
+
+
+# ──────────────────────────────────────────────
+# 插件动作（config_schema 的 action 按钮触发 ctx.action 注册的函数）
+# ──────────────────────────────────────────────
+@app.post("/api/plugins/{plugin_id}/action/{action}")
+async def invoke_plugin_action(plugin_id: str, action: str, user=Depends(_auth_pwc)):
+    """触发插件用 ctx.action(name) 注册的动作。插件须已启用并注册了该动作。
+    返回 {ok, message}：处理器返回 dict 原样透出，str 作为 message，None 视为成功。"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    handler = runtime.get_action_handler(plugin_id, action)
+    if handler is None:
+        raise HTTPException(status_code=503, detail="插件未启用或未注册该动作")
+    try:
+        result = await handler()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("插件动作执行失败: %s::%s", plugin_id, action)
+        raise HTTPException(status_code=500, detail=f"动作执行失败：{e}") from e
+    if isinstance(result, dict):
+        return {"ok": bool(result.get("ok", True)), **result}
+    if isinstance(result, str):
+        return {"ok": True, "message": result}
+    return {"ok": True, "message": "已执行"}
+
+
+# ──────────────────────────────────────────────
 # 插件 webhook 信息（入站地址见 /api/v1/plugin/<id>/webhook；密钥用平台统一的 WEBHOOK_SECRET）
 # ──────────────────────────────────────────────
 @app.get("/api/plugins/{plugin_id}/webhook")

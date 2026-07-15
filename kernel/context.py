@@ -176,6 +176,8 @@ class PlatformContext:
         self._cleanups: list[Callable[[], Any]] = []
         # webhook 处理器（ctx.on_webhook 注册；一个插件一个）。热卸载/重载时清空。
         self._webhook_handler: Optional[Callable] = None
+        # 动作处理器（ctx.action 注册；name -> 处理函数）。供配置表单里的「动作按钮」触发。
+        self._action_handlers: dict[str, Callable] = {}
 
         # 暴露给插件的能力
         self.filters = _filters
@@ -266,6 +268,23 @@ class PlatformContext:
     def config(self) -> dict[str, Any]:
         """本插件当前配置（config_schema 默认值叠加用户保存值）"""
         return self._registry.get_config(self.plugin_id)
+
+    def update_config(self, patch: dict[str, Any]) -> dict[str, Any]:
+        """
+        插件写回自己的配置（局部合并，不触发重载）。用于持久化运行状态，
+        或把结果回填到 config_schema 里的 info 字段（如「上次运行时间」「已处理条数」）供前端展示。
+
+            ctx.update_config({"last_run": "2026-07-15 10:00", "count": 5})
+
+        - 仅合并传入的键，其它配置项保持不变（内部先读当前值再叠加）。
+        - 不重载插件（避免运行中的插件把自己拆掉）；下次读 ctx.config 即为最新值。
+        - 与用户在前端手动保存互不冲突：谁后写谁生效。
+        """
+        if not isinstance(patch, dict):
+            raise TypeError("update_config 需要 dict")
+        merged = {**self._registry.get_config(self.plugin_id), **patch}
+        self._registry.set_config(self.plugin_id, merged)
+        return merged
 
     # ──────────────────────────────────────────────
     # 可写目录（SPEC §5.5）
@@ -373,6 +392,63 @@ class PlatformContext:
         self._webhook_handler = wrapper
         return func
 
+    def action(self, name: str) -> Callable:
+        """
+        注册一个「动作」，供插件配置表单里的动作按钮触发。用法：
+
+            @ctx.action("test")
+            async def _test():
+                return {"ok": True, "message": "连接正常"}   # 返回值弹给管理员
+
+        在 config_schema 里放一个按钮字段引用它：
+            "test": {"type": "action", "label": "测试连接", "action": "test"}
+
+        处理函数无参；返回 dict / str / None，前端以此弹提示。由已登录管理员在配置弹窗点击触发，
+        经登录态鉴权（非公开）。同名重复注册后者覆盖前者；停用/重载时自动失效。
+        """
+        import functools
+        from kernel import activity
+
+        pid = self.plugin_id
+
+        import asyncio
+
+        def decorator(func: Callable) -> Callable:
+            @functools.wraps(func)
+            async def wrapper():
+                token = activity.set_current(pid)
+                try:
+                    result = func()
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                    return result
+                finally:
+                    activity.reset_current(token)
+
+            self._action_handlers[str(name)] = wrapper
+            return func
+
+        return decorator
+
+    async def download(self, message: Any, subdir: str | None = None) -> Path:
+        """
+        下载消息里的媒体（图片/文件/视频等）到本插件目录，返回落盘 Path。
+
+            path = await ctx.download(message, subdir="imgs")   # data/plugin_data/<id>/imgs/<file>
+
+        - 目标目录默认 data_dir，传 subdir 则落到其子目录（自动创建）。
+        - 消息无可下载媒体时抛 ValueError。
+        - 实为对 Pyrogram message.download 的封装，文件名由 Telegram 决定。
+        """
+        if not getattr(message, "media", None):
+            raise ValueError("该消息没有可下载的媒体")
+        import os
+        target = self.data_dir / subdir if subdir else self.data_dir
+        target.mkdir(parents=True, exist_ok=True)
+        # 末尾带分隔符 → Pyrogram 视为目录，文件名用 Telegram 提供的原名
+        saved = await message.download(file_name=str(target) + os.sep)
+        return Path(saved)
+
     def _track(self, func: Callable) -> Callable:
         """包一层：进入 handler 时把「当前插件」设进 contextvar，
         使该 handler 内部的出站发送（send/reply/edit）能归属到本插件并计入活跃。
@@ -467,5 +543,6 @@ class PlatformContext:
                 _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, e)
         self._cleanups.clear()
 
-        # webhook 处理器随插件卸载失效，避免热重载后调用到旧闭包
+        # webhook / 动作处理器随插件卸载失效，避免热重载后调用到旧闭包
         self._webhook_handler = None
+        self._action_handlers.clear()

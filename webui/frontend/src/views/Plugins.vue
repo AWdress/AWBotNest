@@ -187,7 +187,14 @@ async function copyWebhookUrl() {
   else toast.error('复制失败，请手动选择复制')
 }
 
+const configFormRef = ref(null)
+
 async function saveConfig() {
+  // 保存前校验（必填 / 数字范围）；不过就停在弹窗里提示，不提交
+  if (configFormRef.value && !configFormRef.value.validate()) {
+    toast.error('请检查标红的必填项或超范围的数值')
+    return
+  }
   configSaving.value = true
   try {
     await api.setPluginConfig(configTarget.value.id, configValues.value)
@@ -648,7 +655,8 @@ onUnmounted(() => {
           <h2>{{ configTarget?.name }} · 配置</h2>
           <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
-        <ConfigForm v-if="Object.keys(configSchema).length" v-model="configValues" :schema="configSchema" />
+        <ConfigForm v-if="Object.keys(configSchema).length" ref="configFormRef"
+                    v-model="configValues" :schema="configSchema" :plugin-id="configTarget?.id" />
         <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
 
         <!-- Webhook（仅插件声明 "webhook": True 时显示） -->
