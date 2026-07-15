@@ -154,6 +154,45 @@ kw = ctx.config["keyword"]
 on = ctx.config.get("enabled", True)
 ```
 
+### 写回自己的配置
+
+`ctx.update_config(patch)` 把结果写回本插件配置（局部合并，只改传入的键）。**不触发重载**，下次读 `ctx.config` 即最新值。常用于持久化运行状态，或把状态回填到 `info` 字段供前端展示：
+
+```python
+ctx.update_config({"last_run": "2026-07-15 10:00", "count": 5})
+```
+
+与用户在前端手动保存互不冲突，谁后写谁生效。存运行内部状态优先用 `ctx.kv`；只有想让状态在配置表单里显示时才用它。
+
+### 动作按钮
+
+在 `config_schema` 放一个 `action` 字段，用 `ctx.action(name)` 注册同名处理器，管理员在配置弹窗点按钮即可触发（如「测试连接」「立即运行一次」）：
+
+```python
+"config_schema": {"test": {"type": "action", "label": "测试连接", "action": "test"}}
+
+async def setup(ctx):
+    @ctx.action("test")
+    async def _test():
+        ok = await do_check()
+        return {"ok": ok, "message": "连接正常" if ok else "连不上"}   # 返回值弹给管理员
+```
+
+处理函数无参；返回 `dict`（含 `ok`/`message`）、`str`（当作提示文字）或 `None`（视为成功）。由已登录管理员触发，插件须已启用。`danger: True` 的按钮点击前会弹确认框。
+
+### 下载消息媒体
+
+`ctx.download(message, subdir=None)` 把消息里的图片/文件/视频下载到本插件目录，返回落盘 `Path`：
+
+```python
+@ctx.on_message(ctx.filters.photo)
+async def h(client, message):
+    path = await ctx.download(message, subdir="imgs")   # data/plugin_data/<id>/imgs/xxx
+    text = await ocr(path)
+```
+
+消息无可下载媒体时抛 `ValueError`。
+
 ### 键值存储
 
 每个插件拥有独立命名空间，互不干扰。
@@ -249,6 +288,23 @@ async def setup(ctx):
     "choice":      {"type": "select",  "default": "a",   "label": "单选", "options": ["a","b","c"], "section": "参数"},
     "tags":        {"type": "multiselect", "default": [], "label": "多选", "options": ["x","y","z"], "section": "参数"},
     "long_text":   {"type": "text",    "default": "",    "label": "多行文本", "section": "参数"},
+    "required_key":{"type": "password","default": "",    "label": "密钥", "section": "参数", "required": True},
+    "items":       {"type": "list",    "default": [],    "label": "列表", "section": "参数",
+                    "item_label": "项",
+                    "fields": {
+                        "name":    {"type": "string",  "label": "名称"},
+                        "value":   {"type": "string",  "label": "值"},
+                        "tags":    {"type": "multiselect", "label": "标签", "options": ["a","b","c"], "default": []},
+                        "enabled": {"type": "boolean", "label": "启用", "default": True},
+                    }},
+    # 会话选择器：从账号的群/频道/私聊里挑，存会话 id（multi=True 存 id 数组）
+    "target":      {"type": "chat",    "default": 0,     "label": "转发到", "section": "会话",
+                    "multi": False, "chat_types": ["group", "channel"]},
+    # 只读展示：显示 text；不写 text 则显示该键当前值（可由 ctx.update_config 写入当状态看）
+    "tip":         {"type": "info",    "label": "使用说明", "text": "先填密钥再启用", "section": "会话"},
+    "last_run":    {"type": "info",    "default": "",    "label": "上次运行", "section": "会话"},
+    # 动作按钮：点击触发插件用 ctx.action("test") 注册的函数
+    "test":        {"type": "action",  "label": "测试连接", "action": "test", "section": "会话"},
 }
 ```
 
@@ -256,14 +312,27 @@ async def setup(ctx):
 
 | 属性 | 说明 |
 |------|------|
-| `type` | `string` / `password` / `number` / `boolean` / `select` / `multiselect` / `slider` / `text` |
-| `default` | 默认值（必填。`multiselect` 为列表，`slider`/`number` 为数字） |
+| `type` | `string` / `password` / `number` / `boolean` / `select` / `multiselect` / `slider` / `text` / `list` / `chat` / `action` / `info` |
+| `default` | 默认值（必填。`multiselect`/`list` 为列表，`slider`/`number` 为数字） |
 | `label` | 显示名 |
 | `help` | 字段下方说明文字（可选） |
 | `options` | `select`/`multiselect` 候选项，`["a","b"]` 或 `[{"value":"a","label":"甲"}]` |
-| `min`/`max`/`step` | `number`/`slider` 取值约束（可选） |
+| `min`/`max`/`step` | `number`/`slider` 取值约束（可选）。`min`/`max` 同时用于保存前校验 |
+| `required` | 保存前校验：为 `True` 时该项不能为空，否则前端拦下不保存（`info`/`action` 不校验） |
 | `section` | 分区标题（可选）。同一 `section` 的字段在表单中归为一组 |
 | `show_if` | 条件显示，如 `{"enable_x": True}`：仅当该字段当前值匹配时显示 |
+| `fields` | `list` 专用：每行的子字段 `{子键: 子 spec}`，子字段可用上述基础类型 |
+| `item_label` | `list` 专用：每行标题前缀（默认「项」），如显示为「规则 1」「规则 2」 |
+| `multi` | `chat` 专用：`True` 为多选（存会话 id 数组），默认单选（存单个 id） |
+| `chat_types` | `chat` 专用：过滤会话类型，取值 `private`/`bot`/`group`/`channel`，如 `["group","channel"]` |
+| `session` | `chat` 专用：指定用哪个账号枚举会话；不填取插件应用范围内首个已连接用户账号 |
+| `text` | `info` 专用：要展示的固定文字；不填则显示该键的当前值 |
+| `action` | `action` 专用：动作名，须与插件里 `ctx.action("名字")` 注册的一致 |
+| `danger` | `action` 专用：`True` 时点击前弹确认框（用于有风险的操作） |
+
+- `list` 取值为 list-of-dict，`ctx.config["items"]` 直接拿到 `[{"name":..., ...}, ...]` 遍历即可。行内子字段暂不支持 `show_if`，也不建议 `list` 再嵌套 `list`。
+- `chat` 取值为会话 id（`multi` 时为 id 数组），插件里 `ctx.config["target"]` 直接当 chat_id 用。管理员没连账号时可手填 id 兜底。
+- `info` 只展示不收集输入。要显示动态状态（如「上次运行时间」），让插件用 `ctx.update_config` 写回同名键即可。
 
 插件的全部配置均通过 `config_schema` 声明，不得修改平台配置。
 

@@ -51,6 +51,9 @@ export const api = {
   getPluginAccounts: (id) => request('GET', `/api/plugins/${id}/accounts`),
   setPluginAccounts: (id, sessions) => request('PUT', `/api/plugins/${id}/accounts`, { sessions }),
   getPluginWebhook: (id) => request('GET', `/api/plugins/${id}/webhook`),
+  listPluginChats: (id, session = '') =>
+    request('GET', `/api/plugins/${id}/dialogs${session ? `?session=${encodeURIComponent(session)}` : ''}`),
+  invokePluginAction: (id, action) => request('POST', `/api/plugins/${id}/action/${encodeURIComponent(action)}`),
 
   // GitHub 导入
   githubList: (source, token) => request('POST', '/api/plugins/github/list', { source, token }),
