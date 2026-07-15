@@ -12,7 +12,14 @@ export default defineConfig({
     vue(),
     federation({
       name: 'awbotnest_host',
-      remotes: {},                      // 空：插件在运行时用 __federation_method_setRemote 动态注册
+      // 插件在运行时用 __federation_method_setRemote 动态注册，构建期未知，故这里本应为空。
+      // 但 @originjs/vite-plugin-federation 在 remotes 为空时有个已知 bug：不会把共享作用域
+      // 占位符 __rf_placeholder__shareScope 替换成真实共享表，占位符原样漏进产物，
+      // 导致加载任意 vue 模式插件、初始化共享作用域时抛 "__rf_placeholder__shareScope is not defined"。
+      // 放一个永不加载的哑 remote 触发替换逻辑（运行时真正的 remote 仍走动态注册）。
+      remotes: {
+        __rf_stub__: '__rf_stub__@http://127.0.0.1:9/__rf_stub__.js',
+      },
       shared: {
         vue: { singleton: true, requiredVersion: false },
       },
