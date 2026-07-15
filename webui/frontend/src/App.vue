@@ -353,8 +353,8 @@ onMounted(() => {
 @keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .update-wrap { position: relative; display: inline-flex; align-items: center; }
 .update-pop {
-  position: absolute; bottom: calc(100% + 8px); left: 50%;
-  transform: translateX(-50%) translateY(4px);
+  position: absolute; bottom: calc(100% + 8px); left: 0;
+  transform: translateY(4px);
   min-width: 176px; max-width: 240px; padding: 10px 12px;
   background: var(--bg-elevated); border: 1px solid var(--border-light);
   border-radius: var(--radius-sm); box-shadow: var(--shadow);
@@ -363,7 +363,7 @@ onMounted(() => {
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
 .update-wrap:hover .update-pop {
-  opacity: 1; visibility: visible; transform: translateX(-50%) translateY(0);
+  opacity: 1; visibility: visible; transform: translateY(0);
 }
 .update-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .update-pop-title { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
