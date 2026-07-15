@@ -195,7 +195,7 @@ async def h(client, message):
 
 ### 浏览器自动化
 
-需要渲染 JS 页面、过反爬/指纹检测、抓动态内容时，用 `ctx.browser`——平台已托管浏览器，插件无需自己装。引擎优先 **CloakBrowser**（停用 Chromium，过 Cloudflare/指纹检测），未就绪时自动回退平台内置的 **Playwright Chromium**，插件无感。
+需要渲染 JS 页面、过反爬/指纹检测、抓动态内容时，用 `ctx.browser`——平台已托管浏览器，插件无需自己装。引擎优先 **CloakBrowser**（停用 Chromium，过 Cloudflare/指纹检测），不可用时自动回退 **Playwright Chromium**，插件无感。
 
 ```python
 # 取渲染后的 HTML 源码
@@ -212,7 +212,7 @@ data = await ctx.browser.run("https://example.com", grab, headless=True)
 - 参数：`cookies`（`"k=v; k2=v2"` 请求头串）、`ua`（User-Agent）、`headless`（默认 `True`）、`timeout`（秒）、`proxy`。
 - `ctx.browser.run` 的 `action` 是**同步函数**，收到同步 `page` 对象（`goto`/`click`/`fill`/`content`/`inner_text`/`screenshot` 等），页面用完平台自动关闭。
 - `ctx.browser.engine` 返回当前引擎名（`"cloakbrowser"` / `"playwright"` / `None`）。
-- CloakBrowser 内核在平台**首次启动时后台下载**到 `data/browser_cache`（随卷持久化）；下载完成前 `ctx.browser` 走 Playwright，完成后自动切到 CloakBrowser。出站默认走平台代理。
+- 为减小镜像体积，浏览器内核不随镜像发布，也不在启动时下载：**插件首次调用 `ctx.browser` 时**才下载到 `data/browser_cache`（随卷持久化，容器重建不必重下）。所以首次调用会多花一次下载时间，之后就快了；不用浏览器的部署零开销。出站默认走平台代理。
 
 ### 键值存储
 
