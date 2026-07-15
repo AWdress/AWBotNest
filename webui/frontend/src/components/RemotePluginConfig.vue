@@ -48,8 +48,14 @@ async function loadRemote() {
     // 若从 /fe/assets/remoteEntry.js 加载则会叠成 /fe/assets/assets/xxx（404）。
     // 后端对 /fe/remoteEntry.js 找不到时会回退到 dist/assets/remoteEntry.js，兼容两种产物布局。
     const name = `plugin_${props.pluginId}`
+    // remoteEntry 是固定文件名的联邦入口，浏览器可能仍复用早先缓存的旧入口，
+    // 而旧入口引用的 hash chunk 在插件更新后已被删除 → 拉取 Config chunk 报 404
+    // （"Failed to fetch dynamically imported module"）。加时间戳强制每次取最新入口。
+    // 入口内部把 chunk 引成 ./assets/xxx，按「加载 URL 的路径」相对解析，查询串不会带到
+    // chunk 上（/fe/remoteEntry.js?t=123 → ./assets/x.js 仍解析为 /fe/assets/x.js），
+    // 故带内容 hash 的 chunk 依旧走长缓存，只有入口每次刷新。
     __federation_method_setRemote(name, {
-      url: () => Promise.resolve(`/api/plugins/${props.pluginId}/fe/remoteEntry.js`),
+      url: () => Promise.resolve(`/api/plugins/${props.pluginId}/fe/remoteEntry.js?t=${Date.now()}`),
       format: 'esm',
       from: 'vite',
     })
