@@ -891,12 +891,14 @@ onUnmounted(() => {
   font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
   color: #fff; letter-spacing: 0.5px;
+  flex-shrink: 0; white-space: nowrap;
 }
 
 /* vue 插件：标明该插件配置界面是插件自带的自定义界面，跟「官方」徽章同款圆角小标 */
 .badge-vue {
   font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: 10px;
   background: var(--accent-2); color: #fff; letter-spacing: 0.5px;
+  flex-shrink: 0; white-space: nowrap;
 }
 
 .store-title { display: flex; align-items: center; gap: 10px; }
