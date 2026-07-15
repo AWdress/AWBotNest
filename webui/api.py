@@ -352,7 +352,17 @@ async def plugin_frontend_asset(
              ".css": "text/css"}.get(suffix)
     if media is None:
         media = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
-    return FileResponse(str(target), media_type=media)
+    resp = FileResponse(str(target), media_type=media)
+    # 按文件区分缓存策略：
+    # - remoteEntry.js 是固定文件名的联邦入口，浏览器会缓存它；但每次插件更新，
+    #   它引用的 hash chunk 名会变、旧 chunk 被删。若缓存旧入口，就会去请求已删除的
+    #   hash chunk → 404。故入口文件禁缓存，每次校验新鲜度。
+    # - 带内容 hash 的 chunk：内容变则名字变，可安全长缓存。
+    if target.name == "remoteEntry.js":
+        resp.headers["Cache-Control"] = "no-cache"
+    else:
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resp
 
 
 @app.api_route(
