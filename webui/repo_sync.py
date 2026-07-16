@@ -195,7 +195,9 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
         if ver:
             versions[pid] = ver
         result["downloaded"].append(pid)
-        logger.info("插件商店下载：%s（%d 文件，来自 %s）", pid, len(files), plugin.get("repo_url"))
+        from kernel.registry import registry as _reg
+        logger.info("插件商店下载：%s（%d 文件，来自 %s）",
+                    _reg.display_name(pid), len(files), plugin.get("repo_url"))
 
     state["versions"] = versions
     _save_state(state)
@@ -226,9 +228,11 @@ async def _reload_running(plugin_ids: list[str]) -> list[str]:
                 continue  # 未运行的只更新文件，不自动启用
             await runtime.reload(pid)
             reloaded.append(pid)
-            logger.info("插件 [%s] 更新后已自动重载", pid)
+            from kernel.registry import registry as _reg
+            logger.info("插件 [%s] 更新后已自动重载", _reg.display_name(pid))
         except Exception as e:  # noqa: BLE001
-            logger.warning("插件 [%s] 更新后自动重载失败: %r", pid, e)
+            from kernel.registry import registry as _reg
+            logger.warning("插件 [%s] 更新后自动重载失败: %r", _reg.display_name(pid), e)
     return reloaded
 
 

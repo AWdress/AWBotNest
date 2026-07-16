@@ -158,12 +158,12 @@ class PluginRuntime:
                 meta.loaded = True
                 meta.enabled = True
                 meta.error = None
-                logger.info("插件已启用: %s", plugin_id)
+                logger.info("插件已启用: %s", meta.name)
                 return meta
             except Exception as e:  # noqa: BLE001
                 # 加载失败：先注销 setup 中途已注册的 handler/定时任务（防句柄泄漏），
                 # 再清理模块，标记错误，不影响其它插件。
-                logger.exception("插件启用失败: %s", plugin_id)
+                logger.exception("插件启用失败: %s", meta.name)
                 if ctx is not None:
                     try:
                         ctx._unregister_all()
@@ -207,7 +207,7 @@ class PluginRuntime:
                         logger.warning("插件 teardown 异常 [%s]: %r", plugin_id, e)
                 # 3) 卸载模块
                 self._cleanup_module(plugin_id)
-                logger.info("插件已停用: %s", plugin_id)
+                logger.info("插件已停用: %s", registry.display_name(plugin_id))
 
             if persist:
                 registry.set_enabled(plugin_id, False)
@@ -264,7 +264,7 @@ class PluginRuntime:
                 await self._disable_locked(plugin_id, persist=False)
                 await self._enable_locked(plugin_id, ensure_deps=False)
                 if plugin_id not in self._loaded:
-                    logger.warning("插件 [%s] 重挂失败，启用意图保留待重试", plugin_id)
+                    logger.warning("插件 [%s] 重挂失败，启用意图保留待重试", registry.display_name(plugin_id))
 
     # ──────────────────────────────────────────────
     # 内部

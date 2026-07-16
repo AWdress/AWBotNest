@@ -190,6 +190,13 @@ async def ensure(plugin_id: str, reqs: list[str]) -> dict[str, Any]:
     if not reqs:
         return {"ok": True, "installed": []}
 
+    # 日志展示用中文插件名（本地导入避免与 registry 形成导入环）
+    try:
+        from kernel.registry import registry as _reg
+        disp = _reg.display_name(plugin_id)
+    except Exception:
+        disp = plugin_id
+
     info = check(reqs)
 
     if info["invalid"]:
@@ -201,7 +208,7 @@ async def ensure(plugin_id: str, reqs: list[str]) -> dict[str, Any]:
             f"需要 {c['req']}，但已安装 {c['installed']}（同进程不能共存两个版本）"
             for c in info["conflict"]
         )
-        logger.warning("插件 [%s] 依赖冲突，拒绝启用: %s", plugin_id, msg)
+        logger.warning("插件 [%s] 依赖冲突，拒绝启用: %s", disp, msg)
         return {"ok": False, "installed": [], "error": f"依赖冲突，已拒绝启用: {msg}"}
 
     missing = info["missing"]
@@ -211,16 +218,16 @@ async def ensure(plugin_id: str, reqs: list[str]) -> dict[str, Any]:
     # 装前快照环境不一致状态，用于事后差分（排除本来就存在、与本插件无关的不一致）
     before = await asyncio.to_thread(_pip_check)
 
-    logger.info("插件 [%s] 安装依赖: %s", plugin_id, missing)
+    logger.info("插件 [%s] 安装依赖: %s", disp, missing)
     ok, out = await asyncio.to_thread(_pip_install, missing)
     if not ok:
         tail = " | ".join(out.strip().splitlines()[-5:]) or "无输出"
-        logger.warning("插件 [%s] 依赖安装失败: %s", plugin_id, tail)
+        logger.warning("插件 [%s] 依赖安装失败: %s", disp, tail)
         return {"ok": False, "installed": [], "error": f"依赖安装失败: {tail}"}
 
     # 让 import 系统看到新装进 site-packages 的包
     importlib.invalidate_caches()
-    logger.info("插件 [%s] 依赖安装完成: %s", plugin_id, missing)
+    logger.info("插件 [%s] 依赖安装完成: %s", disp, missing)
 
     # 装完体检：pip 装缺失包时可能顺带升/降级了平台/别的插件依赖的包，
     # 这类传递冲突不在本插件声明里、check 看不到。用装前/装后差分只报「新增」的
@@ -232,6 +239,6 @@ async def ensure(plugin_id: str, reqs: list[str]) -> dict[str, Any]:
     if new_broken:
         warn = " | ".join(sorted(new_broken))
         logger.warning("插件 [%s] 装依赖后环境出现新的不一致（可能殃及平台/其它插件）: %s",
-                       plugin_id, warn)
+                       disp, warn)
         result["warning"] = f"依赖已装，但环境出现新的不一致，可能影响平台或其它插件: {warn}"
     return result
