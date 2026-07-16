@@ -227,16 +227,16 @@ class AccountManager:
         for app in self.user_apps:
             session_file = self.workdir / f"{app.name}.session"
             if not session_file.exists():
-                logger.info("user_app [%s] 无 session 文件，跳过（请通过前端/Bot 登录）", app.name)
+                logger.info("用户账号 [%s] 还没登录过，跳过（请在网页控制台或 Bot 里登录）", app.name)
                 continue
             if app.name in paused:
-                logger.info("user_app [%s] 已手动下线，跳过", app.name)
+                logger.info("用户账号 [%s] 已手动下线，跳过", app.name)
                 continue
             try:
                 await app.start()
-                logger.info("user_app [%s] 启动成功", app.name)
+                logger.info("用户账号 [%s] 启动成功", app.name)
             except Exception as e:  # noqa: BLE001
-                logger.warning("user_app [%s] 启动失败（可能未登录）: %r", app.name, e)
+                logger.warning("用户账号 [%s] 启动失败（可能还没登录）: %r", app.name, e)
                 try:
                     if app.is_connected:
                         await app.stop()
@@ -252,7 +252,7 @@ class AccountManager:
         try:
             await self.start_bots()
         except RuntimeError as e:
-            logger.warning("Bot 启动跳过（可在 WebUI 配置凭据后重启）: %s", e)
+            logger.warning("Bot 暂不启动（可在网页控制台填好凭据后重启）: %s", e)
         await self.start_users()
 
         # 同步到全局 manager，保持旧代码（services/adapters）可用

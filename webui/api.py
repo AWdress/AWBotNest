@@ -166,7 +166,7 @@ async def upload_plugin(file: UploadFile = File(...), user=Depends(_auth_pwc)):
     if meta.error:
         # 保留文件但前端会标红显示错误
         logger.warning("上传的插件元数据有问题 [%s]: %s", meta.id, meta.error)
-    logger.info("插件已上传: %s", filename)
+    logger.info("插件已上传: %s", meta.name)
     return {"status": "success", "plugin": meta.to_dict()}
 
 
@@ -242,7 +242,7 @@ async def github_import_files(body: Dict[str, Any], user=Depends(_auth_pwc)):
         if meta and meta.error:
             logger.warning("GitHub 导入的插件元数据有问题 [%s]: %s", pid, meta.error)
         imported.append(meta.to_dict() if meta else {"id": pid, "error": "导入后未找到入口"})
-        logger.info("已从 GitHub 导入插件: %s（%d 个文件）", pid, len(files))
+        logger.info("已从 GitHub 导入插件: %s（%d 个文件）", meta.name if meta else pid, len(files))
     return {"status": "success", "imported": imported}
 
 
@@ -279,6 +279,8 @@ async def delete_plugin(plugin_id: str, user=Depends(_auth)):
     """删除插件：先停用，再删文件/目录与状态记录（支持单文件与文件夹两种形态）"""
     import shutil
     runtime = _get_runtime()
+    # 删文件后 get_meta 取不到，先把中文名留下来供日志用
+    _disp = registry.display_name(plugin_id)
     await runtime.disable(plugin_id)
     # 文件夹插件删整个目录，单文件插件删 .py
     if registry.is_package_plugin(plugin_id):
@@ -290,7 +292,7 @@ async def delete_plugin(plugin_id: str, user=Depends(_auth)):
         if f.exists():
             f.unlink()
     registry.remove(plugin_id)
-    logger.info("插件已删除: %s", plugin_id)
+    logger.info("插件已删除: %s", _disp)
     return {"status": "success"}
 
 
@@ -1213,6 +1215,6 @@ async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):
             while True:
                 await asyncio.sleep(360)
     except OSError as e:
-        logger.error("Web 服务 OSError: %s（端口 %s 可能被占用）", e, port)
+        logger.error("Web 服务启动失败（端口 %s 可能被占用）：%s", port, e)
         while True:
             await asyncio.sleep(3600)

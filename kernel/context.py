@@ -27,14 +27,33 @@ class _PluginLoggerAdapter:
     插件用 ctx.log.info/warning/error/debug(...)，效果：[插件id] 你的消息
     """
 
-    def __init__(self, plugin_id: str):
+    def __init__(self, plugin_id: str, registry=None):
         self._pid = plugin_id
+        self._registry = registry
+        self._name_cache: Optional[str] = None
+
+    def _display_name(self) -> str:
+        # 优先显示中文插件名（元数据 name），取不到再回退插件 id。
+        # 解析元数据要读文件 + AST，成本不低；日志是高频路径，故解析一次即缓存。
+        # 每次启用/重载都会新建 ctx 与本 adapter，缓存不会跨重载失效。
+        if self._name_cache is not None:
+            return self._name_cache
+        name = self._pid
+        if self._registry is not None:
+            try:
+                meta = self._registry.get_meta(self._pid)
+                if meta and meta.name:
+                    name = meta.name
+            except Exception:
+                pass
+        self._name_cache = name
+        return name
 
     def _emit(self, level: str, msg, *args, **kwargs):
         fn = getattr(_root_logger, level)
         text = str(msg) % args if args else str(msg)
-        # extra.plugin 供 log_stream 读取，前缀供文件/控制台可读
-        fn(f"[{self._pid}] {text}", extra={"plugin": self._pid}, **kwargs)
+        # 前缀显示插件中文名，便于阅读；extra.plugin 仍存插件 id 作为稳定标识供 log_stream/前端使用
+        fn(f"[{self._display_name()}] {text}", extra={"plugin": self._pid}, **kwargs)
 
     def debug(self, msg, *a, **k):   self._emit("debug", msg, *a, **k)
     def info(self, msg, *a, **k):    self._emit("info", msg, *a, **k)
@@ -43,8 +62,8 @@ class _PluginLoggerAdapter:
     def exception(self, msg, *a, **k): self._emit("error", msg, *a, **k)
 
 
-def _make_plugin_logger(plugin_id: str):
-    return _PluginLoggerAdapter(plugin_id)
+def _make_plugin_logger(plugin_id: str, registry=None):
+    return _PluginLoggerAdapter(plugin_id, registry)
 
 
 class WebhookRequest:
@@ -186,7 +205,7 @@ class PlatformContext:
 
         # 暴露给插件的能力
         self.filters = _filters
-        self.log = _make_plugin_logger(plugin_id)
+        self.log = _make_plugin_logger(plugin_id, registry)
         self.kv = _KVStore(kv_dir / f"{plugin_id}.sqlite")
         # 主动中断消息传播的信号：handler 内 `raise ctx.StopPropagation` 可阻止
         # 后续（更大 group）的其它插件/handler 再处理这条消息。

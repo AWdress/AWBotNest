@@ -317,6 +317,17 @@ class PluginRegistry:
             return None
         return self.parse_meta(entry, plugin_id)
 
+    def display_name(self, plugin_id: str) -> str:
+        """插件展示名：优先中文元数据 name，取不到（文件已删/解析失败）回退 id。
+        用于日志、通知等给人看的场景。"""
+        try:
+            meta = self.get_meta(plugin_id)
+            if meta and meta.name:
+                return meta.name
+        except Exception:
+            pass
+        return plugin_id
+
     # ──────────────────────────────────────────────
     # 启用状态读写
     # ──────────────────────────────────────────────
