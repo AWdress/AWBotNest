@@ -94,7 +94,10 @@ def _get_accounts():
 async def index():
     idx = STATIC_DIR / "index.html"
     if idx.exists():
-        return FileResponse(str(idx))
+        # index.html 是固定文件名的应用入口，浏览器缓存后会一直引用旧 hash 的 JS/CSS，
+        # 导致新构建加载不进来（前端改动"看不到效果"）。入口禁缓存、每次校验，
+        # 带 hash 的 assets 仍长缓存不变（见 plugin_static 的缓存策略）。
+        return FileResponse(str(idx), headers={"Cache-Control": "no-cache"})
     return {"message": "AWBotNest 平台运行中。前端尚未构建，请在 webui/frontend 执行 npm run build。"}
 
 
