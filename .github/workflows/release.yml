@@ -33,17 +33,29 @@ jobs:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
 
+      # 只需两个固定标签（vX.Y.Z 与 latest），用 shell 直接算即可。
+      # 不再用 docker/metadata-action：它会额外调 GitHub API 拉仓库信息来生成标签，
+      # GitHub API 偶发 500 时整个发布会挂；自己算标签没有这个外部依赖，也更快。
       - name: 生成镜像标签与元数据
         id: meta
-        uses: docker/metadata-action@v5
-        with:
-          # 镜像名 = Docker Hub 用户名/awbotnest（用户名与令牌均存于 Secrets）
-          images: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest
-          tags: |
-            # 完整版本号：v1.0.0
-            type=semver,pattern=v{{version}}
-            # 发布即最新
-            type=raw,value=latest
+        env:
+          IMAGE: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest
+          VER: ${{ github.ref_name }}          # 形如 v1.0.9
+        run: |
+          CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          {
+            echo "tags<<__EOF__"
+            echo "${IMAGE}:${VER}"
+            echo "${IMAGE}:latest"
+            echo "__EOF__"
+            echo "labels<<__EOF__"
+            echo "org.opencontainers.image.title=awbotnest"
+            echo "org.opencontainers.image.version=${VER}"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+            echo "org.opencontainers.image.created=${CREATED}"
+            echo "__EOF__"
+          } >> "$GITHUB_OUTPUT"
 
       - name: 构建并推送版本镜像
         uses: docker/build-push-action@v6
