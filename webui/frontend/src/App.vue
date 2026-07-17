@@ -297,11 +297,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.layout { display: flex; height: 100vh; overflow: hidden; }
+.layout { display: flex; height: 100vh; overflow: hidden; position: relative; }
 
 .sidebar {
   width: var(--sidebar-width);
-  background: var(--bg-sidebar);
+  background: rgba(11, 12, 18, .9);
+  backdrop-filter: blur(18px);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -331,8 +332,9 @@ onMounted(() => {
 }
 .nav-item:hover { background: var(--bg-hover); color: #ffffff; }
 .nav-item.active {
-  background: var(--accent-dim);
+  background: linear-gradient(90deg, rgba(48,128,240,.2), rgba(48,128,240,.08));
   color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
@@ -404,9 +406,11 @@ onMounted(() => {
   padding: 0 32px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  background: rgba(10, 14, 23, .62);
+  backdrop-filter: blur(18px);
 }
-.topbar h1 { font-size: 18px; font-weight: 600; }
-.content { flex: 1; overflow-y: auto; padding: 32px; }
+.topbar h1 { font-size: 18px; font-weight: 700; letter-spacing: .2px; }
+.content { flex: 1; overflow-y: auto; padding: 32px; position: relative; }
 
 /* 顶栏 logo / 操作按钮：默认(桌面)隐藏，手机显示 */
 .topbar-logo { display: none; width: 28px; height: 28px; object-fit: contain; }

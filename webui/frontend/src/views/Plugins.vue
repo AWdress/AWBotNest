@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
 import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import RemotePluginConfig from '../components/RemotePluginConfig.vue'
@@ -341,6 +341,20 @@ const stats = computed(() => ({
   error: plugins.value.filter((p) => p.error).length,
 }))
 
+const density = ref(localStorage.getItem('awbotnest_plugin_density') || 'comfortable')
+const pluginFilter = ref('all')
+const filteredPlugins = computed(() => {
+  if (pluginFilter.value === 'enabled') return plugins.value.filter((p) => p.enabled && !p.error)
+  if (pluginFilter.value === 'disabled') return plugins.value.filter((p) => !p.enabled && !p.error)
+  if (pluginFilter.value === 'error') return plugins.value.filter((p) => p.error)
+  return plugins.value
+})
+
+function setDensity(value) {
+  density.value = value
+  localStorage.setItem('awbotnest_plugin_density', value)
+}
+
 // ── 插件市场（多仓库聚合） ──
 const store = ref([])
 const officialIds = ref([])
@@ -363,6 +377,8 @@ function isOfficial(p) { return p.official || officialSet.value.has(p.id) }
 const searchOpen = ref(false)
 const searchQuery = ref('')
 const searchInput = ref(null)
+const searchFilter = ref('all')
+const searchActiveIndex = ref(0)
 
 const searchablePlugins = computed(() => {
   const localById = new Map(plugins.value.map((p) => [p.id, p]))
@@ -397,18 +413,39 @@ const searchablePlugins = computed(() => {
 
 const searchResults = computed(() => {
   const words = searchQuery.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (!words.length) return searchablePlugins.value
   return searchablePlugins.value.filter((p) => {
+    if (searchFilter.value === 'installed' && !p.installed) return false
+    if (searchFilter.value === 'updates' && !p.updateAvailable) return false
+    if (searchFilter.value === 'available' && p.installed) return false
+    if (!words.length) return true
     const text = [p.name, p.id, p.description, p.author, p.repo].join(' ').toLowerCase()
     return words.every((word) => text.includes(word))
   })
 })
 
+watch([searchQuery, searchFilter], () => { searchActiveIndex.value = 0 })
+
 function openPluginSearch() {
   searchQuery.value = ''
+  searchFilter.value = 'all'
+  searchActiveIndex.value = 0
   searchOpen.value = true
   if (store.value.length === 0 && !storeBusy.value) loadStore(false)
   nextTick(() => searchInput.value?.focus())
+}
+
+function onSearchInputKeydown(e) {
+  if (!searchResults.value.length) return
+  if (e.key === 'ArrowDown') {
+    e.preventDefault()
+    searchActiveIndex.value = (searchActiveIndex.value + 1) % searchResults.value.length
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault()
+    searchActiveIndex.value = (searchActiveIndex.value - 1 + searchResults.value.length) % searchResults.value.length
+  } else if (e.key === 'Enter') {
+    e.preventDefault()
+    runSearchAction(searchResults.value[searchActiveIndex.value])
+  }
 }
 
 function closePluginSearch() {
@@ -422,6 +459,33 @@ async function runSearchAction(p) {
   }
   if (p.localPlugin) {
     closePluginSearch()
+    await openConfig(p.localPlugin)
+  }
+}
+
+const detailOpen = ref(false)
+const detailTargetId = ref('')
+const detailTarget = computed(() => searchablePlugins.value.find((p) => p.id === detailTargetId.value) || null)
+
+function openPluginDetails(p) {
+  detailTargetId.value = p.id
+  detailOpen.value = true
+  closeMenu()
+}
+
+function closePluginDetails() {
+  detailOpen.value = false
+}
+
+async function runDetailAction() {
+  const p = detailTarget.value
+  if (!p) return
+  if (p.updateAvailable || !p.installed) {
+    if (p.marketPlugin) await download(p.marketPlugin)
+    return
+  }
+  if (p.localPlugin) {
+    closePluginDetails()
     await openConfig(p.localPlugin)
   }
 }
@@ -576,6 +640,20 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <div class="plugin-controls">
+      <div v-if="tab === 'mine'" class="filter-pills" aria-label="筛选插件">
+        <button :class="{ active: pluginFilter === 'all' }" @click="pluginFilter='all'">全部 {{ stats.total }}</button>
+        <button :class="{ active: pluginFilter === 'enabled' }" @click="pluginFilter='enabled'">已启用 {{ stats.enabled }}</button>
+        <button :class="{ active: pluginFilter === 'disabled' }" @click="pluginFilter='disabled'">未启用 {{ stats.total - stats.enabled - stats.error }}</button>
+        <button v-if="stats.error" class="danger" :class="{ active: pluginFilter === 'error' }" @click="pluginFilter='error'">异常 {{ stats.error }}</button>
+      </div>
+      <div v-else class="control-caption">浏览并安装公开仓库中的插件</div>
+      <div class="density-switch" aria-label="卡片显示密度">
+        <button :class="{ active: density === 'comfortable' }" @click="setDensity('comfortable')">舒适</button>
+        <button :class="{ active: density === 'compact' }" @click="setDensity('compact')">紧凑</button>
+      </div>
+    </div>
+
     <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
 
     <!-- ════ 我的插件 ════ -->
@@ -585,10 +663,14 @@ onUnmounted(() => {
         <p>还没有插件。</p>
         <p class="muted">去「插件市场」安装，或把 .py 文件拖到这里 / 点「上传插件」。</p>
       </div>
-      <div v-else class="grid">
-        <div v-for="p in plugins" :key="p.id" class="card plugin-card clickable"
+      <div v-else-if="filteredPlugins.length === 0" class="empty card filter-empty">
+        <p>没有符合当前筛选条件的插件。</p>
+        <button class="btn" @click="pluginFilter='all'">查看全部插件</button>
+      </div>
+      <div v-else class="grid" :class="{ compact: density === 'compact' }">
+        <div v-for="p in filteredPlugins" :key="p.id" class="card plugin-card clickable"
              :class="{ err: p.error, 'menu-open': menuFor === p.id }"
-             @click="openConfig(p)">
+             @click="openPluginDetails(p)">
           <div class="card-head">
             <div class="store-title">
               <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -653,8 +735,8 @@ onUnmounted(() => {
         <!-- 有更新的已安装插件 -->
         <div v-if="storeUpdatable.length" class="update-section">
           <div class="section-label">可更新（{{ storeUpdatable.length }}）</div>
-          <div class="grid">
-            <div v-for="p in storeUpdatable" :key="p.id" class="card plugin-card store-card has-update">
+          <div class="grid" :class="{ compact: density === 'compact' }">
+            <div v-for="p in storeUpdatable" :key="p.id" class="card plugin-card store-card has-update clickable" @click="openPluginDetails(p)">
               <div class="card-head">
                 <div class="store-title">
                   <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -674,7 +756,7 @@ onUnmounted(() => {
               </div>
 
               <div class="card-actions">
-                <button class="btn sm btn-primary" @click="download(p)" :disabled="dlBusy[p.id]">
+                <button class="btn sm btn-primary" @click.stop="download(p)" :disabled="dlBusy[p.id]">
                   <template v-if="dlBusy[p.id]">更新中…</template>
                   <template v-else>
                     <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -692,8 +774,8 @@ onUnmounted(() => {
         <div v-if="storeAvailable.length === 0 && storeUpdatable.length === 0" class="empty card">
           <p class="muted">市场里没有可安装的新插件（仓库里的都已安装），或还没配置额外仓库。</p>
         </div>
-        <div v-else-if="storeAvailable.length" class="grid">
-        <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card">
+        <div v-else-if="storeAvailable.length" class="grid" :class="{ compact: density === 'compact' }">
+        <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card clickable" @click="openPluginDetails(p)">
           <div class="card-head">
             <div class="store-title">
               <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -713,7 +795,7 @@ onUnmounted(() => {
           </div>
 
           <div class="card-actions">
-            <button class="btn sm btn-primary" @click="download(p)" :disabled="dlBusy[p.id]">
+            <button class="btn sm btn-primary" @click.stop="download(p)" :disabled="dlBusy[p.id]">
               <template v-if="dlBusy[p.id]">安装中…</template>
               <template v-else>
                 <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -762,8 +844,16 @@ onUnmounted(() => {
             <circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>
           </svg>
           <input ref="searchInput" v-model="searchQuery" type="search"
-                 placeholder="输入插件名称、作者、说明或英文标识" autocomplete="off" />
+                 placeholder="输入插件名称、作者、说明或英文标识" autocomplete="off"
+                 @keydown="onSearchInputKeydown" />
           <span class="search-count">{{ searchResults.length }}</span>
+        </div>
+
+        <div class="search-filters" aria-label="搜索范围">
+          <button :class="{ active: searchFilter === 'all' }" @click="searchFilter='all'">全部</button>
+          <button :class="{ active: searchFilter === 'installed' }" @click="searchFilter='installed'">已安装</button>
+          <button :class="{ active: searchFilter === 'updates' }" @click="searchFilter='updates'">可更新</button>
+          <button :class="{ active: searchFilter === 'available' }" @click="searchFilter='available'">可安装</button>
         </div>
 
         <div class="search-list">
@@ -772,8 +862,9 @@ onUnmounted(() => {
             <template v-if="searchQuery.trim()">没有找到“{{ searchQuery.trim() }}”相关的插件</template>
             <template v-else>暂时没有可搜索的插件</template>
           </div>
-          <div v-for="p in searchResults" :key="p.id" class="search-item"
-               :class="{ actionable: p.installed && !p.updateAvailable }"
+          <div v-for="(p, index) in searchResults" :key="p.id" class="search-item"
+               :class="{ actionable: p.installed && !p.updateAvailable, active: index === searchActiveIndex }"
+               @mouseenter="searchActiveIndex=index"
                @click="p.installed && !p.updateAvailable && runSearchAction(p)">
             <img :src="p.icon || logo" class="search-icon" :class="{ fallback: !p.icon }" alt="" />
             <div class="search-info">
@@ -804,9 +895,56 @@ onUnmounted(() => {
         </div>
         <div class="search-foot">
           <span>支持搜索名称、作者、说明和英文标识</span>
-          <span><kbd>Esc</kbd> 关闭</span>
+          <span><kbd>↑↓</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Esc</kbd> 关闭</span>
         </div>
       </div>
+    </div>
+
+    <!-- 插件详情侧栏 -->
+    <div v-if="detailOpen && detailTarget" class="detail-mask" @click.self="closePluginDetails">
+      <aside class="plugin-drawer" role="dialog" aria-modal="true" aria-label="插件详情">
+        <div class="drawer-head">
+          <span class="drawer-kicker">插件详情</span>
+          <button class="search-close" type="button" aria-label="关闭" @click="closePluginDetails">
+            <svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+        <div class="drawer-identity">
+          <img :src="detailTarget.icon || logo" :class="{ fallback: !detailTarget.icon }" alt="" />
+          <div>
+            <div class="drawer-name-row">
+              <h2>{{ detailTarget.name }}</h2>
+              <span v-if="detailTarget.official" class="badge-official">官方</span>
+            </div>
+            <div class="drawer-version" v-if="detailTarget.version">版本 v{{ detailTarget.version }}</div>
+          </div>
+        </div>
+        <div class="drawer-state" :class="detailTarget.updateAvailable ? 'update' : detailTarget.error ? 'error' : detailTarget.installed ? 'installed' : 'available'">
+          <strong>{{ detailTarget.updateAvailable ? '有新版本可更新' : detailTarget.error ? '插件运行异常' : detailTarget.installed ? (detailTarget.enabled ? '插件已启用' : '插件已安装') : '可以从市场安装' }}</strong>
+          <span>{{ detailTarget.updateAvailable ? '更新后会使用仓库中的最新版本。' : detailTarget.error ? '请查看错误信息或运行日志。' : detailTarget.installed ? '可以继续配置插件或查看运行情况。' : '安装后需要在“我的插件”中手动启用。' }}</span>
+        </div>
+        <p class="drawer-desc">{{ detailTarget.description || '这个插件暂时没有填写功能说明。' }}</p>
+        <div v-if="detailTarget.error" class="drawer-error mono">{{ detailTarget.error }}</div>
+        <div class="drawer-info">
+          <div><span>英文标识</span><strong class="mono">{{ detailTarget.id }}</strong></div>
+          <div v-if="detailTarget.author"><span>作者</span><strong>{{ detailTarget.author }}</strong></div>
+          <div v-if="detailTarget.repo"><span>来源仓库</span><strong class="mono">{{ detailTarget.repo }}</strong></div>
+          <div><span>安装状态</span><strong>{{ detailTarget.installed ? '已安装' : '未安装' }}</strong></div>
+        </div>
+        <div v-if="detailTarget.localPlugin" class="drawer-tools">
+          <button class="btn" @click="openLogs(detailTarget.localPlugin); closePluginDetails()">查看日志</button>
+          <button v-if="detailTarget.localPlugin.scope === 'user' || detailTarget.localPlugin.scope === 'both'" class="btn" @click="openAccounts(detailTarget.localPlugin); closePluginDetails()">应用账号</button>
+          <button class="btn" :disabled="detailTarget.error || busy[detailTarget.id]" @click="toggle(detailTarget.localPlugin)">
+            {{ detailTarget.enabled ? '停用插件' : '启用插件' }}
+          </button>
+        </div>
+        <div class="drawer-actions">
+          <button class="btn" @click="closePluginDetails">关闭</button>
+          <button class="btn btn-primary" :disabled="dlBusy[detailTarget.id]" @click="runDetailAction">
+            {{ dlBusy[detailTarget.id] ? '处理中…' : detailTarget.updateAvailable ? '更新插件' : detailTarget.installed ? '打开设置' : '安装插件' }}
+          </button>
+        </div>
+      </aside>
     </div>
 
     <!-- 配置弹窗 -->
@@ -945,6 +1083,22 @@ onUnmounted(() => {
 .plugins { position: relative; min-height: 100%; }
 
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; gap: 16px; }
+.plugin-controls {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: -8px 0 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border);
+}
+.filter-pills, .density-switch, .search-filters { display: flex; align-items: center; gap: 5px; }
+.filter-pills button, .density-switch button, .search-filters button {
+  border: 1px solid transparent; border-radius: 999px; padding: 5px 10px;
+  color: var(--text-muted); background: transparent; font: inherit; font-size: 11px; font-weight: 650; cursor: pointer;
+}
+.filter-pills button:hover, .density-switch button:hover, .search-filters button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.filter-pills button.active, .search-filters button.active { color: var(--accent); border-color: rgba(48,128,240,.22); background: var(--accent-dim); }
+.filter-pills button.danger.active { color: var(--danger); border-color: var(--danger-dim); background: var(--danger-dim); }
+.density-switch { padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: rgba(10,14,23,.45); }
+.density-switch button { border-radius: 6px; padding: 4px 9px; }
+.density-switch button.active { color: var(--text-primary); background: var(--bg-elevated); }
+.control-caption { color: var(--text-muted); font-size: 12px; }
 
 /* Tab 切换 */
 .tabs { display: flex; gap: 4px; background: var(--bg-elevated); padding: 4px; border-radius: 10px; }
@@ -979,19 +1133,25 @@ onUnmounted(() => {
 .center { text-align: center; padding: 40px; }
 .empty { text-align: center; padding: 48px; }
 .empty p { margin-bottom: 8px; }
+.filter-empty .btn { margin-top: 8px; }
 
 .grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
   gap: var(--gap);
 }
-.plugin-card { display: flex; flex-direction: column; gap: 12px; transition: border-color 0.15s, transform 0.1s; }
+.plugin-card { min-height: 202px; display: flex; flex-direction: column; gap: 12px; transition: border-color 0.15s, transform 0.1s, box-shadow .15s; }
 .plugin-card:hover { border-color: var(--border-light); }
 .plugin-card.clickable { cursor: pointer; }
-.plugin-card.clickable:hover { border-color: var(--accent-dim); }
+.plugin-card.clickable:hover { border-color: rgba(48,128,240,.38); box-shadow: 0 14px 38px rgba(0,0,0,.3); transform: translateY(-2px); }
 .plugin-card.clickable:active { transform: scale(0.995); }
 .plugin-card.menu-open { position: relative; z-index: 50; }
 .plugin-card.err { border-color: var(--danger-dim); }
+.grid.compact { grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 10px; }
+.grid.compact .plugin-card { min-height: 154px; padding: 15px; gap: 8px; }
+.grid.compact .store-icon { width: 32px; height: 32px; }
+.grid.compact .desc { min-height: 34px; -webkit-line-clamp: 2; }
+.grid.compact .meta-item { padding: 1px 6px; }
 
 .kebab-wrap { margin-left: auto; position: relative; }
 .kebab {
@@ -1029,6 +1189,7 @@ onUnmounted(() => {
 
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; }
 .card-title { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.card-title > .badge { align-self: flex-start; }
 .name { font-size: 15px; font-weight: 600; display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* 名字太长单行截断成省略号，把有限宽度让给右侧「官方 / Vue」徽章，保持一行对齐 */
 .name-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
@@ -1062,7 +1223,10 @@ onUnmounted(() => {
   background: var(--accent-dim); color: var(--accent);
 }
 
-.desc { color: var(--text-secondary); font-size: 13px; min-height: 38px; }
+.desc {
+  color: var(--text-secondary); font-size: 13px; min-height: 40px; line-height: 1.55;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
 .err-msg {
   background: var(--danger-dim); color: var(--danger);
   padding: 8px 10px; border-radius: var(--radius-sm);
@@ -1145,6 +1309,8 @@ onUnmounted(() => {
   min-width: 26px; padding: 2px 7px; border-radius: 8px; text-align: center;
   color: var(--text-secondary); background: var(--bg-elevated); font-size: 11px;
 }
+.search-filters { margin: 0 20px 10px; overflow-x: auto; }
+.search-filters button { flex: 0 0 auto; }
 .search-list { flex: 1; min-height: 160px; overflow-y: auto; padding: 2px 10px 8px; }
 .search-item {
   display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 12px;
@@ -1152,6 +1318,7 @@ onUnmounted(() => {
   transition: background .14s ease, border-color .14s ease;
 }
 .search-item:hover { background: rgba(255,255,255,.035); border-color: var(--border); }
+.search-item.active { background: var(--accent-dim); border-color: rgba(48,128,240,.24); }
 .search-item.actionable { cursor: pointer; }
 .search-icon {
   width: 42px; height: 42px; border-radius: 12px; object-fit: cover;
@@ -1190,13 +1357,58 @@ onUnmounted(() => {
   color: var(--text-secondary); background: var(--bg-elevated); font-family: inherit;
 }
 
+.detail-mask {
+  position: fixed; inset: 0; z-index: 210; display: flex; justify-content: flex-end;
+  background: rgba(3,6,12,.66); backdrop-filter: blur(4px);
+  animation: detail-fade-in .18s ease both;
+}
+.plugin-drawer {
+  width: 430px; max-width: 94vw; height: 100%; overflow-y: auto;
+  padding: 24px; border-left: 1px solid var(--border-light);
+  background: linear-gradient(155deg, #171b25, #10131b 72%);
+  box-shadow: -24px 0 70px rgba(0,0,0,.42);
+  display: flex; flex-direction: column; gap: 20px;
+  animation: drawer-in .24s ease both;
+}
+@keyframes detail-fade-in { from { opacity: 0; } }
+@keyframes drawer-in { from { transform: translateX(26px); opacity: .7; } }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; }
+.drawer-kicker { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 1.2px; }
+.drawer-identity { display: flex; align-items: center; gap: 14px; }
+.drawer-identity > img { width: 62px; height: 62px; border-radius: 17px; object-fit: cover; border: 1px solid var(--border-light); background: var(--bg-elevated); }
+.drawer-identity > img.fallback { object-fit: contain; padding: 10px; }
+.drawer-name-row { display: flex; align-items: center; gap: 8px; }
+.drawer-name-row h2 { font-size: 21px; line-height: 1.25; }
+.drawer-version { margin-top: 5px; color: var(--text-muted); font-size: 12px; }
+.drawer-state { display: flex; flex-direction: column; gap: 4px; padding: 13px 15px; border-radius: 11px; background: var(--accent-2-dim); color: var(--accent-2); }
+.drawer-state.update { color: var(--warning); background: rgba(224,160,32,.13); }
+.drawer-state.error { color: var(--danger); background: var(--danger-dim); }
+.drawer-state.available { color: var(--accent); background: var(--accent-dim); }
+.drawer-state strong { font-size: 13px; }
+.drawer-state span { color: var(--text-secondary); font-size: 11px; }
+.drawer-desc { color: var(--text-secondary); line-height: 1.75; font-size: 13px; }
+.drawer-error { padding: 12px; border-radius: 9px; color: var(--danger); background: var(--danger-dim); font-size: 11px; word-break: break-word; }
+.drawer-info { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.drawer-info > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 11px 0; border-bottom: 1px solid var(--border); }
+.drawer-info > div:last-child { border-bottom: 0; }
+.drawer-info span { color: var(--text-muted); font-size: 12px; }
+.drawer-info strong { max-width: 66%; color: var(--text-primary); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
+.drawer-tools { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
+.drawer-tools .btn { justify-content: center; }
+.drawer-actions {
+  position: sticky; bottom: -24px; margin: auto -24px -24px; padding: 16px 24px calc(16px + env(safe-area-inset-bottom));
+  display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px;
+  border-top: 1px solid var(--border); background: rgba(16,19,27,.94); backdrop-filter: blur(18px);
+}
+.drawer-actions .btn { justify-content: center; }
+
 .modal-mask {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.6);
   display: flex; align-items: center; justify-content: center;
   z-index: 200;
 }
-.modal { width: 540px; max-width: 90vw; max-height: 85vh; overflow-y: auto; }
+.modal { --modal-pad: var(--gap-lg); width: 540px; max-width: 90vw; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-float); }
 /* 配置弹窗（vue 模式 + schema 模式）：参考 MoviePilot 给一块大而响应式的画布，
    vue 由插件自己布局，schema 由平台表单栅格铺开
    （用固定大宽度而非 fit-content：vue 插件多用 100%/栅格布局，fit-content 会坍缩） */
@@ -1205,7 +1417,12 @@ onUnmounted(() => {
 .modal-head h2 { font-size: 16px; }
 .modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
 .modal-head .close .x-ico { width: 20px; height: 20px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.modal-foot {
+  position: sticky; bottom: calc(0px - var(--modal-pad)); z-index: 2;
+  display: flex; justify-content: flex-end; gap: 10px;
+  margin: 24px calc(0px - var(--modal-pad)) calc(0px - var(--modal-pad)); padding: 14px var(--modal-pad);
+  border-top: 1px solid var(--border); background: rgba(17,19,26,.95); backdrop-filter: blur(16px);
+}
 .form { display: flex; flex-direction: column; gap: 16px; }
 .form .field { display: flex; flex-direction: column; gap: 8px; }
 .form .field label { font-size: 13px; color: var(--text-secondary); }
@@ -1259,10 +1476,18 @@ onUnmounted(() => {
 /* 手机适配 */
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .toolbar > .row { flex-wrap: wrap; }
   .tabs { width: 100%; }
   .tab { flex: 1; justify-content: center; padding: 9px 8px; }
+  .plugin-controls { align-items: flex-start; margin-top: -4px; overflow: hidden; }
+  .filter-pills { max-width: calc(100vw - 118px); overflow-x: auto; padding-bottom: 3px; }
+  .filter-pills button { flex: 0 0 auto; }
+  .control-caption { display: none; }
   .grid { grid-template-columns: 1fr; }
+  .grid.compact { grid-template-columns: 1fr; }
+  .plugin-card, .grid.compact .plugin-card { min-height: 0; padding: 15px; }
   .repo-row { flex-wrap: wrap; }
+  .modal { --modal-pad: 14px; }
   .plugin-search-fab { right: 16px; bottom: 82px; width: 52px; height: 52px; border-radius: 16px; }
   .search-modal {
     width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh;
@@ -1270,6 +1495,7 @@ onUnmounted(() => {
   }
   .search-head { padding: 15px 16px 10px; }
   .search-input-wrap { margin: 0 16px 10px; }
+  .search-filters { margin: 0 16px 9px; }
   .search-list { padding: 2px 6px 8px; }
   .search-item { grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; padding: 10px; }
   .search-icon { width: 38px; height: 38px; border-radius: 10px; }
@@ -1277,6 +1503,8 @@ onUnmounted(() => {
   .search-meta span:nth-child(n+3) { display: none; }
   .search-foot { padding: 10px 16px; }
   .search-foot > span:first-child { display: none; }
+  .plugin-drawer { width: 100vw; max-width: 100vw; padding: 18px 16px; }
+  .drawer-actions { bottom: -18px; margin: auto -16px -18px; padding-left: 16px; padding-right: 16px; }
   /* 窄屏照 MoviePilot 直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
   .modal.modal-wide {
