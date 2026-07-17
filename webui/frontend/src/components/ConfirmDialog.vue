@@ -33,14 +33,14 @@ function cancel() { _resolveConfirm(false) }
 <style scoped>
 .mask {
   position: fixed; inset: 0; z-index: 999;
-  background: rgba(0, 0, 0, 0.55); backdrop-filter: blur(2px);
+  background: rgba(3, 6, 12, 0.7); backdrop-filter: blur(5px);
   display: flex; align-items: center; justify-content: center;
 }
 .dialog {
   width: 380px; max-width: 90vw;
-  background: var(--bg-card); border: 1px solid var(--border-light);
+  background: linear-gradient(155deg, #171b25, #10131b); border: 1px solid var(--border-light);
   border-radius: var(--radius-lg); padding: 28px 26px;
-  text-align: center; box-shadow: var(--shadow);
+  text-align: center; box-shadow: var(--shadow-float);
 }
 .d-icon {
   width: 52px; height: 52px; border-radius: 50%; margin: 0 auto 16px;
@@ -58,4 +58,9 @@ function cancel() { _resolveConfirm(false) }
 
 .fade-enter-active, .fade-leave-active { transition: opacity 0.15s ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
+
+@media (max-width: 560px) {
+  .mask { align-items: flex-end; }
+  .dialog { width: 100%; max-width: 100%; border-radius: 18px 18px 0 0; padding: 24px 20px calc(20px + env(safe-area-inset-bottom)); }
+}
 </style>

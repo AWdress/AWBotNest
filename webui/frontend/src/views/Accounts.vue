@@ -248,7 +248,7 @@ onMounted(load)
 .close .x-ico { width: 16px; height: 16px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); }
-.acc-card { display: flex; flex-direction: column; gap: 16px; }
+.acc-card { min-height: 176px; display: flex; flex-direction: column; gap: 16px; }
 .acc-head { display: flex; justify-content: space-between; align-items: flex-start; }
 .acc-name { font-size: 15px; font-weight: 600; }
 .acc-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
@@ -261,16 +261,21 @@ onMounted(load)
 .health-ok { background: var(--accent-2-dim); color: var(--accent-2); }
 .health-warn { background: var(--danger-dim); color: var(--danger); }
 .health-info { background: var(--accent-dim); color: var(--accent); }
-.acc-actions { display: flex; gap: 8px; }
+.acc-actions { display: flex; gap: 8px; margin-top: auto; }
 .btn.sm { padding: 6px 14px; font-size: 12px; }
 
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 200; }
-.modal { width: 440px; max-width: 90vw; }
+.modal-mask { position: fixed; inset: 0; background: rgba(3,6,12,.7); backdrop-filter: blur(5px); display: flex; align-items: center; justify-content: center; z-index: 200; }
+.modal { --modal-pad: var(--gap-lg); width: 440px; max-width: 90vw; max-height: 86vh; overflow-y: auto; box-shadow: var(--shadow-float); }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-head h2 { font-size: 16px; }
 .modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
 .modal-head .close .x-ico { width: 20px; height: 20px; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
+.modal-foot {
+  position: sticky; bottom: calc(0px - var(--modal-pad));
+  display: flex; justify-content: flex-end; gap: 10px;
+  margin: 24px calc(0px - var(--modal-pad)) calc(0px - var(--modal-pad)); padding: 14px var(--modal-pad);
+  border-top: 1px solid var(--border); background: rgba(17,19,26,.95); backdrop-filter: blur(16px);
+}
 
 .steps { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; font-size: 13px; color: var(--text-muted); }
 .steps .active { color: var(--accent); font-weight: 600; }
@@ -290,5 +295,9 @@ onMounted(load)
 /* 手机适配 */
 @media (max-width: 768px) {
   .grid { grid-template-columns: 1fr; }
+  .modal-mask { align-items: flex-end; }
+  .modal { --modal-pad: 18px; width: 100%; max-width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; padding: 20px 18px calc(18px + env(safe-area-inset-bottom)); }
+  .steps { gap: 5px; font-size: 12px; }
+  .steps small { display: none; }
 }
 </style>

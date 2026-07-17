@@ -9,6 +9,7 @@
   --bg-card: #11131a;        /* 卡片 */
   --bg-elevated: #20222e;    /* 悬浮/输入框/激活态 */
   --bg-hover: #1a1d28;       /* hover 态 */
+  --bg-panel: rgba(17, 20, 29, 0.86);
 
   /* 强调色 */
   --accent: #3080f0;         /* 主强调（蓝） */
@@ -43,6 +44,8 @@
 
   /* 阴影 */
   --shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  --shadow-soft: 0 12px 36px rgba(0, 0, 0, 0.22);
+  --shadow-float: 0 24px 70px rgba(0, 0, 0, 0.5);
 
   --sidebar-width: 248px;
 }
@@ -58,13 +61,27 @@ html, body, #app {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Microsoft YaHei', Roboto, Helvetica, Arial, sans-serif;
-  background: var(--bg-base);
+  font-family: 'Aptos', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
+  background:
+    radial-gradient(900px 520px at 22% -12%, rgba(48, 128, 240, 0.13), transparent 68%),
+    radial-gradient(760px 480px at 92% 108%, rgba(16, 176, 128, 0.08), transparent 70%),
+    var(--bg-base);
   color: var(--text-primary);
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.16;
+  background-image: linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+                    linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: linear-gradient(to bottom, black, transparent 72%);
 }
 
 a { color: inherit; text-decoration: none; }
@@ -86,10 +103,13 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  font-family: inherit;
+  font-weight: 600;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
   white-space: nowrap;
 }
-.btn:hover { background: var(--bg-hover); border-color: var(--text-muted); }
+.btn:hover { background: var(--bg-hover); border-color: var(--text-muted); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -102,10 +122,11 @@ a { color: inherit; text-decoration: none; }
 
 /* ── 卡片 ── */
 .card {
-  background: var(--bg-card);
+  background: linear-gradient(145deg, rgba(19, 22, 31, .96), rgba(15, 17, 24, .94));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: var(--gap-lg);
+  box-shadow: var(--shadow-soft);
 }
 
 /* ── 开关 toggle ── */
@@ -149,6 +170,12 @@ a { color: inherit; text-decoration: none; }
 .input:focus, .select:focus, .textarea:focus {
   outline: none;
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 .textarea { resize: vertical; min-height: 80px; }
 

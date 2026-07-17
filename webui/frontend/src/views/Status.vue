@@ -94,10 +94,27 @@ const cards = computed(() => {
     { key: 'user', label: '在线用户账号', value: s.user_count, sub: `共 ${s.accounts.length} 个`,
       tone: s.user_count ? 'blue' : 'gray', icon: 'user' },
     { key: 'plugin', label: '已启用插件', value: s.plugins.enabled, sub: `共 ${s.plugins.total} 个${s.plugins.error ? ' · ' + s.plugins.error + ' 异常' : ''}`,
-      tone: 'purple', icon: 'plug' },
+      tone: s.plugins.error ? 'amber' : 'green', icon: 'plug' },
     { key: 'uptime', label: '运行时长', value: uptime.value,
       tone: 'teal', icon: 'clock', small: true },
   ]
+})
+
+const health = computed(() => {
+  if (!st.value) return { tone: 'ok', title: '正在检查平台', desc: '正在读取账号和插件状态。' }
+  const s = st.value
+  const issues = []
+  if (!s.bot_connected) issues.push('Bot 账号未连接')
+  if (!s.user_count) issues.push('没有在线用户账号')
+  if (s.plugins.error) issues.push(`${s.plugins.error} 个插件异常`)
+  if (!issues.length) {
+    return { tone: 'ok', title: '平台运行正常', desc: '账号和插件状态正常，可以继续使用。' }
+  }
+  return {
+    tone: s.plugins.error ? 'danger' : 'warn',
+    title: s.plugins.error ? '有项目需要处理' : '平台已运行，部分功能未连接',
+    desc: issues.join('，') + '。',
+  }
 })
 
 const icons = {
@@ -165,6 +182,19 @@ const donut = computed(() => {
 <template>
   <div v-if="error" class="alert">{{ error }}</div>
   <div v-if="st" class="status">
+    <section class="health-hero" :class="health.tone">
+      <div class="health-mark"><span></span></div>
+      <div class="health-copy">
+        <div class="health-eyebrow">平台概览</div>
+        <h2>{{ health.title }}</h2>
+        <p>{{ health.desc }}</p>
+      </div>
+      <div class="health-links">
+        <RouterLink to="/accounts" class="health-link">查看账号</RouterLink>
+        <RouterLink to="/plugins" class="health-link primary">查看插件</RouterLink>
+      </div>
+    </section>
+
     <!-- 概览卡片：固定 4 列均分 -->
     <div class="grid">
       <div v-for="c in cards" :key="c.key" class="card stat" :class="c.tone">
@@ -287,6 +317,32 @@ const donut = computed(() => {
 <style scoped>
 .status { display: flex; flex-direction: column; gap: var(--gap); }
 
+.health-hero {
+  position: relative; overflow: hidden; display: flex; align-items: center; gap: 18px;
+  min-height: 128px; padding: 24px 26px; border: 1px solid rgba(16,176,128,.24);
+  border-radius: var(--radius-lg); background: linear-gradient(120deg, rgba(16,176,128,.16), rgba(17,19,26,.88) 62%);
+  box-shadow: var(--shadow-soft);
+}
+.health-hero::after {
+  content: ''; position: absolute; width: 240px; height: 240px; right: 8%; top: -170px;
+  border-radius: 50%; background: rgba(16,176,128,.13); filter: blur(12px); pointer-events: none;
+}
+.health-hero.warn { border-color: rgba(224,160,32,.28); background: linear-gradient(120deg, rgba(224,160,32,.16), rgba(17,19,26,.9) 62%); }
+.health-hero.danger { border-color: rgba(224,72,79,.3); background: linear-gradient(120deg, rgba(224,72,79,.16), rgba(17,19,26,.9) 62%); }
+.health-mark { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; flex: 0 0 auto; background: var(--accent-2-dim); }
+.health-mark span { width: 13px; height: 13px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 7px rgba(16,176,128,.12), 0 0 20px rgba(16,176,128,.6); }
+.health-hero.warn .health-mark { background: rgba(224,160,32,.14); }
+.health-hero.warn .health-mark span { background: var(--warning); box-shadow: 0 0 0 7px rgba(224,160,32,.12); }
+.health-hero.danger .health-mark { background: var(--danger-dim); }
+.health-hero.danger .health-mark span { background: var(--danger); box-shadow: 0 0 0 7px var(--danger-dim); }
+.health-copy { min-width: 0; flex: 1; position: relative; z-index: 1; }
+.health-eyebrow { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; }
+.health-copy h2 { margin-top: 3px; font-size: 22px; line-height: 1.25; }
+.health-copy p { margin-top: 6px; color: var(--text-secondary); font-size: 13px; }
+.health-links { display: flex; gap: 8px; position: relative; z-index: 1; }
+.health-link { padding: 8px 13px; border: 1px solid var(--border-light); border-radius: 9px; color: var(--text-secondary); font-size: 12px; font-weight: 600; background: rgba(10,14,23,.45); }
+.health-link.primary { color: #fff; border-color: var(--accent); background: var(--accent); }
+
 /* 概览卡片：固定 4 列均分，和下方列严格对齐 */
 .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
 @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, 1fr); } }
@@ -299,7 +355,7 @@ const donut = computed(() => {
 .stat-icon svg { width: 24px; height: 24px; }
 .stat.green .stat-icon { background: var(--accent-2-dim); color: var(--accent-2); }
 .stat.blue  .stat-icon { background: var(--accent-dim); color: var(--accent); }
-.stat.purple .stat-icon { background: rgba(160,80,240,0.15); color: #a050f0; }
+.stat.amber .stat-icon { background: rgba(224,160,32,0.15); color: var(--warning); }
 .stat.teal  .stat-icon { background: rgba(16,176,128,0.15); color: #10b0a0; }
 .stat.gray  .stat-icon { background: var(--bg-elevated); color: var(--text-muted); }
 .stat-body { min-width: 0; }
@@ -399,6 +455,12 @@ const donut = computed(() => {
 
 /* 手机适配 */
 @media (max-width: 768px) {
+  .health-hero { align-items: flex-start; padding: 18px; gap: 12px; }
+  .health-mark { width: 40px; height: 40px; border-radius: 13px; }
+  .health-copy h2 { font-size: 18px; }
+  .health-links { width: 100%; margin-top: 4px; }
+  .health-hero { flex-wrap: wrap; }
+  .health-links .health-link { flex: 1; text-align: center; }
   .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .stat { padding: 12px; gap: 10px; }
   .stat-icon { width: 38px; height: 38px; }
