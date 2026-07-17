@@ -10,23 +10,29 @@ webui/api.py
 from __future__ import annotations
 
 import hmac
-import io
-import json
-import shutil
+import os
+import sqlite3
 import tempfile
-import zipfile
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Request, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from starlette.background import BackgroundTask
 
 from core import config, logger
 from webui import auth as _authmod
 from webui.auth import require_auth as _auth
 from webui.auth import require_password_changed as _auth_pwc
+from webui.backup import (
+    BackupError,
+    MAX_ARCHIVE_BYTES,
+    create_backup_archive,
+    prune_stored_backups,
+    stage_restore_archive,
+    stored_backup_path,
+)
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
@@ -37,7 +43,6 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 PLUGINS_DIR = Path("plugins")
-BACKUP_ROOTS = ("data", "sessions", "db_file", "plugins")
 
 
 # ──────────────────────────────────────────────
@@ -92,77 +97,6 @@ def _get_accounts():
     if kernel_state.accounts is None:
         raise HTTPException(status_code=503, detail="账号管理器尚未就绪")
     return kernel_state.accounts
-
-
-def _iter_backup_files():
-    """枚举需要打包的备份文件。"""
-    for root_name in BACKUP_ROOTS:
-        root = Path(root_name)
-        if not root.exists():
-            continue
-        if root.is_file():
-            yield root
-            continue
-        for item in root.rglob("*"):
-            if item.is_file():
-                yield item
-
-
-def _create_backup_archive() -> tuple[Path, str]:
-    """创建平台备份压缩包并返回其路径与文件名。"""
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = f"awbotnest-backup-{stamp}.zip"
-    out_dir = Path(tempfile.gettempdir()) / "awbotnest-backups"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    archive_path = out_dir / filename
-
-    manifest = {
-        "app": "AWBotNest",
-        "version": APP_VERSION,
-        "created_at": datetime.now().isoformat(timespec="seconds"),
-        "included_roots": list(BACKUP_ROOTS),
-    }
-
-    with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("backup_manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
-        for file_path in _iter_backup_files():
-            zf.write(file_path, arcname=file_path.as_posix())
-
-    return archive_path, filename
-
-
-def _safe_restore_members(zf: zipfile.ZipFile) -> int:
-    """将备份包中的允许路径安全解压到工作区。"""
-    restored = 0
-    allowed_roots = set(BACKUP_ROOTS)
-    cwd = Path.cwd().resolve()
-
-    for info in zf.infolist():
-        if info.is_dir():
-            continue
-        name = info.filename.replace("\\", "/").strip("/")
-        if not name or name == "backup_manifest.json":
-            continue
-
-        parts = [p for p in name.split("/") if p]
-        if not parts:
-            continue
-        if any(p == ".." for p in parts):
-            raise HTTPException(status_code=400, detail=f"备份包路径非法: {name}")
-        if parts[0] not in allowed_roots:
-            continue
-
-        dest = Path(*parts)
-        resolved = dest.resolve()
-        if cwd not in resolved.parents and resolved != cwd:
-            raise HTTPException(status_code=400, detail=f"备份包路径越界: {name}")
-
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        with zf.open(info, "r") as src, dest.open("wb") as dst:
-            shutil.copyfileobj(src, dst)
-        restored += 1
-
-    return restored
 
 
 # ──────────────────────────────────────────────
@@ -926,40 +860,76 @@ async def restart_platform(user=Depends(_auth_pwc)):
 # 连接测试（代理 / 数据库）——用「当前表单值」测，打码密码回落已保存值
 # ──────────────────────────────────────────────
 @app.post("/api/system/backup")
-async def create_system_backup(user=Depends(_auth)):
+async def create_system_backup(user=Depends(_auth_pwc)):
     """导出平台备份压缩包。"""
-    archive_path, filename = _create_backup_archive()
+    try:
+        archive_path, filename = create_backup_archive(APP_VERSION)
+    except (BackupError, OSError, sqlite3.Error) as e:
+        raise HTTPException(status_code=500, detail=f"生成备份失败: {e}") from e
     logger.info("平台备份已生成: %s", archive_path)
-    return FileResponse(str(archive_path), media_type="application/zip", filename=filename)
+    return FileResponse(
+        str(archive_path),
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(archive_path.unlink, missing_ok=True),
+    )
+
+
+@app.get("/api/system/backups/{filename}")
+async def download_stored_backup(filename: str, user=Depends(_auth_pwc)):
+    """下载恢复前快照；传输完成后删除服务器副本。"""
+    try:
+        archive_path = stored_backup_path(filename)
+    except BackupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    return FileResponse(
+        str(archive_path),
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(archive_path.unlink, missing_ok=True),
+    )
 
 
 @app.post("/api/system/restore")
 async def restore_system_backup(file: UploadFile = File(...), user=Depends(_auth_pwc)):
-    """导入平台备份压缩包并覆盖恢复允许目录。"""
+    """校验并暂存备份包，等待平台重启后安全恢复。"""
     filename = file.filename or ""
     if not filename.lower().endswith(".zip"):
         raise HTTPException(status_code=400, detail="仅支持导入 .zip 备份包")
 
-    payload = await file.read()
-    if not payload:
-        raise HTTPException(status_code=400, detail="备份包为空")
-
+    Path("data").mkdir(parents=True, exist_ok=True)
+    fd, upload_name = tempfile.mkstemp(prefix=".restore-upload-", suffix=".zip", dir="data")
+    upload_path = Path(upload_name)
     try:
-        pre_restore_path, pre_restore_name = _create_backup_archive()
-        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
-            restored_files = _safe_restore_members(zf)
-    except zipfile.BadZipFile as e:
-        raise HTTPException(status_code=400, detail="备份包格式无效") from e
+        total = 0
+        with os.fdopen(fd, "wb") as output:
+            while chunk := await file.read(1024 * 1024):
+                total += len(chunk)
+                if total > MAX_ARCHIVE_BYTES:
+                    raise HTTPException(status_code=413, detail="备份包超过 1 GiB 上传限制")
+                output.write(chunk)
+        inspection, pre_restore_name = stage_restore_archive(upload_path, APP_VERSION)
+        upload_path = None
+        try:
+            prune_stored_backups()
+        except OSError as prune_error:
+            logger.warning("清理旧恢复快照失败: %s", prune_error)
+    except BackupError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except OSError as e:
-        raise HTTPException(status_code=500, detail=f"恢复失败: {e}") from e
+        raise HTTPException(status_code=500, detail=f"暂存恢复失败: {e}") from e
+    finally:
+        await file.close()
+        if upload_path is not None:
+            upload_path.unlink(missing_ok=True)
 
-    logger.info("平台已从备份包恢复: %s，恢复文件 %d 个", filename, restored_files)
+    logger.info("平台恢复包已校验并暂存: %s，文件 %d 个", filename, inspection.file_count)
     return {
         "status": "success",
-        "restored_files": restored_files,
+        "staged_files": inspection.file_count,
+        "restore_pending": True,
         "restart_required": True,
         "pre_restore_backup": pre_restore_name,
-        "pre_restore_backup_path": str(pre_restore_path),
     }
 
 

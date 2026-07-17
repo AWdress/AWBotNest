@@ -119,6 +119,20 @@ export const api = {
     const m = /filename="?([^"]+)"?/.exec(disposition)
     return { blob: await res.blob(), filename: m?.[1] || 'awbotnest-backup.zip' }
   },
+  downloadStoredBackup: async (filename) => {
+    const res = await fetch(`/api/system/backups/${encodeURIComponent(filename)}`, { headers: authHeaders() })
+    if (res.status === 401) {
+      setToken('')
+      if (onUnauthorized) onUnauthorized()
+      throw new Error('未登录或登录已过期')
+    }
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json()).detail || detail } catch {}
+      throw new Error(detail)
+    }
+    return { blob: await res.blob(), filename }
+  },
   restoreBackup: async (file) => {
     const form = new FormData()
     form.append('file', file)
