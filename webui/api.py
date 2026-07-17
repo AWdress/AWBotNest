@@ -24,7 +24,7 @@ from webui.auth import require_password_changed as _auth_pwc
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.0.8"
+APP_VERSION = "1.0.9"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
