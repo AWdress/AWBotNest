@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "AWBotHub"
-version = "1.0.0"
+name = "AWBotNest"
+version = "1.0.9"
 description = "Telegram 自动化工具（六边形架构重构版）"
 requires-python = ">=3.13"
 

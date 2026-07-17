@@ -45,11 +45,8 @@ RAW_HOST = "raw.githubusercontent.com"
 MANIFEST_NAMES = ("manifest.json", "manifest.v2.json")
 
 
-def _headers(token: Optional[str]) -> dict:
-    h = {"Accept": "application/vnd.github+json", "User-Agent": "AWBotNest"}
-    if token:
-        h["Authorization"] = f"Bearer {token}"
-    return h
+def _headers() -> dict:
+    return {"Accept": "application/vnd.github+json", "User-Agent": "AWBotNest"}
 
 
 def _bust(url: str) -> str:
@@ -98,8 +95,8 @@ def parse_source(src: str) -> dict:
     raise ValueError("无法识别的来源；请填 GitHub 仓库地址、owner/repo 或 raw .py 链接")
 
 
-async def _default_branch(client: httpx.AsyncClient, owner: str, repo: str, token) -> str:
-    r = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=_headers(token))
+async def _default_branch(client: httpx.AsyncClient, owner: str, repo: str) -> str:
+    r = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=_headers())
     r.raise_for_status()
     return r.json().get("default_branch", "main")
 
@@ -108,13 +105,13 @@ def _raw_url(owner: str, repo: str, branch: str, path: str) -> str:
     return f"https://{RAW_HOST}/{owner}/{repo}/{branch}/{path.lstrip('/')}"
 
 
-async def _try_manifest(client, owner, repo, branch, subdir, token) -> Optional[list[dict]]:
+async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[dict]]:
     """尝试读取 manifest，成功返回插件列表，失败返回 None"""
     base = f"{subdir}/" if subdir else ""
     for name in MANIFEST_NAMES:
         url = _raw_url(owner, repo, branch, f"{base}{name}")
         try:
-            r = await client.get(_bust(url), headers={**_headers(token), **_NOCACHE})
+            r = await client.get(_bust(url), headers={**_headers(), **_NOCACHE})
         except Exception:  # noqa: BLE001
             continue
         if r.status_code != 200:
@@ -148,12 +145,12 @@ async def _try_manifest(client, owner, repo, branch, subdir, token) -> Optional[
     return None
 
 
-async def _list_contents(client, owner, repo, branch, subdir, token) -> list[dict]:
+async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
     """目录扫描回退：列 .py 单文件 + <id>/__init__.py 文件夹插件"""
     dirs = [subdir] if subdir else ["plugins", ""]
     for d in dirs:
         api_url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{d}".rstrip("/")
-        r = await client.get(api_url, headers=_headers(token), params={"ref": branch})
+        r = await client.get(api_url, headers=_headers(), params={"ref": branch})
         if r.status_code != 200:
             continue
         items = r.json()
@@ -173,7 +170,7 @@ async def _list_contents(client, owner, repo, branch, subdir, token) -> list[dic
                 # 探测该目录是否含 __init__.py（文件夹插件）
                 sub = f"{it['path']}/__init__.py"
                 rr = await client.get(_bust(_raw_url(owner, repo, branch, sub)),
-                                      headers={**_headers(token), **_NOCACHE})
+                                      headers={**_headers(), **_NOCACHE})
                 if rr.status_code == 200:
                     results.append({
                         "id": nm, "name": nm, "version": "", "author": "",
@@ -186,7 +183,7 @@ async def _list_contents(client, owner, repo, branch, subdir, token) -> list[dic
     return []
 
 
-async def list_plugins(src: str, token: Optional[str] = None) -> dict:
+async def list_plugins(src: str) -> dict:
     """
     列出来源中的插件。返回 {"source_type": "manifest"|"scan"|"raw", "plugins": [...]}
     每个 plugin 含 id/name/version/author/description/icon/is_folder/path 等。
@@ -204,39 +201,39 @@ async def list_plugins(src: str, token: Optional[str] = None) -> dict:
             }]}
 
         owner, repo = info["owner"], info["repo"]
-        branch = info["branch"] or await _default_branch(client, owner, repo, token)
+        branch = info["branch"] or await _default_branch(client, owner, repo)
         subdir = info["subdir"]
 
         # 优先 manifest
-        manifest = await _try_manifest(client, owner, repo, branch, subdir, token)
+        manifest = await _try_manifest(client, owner, repo, branch, subdir)
         if manifest is not None:
             return {"source_type": "manifest", "plugins": manifest}
 
         # 回退目录扫描
-        scanned = await _list_contents(client, owner, repo, branch, subdir, token)
+        scanned = await _list_contents(client, owner, repo, branch, subdir)
         return {"source_type": "scan", "plugins": scanned}
 
 
-async def _list_dir_files(client, owner, repo, branch, dir_path, token) -> list[dict]:
+async def _list_dir_files(client, owner, repo, branch, dir_path) -> list[dict]:
     """递归列出某目录下所有文件（用于下载文件夹插件），返回 [{path, download_url}]"""
     out: list[dict] = []
     api_url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{dir_path.rstrip('/')}"
-    r = await client.get(api_url, headers=_headers(token), params={"ref": branch})
+    r = await client.get(api_url, headers=_headers(), params={"ref": branch})
     if r.status_code != 200:
         return out
     for it in r.json():
         if it.get("type") == "file":
             out.append({"path": it["path"], "download_url": it["download_url"]})
         elif it.get("type") == "dir":
-            out.extend(await _list_dir_files(client, owner, repo, branch, it["path"], token))
+            out.extend(await _list_dir_files(client, owner, repo, branch, it["path"]))
     return out
 
 
-async def fetch_file(download_url: str, token: Optional[str] = None) -> bytes:
+async def fetch_file(download_url: str) -> bytes:
     """下载单个文件内容（不限大小）。"""
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
         async with client.stream("GET", _bust(download_url),
-                                 headers={**_headers(token), **_NOCACHE}) as r:
+                                 headers={**_headers(), **_NOCACHE}) as r:
             r.raise_for_status()
             chunks = bytearray()
             async for chunk in r.aiter_bytes():
@@ -244,7 +241,7 @@ async def fetch_file(download_url: str, token: Optional[str] = None) -> bytes:
             return bytes(chunks)
 
 
-async def resolve_files(plugin: dict, token: Optional[str] = None) -> list[dict]:
+async def resolve_files(plugin: dict) -> list[dict]:
     """
     把一个待导入插件解析成具体文件列表（相对插件根的目标路径 + 下载地址）。
     - 单文件：返回 [{target: "<id>.py", download_url}]
@@ -262,7 +259,7 @@ async def resolve_files(plugin: dict, token: Optional[str] = None) -> list[dict]
     owner, repo, branch = plugin["owner"], plugin["repo"], plugin["branch"]
     dir_path = plugin["path"].rstrip("/")
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
-        files = await _list_dir_files(client, owner, repo, branch, dir_path, token)
+        files = await _list_dir_files(client, owner, repo, branch, dir_path)
     out = []
     for f in files:
         # 把仓库内 dir_path 前缀替换成插件 id，保持目录内相对结构

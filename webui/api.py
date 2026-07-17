@@ -196,17 +196,16 @@ def _safe_target(target: str) -> str:
 @app.post("/api/plugins/github/list")
 async def github_list(body: Dict[str, Any], user=Depends(_auth)):
     """
-    列出 GitHub 来源中的插件。body: {source, token?}
+    列出公开 GitHub 来源中的插件。body: {source}
     返回 {source_type, plugins:[{id,name,version,author,description,icon,is_folder,...}]}
     优先读仓库 manifest.json（插件市场），无清单则目录扫描。
     """
     from webui import github_import
     source = (body.get("source") or "").strip()
-    token = body.get("token") or None
     if not source:
         raise HTTPException(status_code=400, detail="请填写 GitHub 仓库地址或链接")
     try:
-        result = await github_import.list_plugins(source, token)
+        result = await github_import.list_plugins(source)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
@@ -219,12 +218,11 @@ async def github_list(body: Dict[str, Any], user=Depends(_auth)):
 @app.post("/api/plugins/github/import")
 async def github_import_files(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """
-    下载并保存选定插件。body: {plugins: [<list返回的plugin对象>], token?}
+    从公开仓库下载并保存选定插件。body: {plugins: [<list返回的plugin对象>]}
     单文件与文件夹插件都支持；仅落盘 + 静态校验，不自动启用。
     """
     from webui import github_import
     plugins = body.get("plugins") or []
-    token = body.get("token") or None
     if not isinstance(plugins, list) or not plugins:
         raise HTTPException(status_code=400, detail="未选择任何插件")
 
@@ -234,7 +232,7 @@ async def github_import_files(body: Dict[str, Any], user=Depends(_auth_pwc)):
         if not pid or "/" in pid or "\\" in pid or pid.startswith("_"):
             raise HTTPException(status_code=400, detail=f"非法插件 id: {pid}")
         try:
-            files = await github_import.resolve_files(plugin, token)
+            files = await github_import.resolve_files(plugin)
         except Exception as e:  # noqa: BLE001
             raise HTTPException(status_code=502, detail=f"解析 {pid} 文件失败: {e}")
         if not files:
@@ -243,7 +241,7 @@ async def github_import_files(body: Dict[str, Any], user=Depends(_auth_pwc)):
         for f in files:
             target = _safe_target(f["target"])
             try:
-                content = await github_import.fetch_file(f["download_url"], token)
+                content = await github_import.fetch_file(f["download_url"])
             except Exception as e:  # noqa: BLE001
                 raise HTTPException(status_code=502, detail=f"下载 {target} 失败: {e}")
             dest = PLUGINS_DIR / target
@@ -727,13 +725,12 @@ async def get_settings_api(user=Depends(_auth)):
             out["DB_INFO"]["password"] = _MASK
     except Exception:  # noqa: BLE001
         pass
-    # 插件仓库各自的 token 打码
-    try:
-        for r in out.get("PLUGIN_REPOS", []) or []:
-            if isinstance(r, dict) and r.get("token"):
-                r["token"] = _MASK
-    except Exception:  # noqa: BLE001
-        pass
+    # 仓库设置只返回公开地址，清理旧配置中可能残留的私有仓库凭据。
+    out["PLUGIN_REPOS"] = [
+        {"url": str(r.get("url") or "").strip()}
+        for r in (data.get("PLUGIN_REPOS") or [])
+        if isinstance(r, dict) and str(r.get("url") or "").strip()
+    ]
     # 额外 Bot 各自的 token 打码
     try:
         for b in out.get("BOTS", []) or []:
@@ -771,13 +768,19 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
                 v.setdefault("proxy", {})["password"] = current.get("proxy_set", {}).get("proxy", {}).get("password", "")
         if k == "DB_INFO" and isinstance(v, dict) and v.get("password") == _MASK:
             v["password"] = current.get("DB_INFO", {}).get("password", "")
-        # 插件仓库：打码 token 按 url 匹配原值保留
+        # 插件仓库只接受公开地址，忽略旧客户端传来的 token 等额外字段。
         if k == "PLUGIN_REPOS" and isinstance(v, list):
-            old_tokens = {r.get("url"): r.get("token", "")
-                          for r in (current.get("PLUGIN_REPOS") or []) if isinstance(r, dict)}
+            cleaned_repos = []
+            seen_repos = set()
             for r in v:
-                if isinstance(r, dict) and (r.get("token") == _MASK or (isinstance(r.get("token"), str) and _MASK in r.get("token", ""))):
-                    r["token"] = old_tokens.get(r.get("url"), "")
+                if not isinstance(r, dict):
+                    continue
+                url = str(r.get("url") or "").strip()
+                if not url or url in seen_repos:
+                    continue
+                seen_repos.add(url)
+                cleaned_repos.append({"url": url})
+            v = cleaned_repos
         # 额外 Bot：打码 token 按 id 匹配原值保留；剔除缺 id/token 的畸形项
         if k == "BOTS" and isinstance(v, list):
             old_bot_tokens = {b.get("id"): b.get("token", "")

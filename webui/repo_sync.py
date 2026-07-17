@@ -63,10 +63,10 @@ def _local_exists(plugin_id: str) -> bool:
 
 
 def _get_repos() -> list[dict[str, Any]]:
-    """读取仓库列表 [{url, token, official}]：官方仓库始终置顶，再接用户配置的仓库（去重）。"""
+    """读取公开仓库列表：官方仓库始终置顶，再接用户配置的仓库（去重）。"""
     import config.config as cfg
     cfg.reload()
-    out: list[dict[str, Any]] = [{"url": OFFICIAL_REPO, "token": None, "official": True}]
+    out: list[dict[str, Any]] = [{"url": OFFICIAL_REPO, "official": True}]
     seen = {OFFICIAL_REPO}
     repos = getattr(cfg, "PLUGIN_REPOS", None) or []
     for r in repos:
@@ -76,7 +76,7 @@ def _get_repos() -> list[dict[str, Any]]:
         if not url or url in seen:
             continue
         seen.add(url)
-        out.append({"url": url, "token": (r.get("token") or "").strip() or None, "official": False})
+        out.append({"url": url, "official": False})
     return out
 
 
@@ -115,7 +115,7 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
 
     for repo in repos:
         try:
-            listing = await github_import.list_plugins(repo["url"], repo["token"])
+            listing = await github_import.list_plugins(repo["url"])
         except Exception as e:  # noqa: BLE001
             errors.append(f"{repo['url']}: {e}")
             continue
@@ -125,7 +125,7 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
                 continue  # 多仓库同 id，先到先得（官方仓库置顶，优先生效）
             seen.add(pid)
             # 注意：不要覆盖 p["repo"]——github_import 用它存「仓库名」来拼 raw URL。
-            # 仓库来源地址另存 repo_url，供展示与下载时按 token 匹配。
+            # 仓库来源地址另存 repo_url，供展示与下载时定位来源。
             p["repo_url"] = repo["url"]
             p["official"] = bool(repo.get("official"))
             p["installed"] = _local_exists(pid)
@@ -165,16 +165,18 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "downloaded": [], "errors": []}
     state = _load_state()
     versions: dict[str, str] = state.get("versions") or {}
-    repos = {r["url"]: r["token"] for r in _get_repos()}
+    repos = {r["url"] for r in _get_repos()}
 
     for plugin in plugins:
         pid = plugin.get("id")
         if not pid or "/" in pid or "\\" in pid or pid.startswith("_"):
             result["errors"].append(f"非法插件 id: {pid}")
             continue
-        token = repos.get(plugin.get("repo_url"))  # 用该插件所属仓库的 token
+        if plugin.get("repo_url") not in repos:
+            result["errors"].append(f"{pid}: 插件来源仓库未配置")
+            continue
         try:
-            files = await github_import.resolve_files(plugin, token)
+            files = await github_import.resolve_files(plugin)
             if not files:
                 result["errors"].append(f"{pid}: 无可下载文件")
                 continue
@@ -182,7 +184,7 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
             staged = []
             for f in files:
                 target = _safe_target(f["target"])
-                content = await github_import.fetch_file(f["download_url"], token)
+                content = await github_import.fetch_file(f["download_url"])
                 staged.append((target, content))
             for target, content in staged:
                 dest = PLUGINS_DIR / target
