@@ -692,7 +692,6 @@ onUnmounted(() => {
           <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
             {{ configSaving ? '保存中…' : '保存并应用' }}
           </button>
-          </template>
         </div>
       </div>
     </div>

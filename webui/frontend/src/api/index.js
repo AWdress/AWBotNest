@@ -103,6 +103,40 @@ export const api = {
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
   restartPlatform: () => request('POST', '/api/system/restart'),
+  downloadBackup: async () => {
+    const res = await fetch('/api/system/backup', { method: 'POST', headers: authHeaders() })
+    if (res.status === 401) {
+      setToken('')
+      if (onUnauthorized) onUnauthorized()
+      throw new Error('未登录或登录已过期')
+    }
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json()).detail || detail } catch {}
+      throw new Error(detail)
+    }
+    const disposition = res.headers.get('content-disposition') || ''
+    const m = /filename="?([^"]+)"?/.exec(disposition)
+    return { blob: await res.blob(), filename: m?.[1] || 'awbotnest-backup.zip' }
+  },
+  restoreBackup: async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const headers = authHeaders()
+    delete headers['Content-Type']
+    const res = await fetch('/api/system/restore', { method: 'POST', headers, body: form })
+    if (res.status === 401) {
+      setToken('')
+      if (onUnauthorized) onUnauthorized()
+      throw new Error('未登录或登录已过期')
+    }
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json()).detail || detail } catch {}
+      throw new Error(detail)
+    }
+    return res.json()
+  },
   testProxy: (proxy_set) => request('POST', '/api/settings/test_proxy', { proxy_set }),
   testDb: (DB_INFO) => request('POST', '/api/settings/test_db', { DB_INFO }),
 

@@ -341,6 +341,8 @@ async def setup(ctx):
 | `min`/`max`/`step` | `number`/`slider` 取值约束（可选）。`min`/`max` 同时用于保存前校验 |
 | `required` | 保存前校验：为 `True` 时该项不能为空，否则前端拦下不保存（`info`/`action` 不校验） |
 | `section` | 分区标题（可选）。同一 `section` 的字段在表单中归为一组 |
+| `order` | 排序权重（可选，数字）。同一 `section` 内数字越小越靠前，未指定的排最后 |
+| `cols` | 栅格列数（可选，1-12）。控制字段占用宽度，12=整行，6=半行，4=三分之一行 |
 | `show_if` | 条件显示，如 `{"enable_x": True}`：仅当该字段当前值匹配时显示 |
 | `fields` | `list` 专用：每行的子字段 `{子键: 子 spec}`，子字段可用上述基础类型 |
 | `item_label` | `list` 专用：每行标题前缀（默认「项」），如显示为「规则 1」「规则 2」 |
@@ -354,7 +356,40 @@ async def setup(ctx):
 - `list` 取值为 list-of-dict，`ctx.config["items"]` 直接拿到 `[{"name":..., ...}, ...]` 遍历即可。行内子字段暂不支持 `show_if`，也不建议 `list` 再嵌套 `list`。
 - `chat` 取值为会话 id（`multi` 时为 id 数组），插件里 `ctx.config["target"]` 直接当 chat_id 用。管理员没连账号时可手填 id 兜底。
 - `info` 只展示不收集输入。要显示动态状态（如「上次运行时间」），让插件用 `ctx.update_config` 写回同名键即可。
-- **表单布局由平台自动排布，插件不用关心宽度**：配置弹窗是一块大画布（桌面约 1000px，窄屏自动全屏）。同一 `section` 内的短字段（string/password/number/boolean/select/slider）会自动并排成多列，大字段（text/list/multiselect/chat）占整行，窗口变窄时回落单列。插件只管声明字段与 `section` 分区即可。
+
+### 表单布局控制
+
+配置弹窗采用 **12 列栅格系统**（桌面约 1000px 宽，窄屏自动全屏），插件开发者可以通过 `cols` 和 `order` 精确控制字段排版：
+
+**自动布局（默认）**：
+- 未指定 `cols` 时，大字段（`text`/`list`/`multiselect`/`chat`）自动占 12 列（整行）
+- 短字段（`string`/`password`/`number`/`boolean`/`select`/`slider`）自动占 6 列（半行，两两并排）
+
+**自定义布局**：
+```python
+"config_schema": {
+    # 三个字段并排成一行（每个占 4 列，即三分之一行）
+    "enable":   {"type": "boolean", "label": "启用", "cols": 4, "order": 1},
+    "interval": {"type": "number",  "label": "间隔", "cols": 4, "order": 2},
+    "max":      {"type": "number",  "label": "最大", "cols": 4, "order": 3},
+    
+    # 8 + 4 列组合（三分之二 + 三分之一）
+    "api_url":  {"type": "string", "label": "API地址", "cols": 8, "order": 4},
+    "timeout":  {"type": "number", "label": "超时",     "cols": 4, "order": 5},
+    
+    # 半行并排
+    "mode":     {"type": "select", "label": "模式",   "cols": 6, "options": ["a","b"]},
+    "level":    {"type": "select", "label": "级别",   "cols": 6, "options": ["1","2"]},
+    
+    # order 控制排序（数字越小越靠前）
+    "important": {"type": "string", "label": "重要配置", "order": 1},  # 排在最前
+    "optional":  {"type": "string", "label": "可选配置", "order": 99}, # 排在最后
+}
+```
+
+**移动端适配**：窄屏（≤768px）自动回退单列布局，`cols` 设置失效，所有字段占满宽。
+
+参考示例插件 `plugins/_EXAMPLE_LAYOUT.py` 查看完整演示。
 
 插件的全部配置均通过 `config_schema` 声明，不得修改平台配置。
 
