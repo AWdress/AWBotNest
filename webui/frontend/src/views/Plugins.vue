@@ -359,6 +359,84 @@ const storeUpdatable = computed(() => store.value.filter(hasUpdate))
 const officialSet = computed(() => new Set(officialIds.value))
 function isOfficial(p) { return p.official || officialSet.value.has(p.id) }
 
+// ── 插件搜索（已安装 + 市场） ──
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchInput = ref(null)
+
+const searchablePlugins = computed(() => {
+  const localById = new Map(plugins.value.map((p) => [p.id, p]))
+  const marketById = new Map(store.value.map((p) => [p.id, p]))
+  const ids = new Set([...localById.keys(), ...marketById.keys()])
+
+  return [...ids].map((id) => {
+    const local = localById.get(id)
+    const market = marketById.get(id)
+    const installed = !!local || !!market?.installed
+    return {
+      id,
+      name: local?.name || market?.name || id,
+      description: local?.description || market?.description || '',
+      author: local?.author || market?.author || '',
+      icon: local?.icon || market?.icon || '',
+      version: market?.version || local?.version || '',
+      enabled: !!local?.enabled,
+      error: local?.error || '',
+      installed,
+      updateAvailable: !!market && hasUpdate(market),
+      official: isOfficial(market || local || { id }),
+      repo: shortRepo(market?.repo_url || ''),
+      localPlugin: local,
+      marketPlugin: market,
+    }
+  }).sort((a, b) => {
+    const rank = (p) => p.updateAvailable ? 0 : p.installed ? 1 : 2
+    return rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN')
+  })
+})
+
+const searchResults = computed(() => {
+  const words = searchQuery.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (!words.length) return searchablePlugins.value
+  return searchablePlugins.value.filter((p) => {
+    const text = [p.name, p.id, p.description, p.author, p.repo].join(' ').toLowerCase()
+    return words.every((word) => text.includes(word))
+  })
+})
+
+function openPluginSearch() {
+  searchQuery.value = ''
+  searchOpen.value = true
+  if (store.value.length === 0 && !storeBusy.value) loadStore(false)
+  nextTick(() => searchInput.value?.focus())
+}
+
+function closePluginSearch() {
+  searchOpen.value = false
+}
+
+async function runSearchAction(p) {
+  if (p.updateAvailable || !p.installed) {
+    if (p.marketPlugin) await download(p.marketPlugin)
+    return
+  }
+  if (p.localPlugin) {
+    closePluginSearch()
+    await openConfig(p.localPlugin)
+  }
+}
+
+function onSearchHotkey(e) {
+  if (e.key === 'Escape' && searchOpen.value) {
+    closePluginSearch()
+    return
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    openPluginSearch()
+  }
+}
+
 // 仓库来源只显示 owner/repo（去掉 https://github.com/、.git、/tree/分支/子目录 等）
 function shortRepo(url) {
   if (!url) return ''
@@ -413,7 +491,6 @@ async function download(p) {
 
 // ── 设置 GitHub 仓库地址（多仓库） ──
 const repoOpen = ref(false)
-const repoInterval = ref(20)
 const repoList = ref([])
 const repoSaving = ref(false)
 const repoErr = ref('')
@@ -423,26 +500,23 @@ async function openRepos() {
   try {
     const d = await api.getSettings()
     const s = d.settings || {}
-    repoInterval.value = s.PLUGIN_REPO_INTERVAL || 20
-    repoList.value = (s.PLUGIN_REPOS || []).map((r) => ({ url: r.url || '', token: r.token || '' }))
+    repoList.value = (s.PLUGIN_REPOS || []).map((r) => ({ url: r.url || '' }))
     repoOpen.value = true
   } catch (e) {
     repoErr.value = e.message
   }
 }
 
-function addRepo() { repoList.value.push({ url: '', token: '' }) }
+function addRepo() { repoList.value.push({ url: '' }) }
 function delRepo(i) { repoList.value.splice(i, 1) }
 
 async function saveRepos() {
   repoSaving.value = true; repoErr.value = ''
   try {
     const repos = repoList.value
-      .map((r) => ({ url: (r.url || '').trim(), token: (r.token || '').trim() }))
+      .map((r) => ({ url: (r.url || '').trim() }))
       .filter((r) => r.url)
     await api.saveSettings({
-      PLUGIN_REPO_ENABLE: true,
-      PLUGIN_REPO_INTERVAL: Number(repoInterval.value) || 20,
       PLUGIN_REPOS: repos,
     })
     repoOpen.value = false
@@ -459,10 +533,12 @@ function goStore() { tab.value = 'store'; if (store.value.length === 0) loadStor
 onMounted(() => {
   load(); loadStore(false)
   document.addEventListener('click', closeMenu)
+  window.addEventListener('keydown', onSearchHotkey)
 })
 onUnmounted(() => {
   logsDisconnect()
   document.removeEventListener('click', closeMenu)
+  window.removeEventListener('keydown', onSearchHotkey)
 })
 </script>
 
@@ -655,6 +731,84 @@ onUnmounted(() => {
     <!-- 拖拽遮罩 -->
     <div v-if="dragging && tab === 'mine'" class="drag-overlay">松手上传 .py 插件</div>
 
+    <!-- 右下角插件搜索 -->
+    <button class="plugin-search-fab" type="button" title="搜索插件（Ctrl+K）"
+            aria-label="搜索插件" @click="openPluginSearch">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+           stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>
+      </svg>
+    </button>
+
+    <div v-if="searchOpen" class="modal-mask search-mask" @click.self="closePluginSearch">
+      <div class="search-modal card" role="dialog" aria-modal="true" aria-label="搜索插件">
+        <div class="search-head">
+          <div class="search-title">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>
+            </svg>
+            <span>搜索插件</span>
+          </div>
+          <button class="search-close" type="button" aria-label="关闭" @click="closePluginSearch">
+            <svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="search-input-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>
+          </svg>
+          <input ref="searchInput" v-model="searchQuery" type="search"
+                 placeholder="输入插件名称、作者、说明或英文标识" autocomplete="off" />
+          <span class="search-count">{{ searchResults.length }}</span>
+        </div>
+
+        <div class="search-list">
+          <div v-if="storeBusy && searchablePlugins.length === 0" class="search-empty">正在读取插件…</div>
+          <div v-else-if="searchResults.length === 0" class="search-empty">
+            <template v-if="searchQuery.trim()">没有找到“{{ searchQuery.trim() }}”相关的插件</template>
+            <template v-else>暂时没有可搜索的插件</template>
+          </div>
+          <div v-for="p in searchResults" :key="p.id" class="search-item"
+               :class="{ actionable: p.installed && !p.updateAvailable }"
+               @click="p.installed && !p.updateAvailable && runSearchAction(p)">
+            <img :src="p.icon || logo" class="search-icon" :class="{ fallback: !p.icon }" alt="" />
+            <div class="search-info">
+              <div class="search-name-row">
+                <span class="search-name">{{ p.name }}</span>
+                <span class="search-version" v-if="p.version">v{{ p.version }}</span>
+                <span v-if="p.official" class="badge-official">官方</span>
+                <span v-if="p.updateAvailable" class="search-state update">可更新</span>
+                <span v-else-if="p.error" class="search-state error">异常</span>
+                <span v-else-if="p.installed" class="search-state installed">{{ p.enabled ? '已启用' : '已安装' }}</span>
+                <span v-else class="search-state available">可安装</span>
+              </div>
+              <div class="search-desc">{{ p.description || '暂无说明' }}</div>
+              <div class="search-meta">
+                <span class="mono">{{ p.id }}</span>
+                <span v-if="p.author">{{ p.author }}</span>
+                <span v-if="p.repo">{{ p.repo }}</span>
+              </div>
+            </div>
+            <button class="search-action" type="button" :disabled="dlBusy[p.id]"
+                    @click.stop="runSearchAction(p)">
+              <template v-if="dlBusy[p.id]">处理中…</template>
+              <template v-else-if="p.updateAvailable">更新</template>
+              <template v-else-if="p.installed">配置</template>
+              <template v-else>安装</template>
+            </button>
+          </div>
+        </div>
+        <div class="search-foot">
+          <span>支持搜索名称、作者、说明和英文标识</span>
+          <span><kbd>Esc</kbd> 关闭</span>
+        </div>
+      </div>
+    </div>
+
     <!-- 配置弹窗 -->
     <div v-if="configOpen" class="modal-mask" @click.self="configOpen=false">
       <div class="modal card" :class="{ 'modal-wide': configRenderMode === 'vue' || Object.keys(configSchema).length }">
@@ -765,17 +919,11 @@ onUnmounted(() => {
         <div v-if="repoErr" class="alert">{{ repoErr }}</div>
         <div class="form">
           <div class="muted small">官方仓库已内置，无需添加。这里配置你自己的额外仓库。</div>
-          <div class="muted small">自动轮询已常开：每隔下面的间隔自动刷新市场并更新已安装插件（仍不自动启用）。</div>
           <div class="field">
-            <label>轮询间隔（分钟）</label>
-            <input class="input" type="number" min="1" v-model.number="repoInterval" style="max-width:160px" />
-          </div>
-          <div class="field">
-            <label>额外插件仓库（可加多个）</label>
+            <label>额外公开插件仓库（可加多个）</label>
             <div v-for="(r, i) in repoList" :key="i" class="repo-row">
               <input class="input" v-model="r.url"
                      placeholder="owner/repo 或 https://github.com/owner/repo（可带 /tree/分支/子目录）" />
-              <input class="input repo-token" type="password" v-model="r.token" placeholder="token（私有库才填）" />
               <button class="btn sm btn-danger" @click="delRepo(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
@@ -940,6 +1088,108 @@ onUnmounted(() => {
   z-index: 100; pointer-events: none;
 }
 
+/* 插件搜索：右下角入口 + 居中命令面板 */
+.plugin-search-fab {
+  position: fixed; right: 28px; bottom: 28px; z-index: 120;
+  width: 56px; height: 56px; border: 1px solid rgba(255,255,255,0.14); border-radius: 18px;
+  display: grid; place-items: center; cursor: pointer;
+  color: #fff; background: linear-gradient(145deg, #3a8cff, #1767d8);
+  box-shadow: 0 12px 32px rgba(20, 93, 194, 0.42), inset 0 1px 0 rgba(255,255,255,0.18);
+  transition: transform .18s ease, box-shadow .18s ease, border-radius .18s ease;
+  animation: search-fab-in .35s ease both;
+}
+.plugin-search-fab:hover {
+  transform: translateY(-3px); border-radius: 15px;
+  box-shadow: 0 16px 38px rgba(20, 93, 194, 0.52), inset 0 1px 0 rgba(255,255,255,0.2);
+}
+.plugin-search-fab:active { transform: translateY(0) scale(.96); }
+.plugin-search-fab svg { width: 24px; height: 24px; }
+@keyframes search-fab-in { from { opacity: 0; transform: translateY(12px) scale(.88); } }
+
+.search-mask { backdrop-filter: blur(4px); background: rgba(3, 6, 12, 0.74); }
+.search-modal {
+  width: 720px; max-width: calc(100vw - 40px); max-height: min(760px, 82vh); padding: 0;
+  display: flex; flex-direction: column; overflow: hidden;
+  border-color: var(--border-light); background: #151820;
+  box-shadow: 0 26px 80px rgba(0,0,0,.58);
+  animation: search-panel-in .2s ease both;
+}
+@keyframes search-panel-in { from { opacity: 0; transform: translateY(10px) scale(.985); } }
+.search-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 18px 20px 12px;
+}
+.search-title { display: flex; align-items: center; gap: 9px; font-size: 15px; font-weight: 650; }
+.search-title svg { width: 19px; height: 19px; color: var(--accent); }
+.search-close {
+  width: 32px; height: 32px; border: 0; border-radius: 8px; display: grid; place-items: center;
+  color: var(--text-muted); background: transparent; cursor: pointer;
+}
+.search-close:hover { color: var(--text-primary); background: var(--bg-hover); }
+.search-close .x-ico { width: 19px; height: 19px; }
+.search-input-wrap {
+  margin: 0 20px 12px; min-height: 48px; display: flex; align-items: center; gap: 10px;
+  padding: 0 14px; border: 1px solid var(--border-light); border-radius: 12px;
+  color: var(--text-muted); background: #0d1017;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+.search-input-wrap:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.search-input-wrap > svg { width: 19px; height: 19px; flex: 0 0 auto; }
+.search-input-wrap input {
+  flex: 1; min-width: 0; border: 0; outline: 0; background: transparent;
+  color: var(--text-primary); font: inherit; font-size: 14px;
+}
+.search-input-wrap input::placeholder { color: var(--text-muted); }
+.search-input-wrap input::-webkit-search-cancel-button { display: none; }
+.search-count {
+  min-width: 26px; padding: 2px 7px; border-radius: 8px; text-align: center;
+  color: var(--text-secondary); background: var(--bg-elevated); font-size: 11px;
+}
+.search-list { flex: 1; min-height: 160px; overflow-y: auto; padding: 2px 10px 8px; }
+.search-item {
+  display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 12px;
+  padding: 11px 12px; border: 1px solid transparent; border-radius: 11px;
+  transition: background .14s ease, border-color .14s ease;
+}
+.search-item:hover { background: rgba(255,255,255,.035); border-color: var(--border); }
+.search-item.actionable { cursor: pointer; }
+.search-icon {
+  width: 42px; height: 42px; border-radius: 12px; object-fit: cover;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+}
+.search-icon.fallback { object-fit: contain; padding: 7px; }
+.search-info { min-width: 0; }
+.search-name-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.search-name { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-version { color: var(--text-muted); font-size: 11px; flex: 0 0 auto; }
+.search-state { padding: 1px 7px; border-radius: 999px; font-size: 10px; font-weight: 650; flex: 0 0 auto; }
+.search-state.installed { color: var(--accent-2); background: var(--accent-2-dim); }
+.search-state.available { color: var(--accent); background: var(--accent-dim); }
+.search-state.update { color: var(--warning); background: rgba(224,160,32,.14); }
+.search-state.error { color: var(--danger); background: var(--danger-dim); }
+.search-desc {
+  margin-top: 3px; color: var(--text-secondary); font-size: 12px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.search-meta { display: flex; gap: 8px; margin-top: 4px; color: var(--text-muted); font-size: 10px; }
+.search-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-action {
+  min-width: 62px; padding: 7px 11px; border: 1px solid var(--border-light); border-radius: 8px;
+  color: var(--text-secondary); background: var(--bg-elevated); font-size: 12px; cursor: pointer;
+}
+.search-action:hover { color: #fff; border-color: var(--accent); background: var(--accent); }
+.search-action:disabled { opacity: .5; cursor: wait; }
+.search-empty { padding: 56px 20px; text-align: center; color: var(--text-muted); }
+.search-foot {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 20px; border-top: 1px solid var(--border);
+  color: var(--text-muted); background: rgba(0,0,0,.12); font-size: 11px;
+}
+.search-foot kbd {
+  padding: 2px 6px; border: 1px solid var(--border-light); border-radius: 5px;
+  color: var(--text-secondary); background: var(--bg-elevated); font-family: inherit;
+}
+
 .modal-mask {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.6);
@@ -963,7 +1213,6 @@ onUnmounted(() => {
 .hint { font-size: 12px; }
 .repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .repo-row .input { flex: 1; }
-.repo-row .repo-token { max-width: 180px; flex: 0 0 auto; }
 .acct-row { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
 .acct-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
 .acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
@@ -1014,7 +1263,20 @@ onUnmounted(() => {
   .tab { flex: 1; justify-content: center; padding: 9px 8px; }
   .grid { grid-template-columns: 1fr; }
   .repo-row { flex-wrap: wrap; }
-  .repo-row .repo-token { max-width: none; flex: 1 1 100%; }
+  .plugin-search-fab { right: 16px; bottom: 82px; width: 52px; height: 52px; border-radius: 16px; }
+  .search-modal {
+    width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh;
+    border: 0; border-radius: 0;
+  }
+  .search-head { padding: 15px 16px 10px; }
+  .search-input-wrap { margin: 0 16px 10px; }
+  .search-list { padding: 2px 6px 8px; }
+  .search-item { grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; padding: 10px; }
+  .search-icon { width: 38px; height: 38px; border-radius: 10px; }
+  .search-action { min-width: 52px; padding: 7px 9px; }
+  .search-meta span:nth-child(n+3) { display: none; }
+  .search-foot { padding: 10px 16px; }
+  .search-foot > span:first-child { display: none; }
   /* 窄屏照 MoviePilot 直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
   .modal.modal-wide {

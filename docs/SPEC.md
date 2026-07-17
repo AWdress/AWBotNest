@@ -218,7 +218,7 @@ async def setup(ctx):
    - `owner/repo`、`owner/repo/子目录`
    - `https://github.com/owner/repo`（可带 `/tree/分支/子目录`）
    - 直接 raw 链接：`https://raw.githubusercontent.com/owner/repo/分支/路径/plugin.py`
-5. **私有仓库**：前端可填 GitHub token（通过 Authorization 头访问），token 不落盘。
+5. **仅支持公开仓库**：平台不接收 GitHub 私有仓库凭据，也不会发送授权请求头。
 6. 导入 = 下载落盘到 `plugins/`（文件夹插件保留目录结构）+ 静态校验元数据，**不自动启用**；用户在列表里手动开启。
 
 ## 7.6 插件商店 / 仓库自动同步（多仓库）
@@ -228,16 +228,16 @@ async def setup(ctx):
 仓库地址在插件页「设置仓库地址」对话框管理。
 
 1. **配置项**（平台级，存 `data/config.json`，前端可改）：
-   - `PLUGIN_REPO_ENABLE`：**已废弃**——轮询强制常开，不再受此开关控制（仍写 `true` 兼容旧字段）。
-   - `PLUGIN_REPOS`：仓库列表 `[{"url": "...", "token": "..."}, ...]`。`url` 格式同 §7.5；`token` 为私有仓库令牌（敏感，打码存储）。官方仓库 `AWdress/AWBotNest-Plugins` 由平台内置，不在此列。
-   - `PLUGIN_REPO_INTERVAL`：轮询间隔（分钟，默认 20，最小 1）。
+   - `PLUGIN_REPO_ENABLE`：**已废弃**——轮询强制常开，不再受此开关控制。
+   - `PLUGIN_REPOS`：公开仓库列表 `[{"url": "..."}, ...]`。`url` 格式同 §7.5；官方仓库 `AWdress/AWBotNest-Plugins` 由平台内置，不在此列。
+   - `PLUGIN_REPO_INTERVAL`：后台使用的轮询间隔，默认 20 分钟；前端不提供修改入口。
 2. **仓库格式**：与 §7.5 完全一致——优先 `manifest.json`（推荐，带版本号才能识别"更新"），无清单则目录扫描。多仓库出现同 id 插件时先到先得。
 3. **插件商店（显示，不自动下载）**：聚合所有仓库的插件列表，标记 `installed`。商店只展示**未安装**的；用户点「下载」才落盘。下载 = 写入 `plugins/`，**绝不自动启用**（启用 = 在服务器执行远程代码，须用户到「我的插件」手动开启，同 §7.5 安全铁律）。
 4. **自动轮询只做两件事**（不自动下载新插件）：
    - ①刷新商店列表缓存（让仓库新插件出现在商店）；
    - ②对**已安装**插件，若 manifest 版本号变化则下载覆盖更新；**若该插件当前正在运行，则自动热重载使新代码生效**（未运行的只更新文件、不自动启用，保持 §7.5）。无版本信号的不动；用户手动停用的插件，轮询不碰其启用状态。
 5. **任务展示**：轮询任务以平台级身份（id `插件仓库轮询`）注册到 scheduler，显示在「系统状态」页定时任务卡片。
-6. **触发时机**：平台启动 + 设置变更（仓库/间隔）即时重排任务（轮询常开，无需开关）。插件页「刷新市场」按钮手动拉取（`GET /api/plugins/store?refresh=true`），「下载」走 `POST /api/plugins/store/download`。
+6. **触发时机**：平台启动 + 仓库设置变更时重排任务（轮询常开，无需开关）。插件页「刷新市场」按钮手动拉取（`GET /api/plugins/store?refresh=true`），「下载」走 `POST /api/plugins/store/download`。
 7. 商店缓存 + 各插件已知版本存 `data/repo_sync.json`。
 
 ---

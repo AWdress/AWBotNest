@@ -61,8 +61,8 @@ export const api = {
     request(method, `/api/plugins/${id}/api/${String(path).replace(/^\/+/, '')}`, body),
 
   // GitHub 导入
-  githubList: (source, token) => request('POST', '/api/plugins/github/list', { source, token }),
-  githubImport: (plugins, token) => request('POST', '/api/plugins/github/import', { plugins, token }),
+  githubList: (source) => request('POST', '/api/plugins/github/list', { source }),
+  githubImport: (plugins) => request('POST', '/api/plugins/github/import', { plugins }),
 
   // 插件商店（多仓库聚合）
   pluginStore: (refresh = true) => request('GET', `/api/plugins/store?refresh=${refresh}`),

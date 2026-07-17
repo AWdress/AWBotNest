@@ -46,7 +46,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     # 插件仓库自动同步（定时从 GitHub 仓库拉取插件列表到「插件商店」，按需下载）
     "PLUGIN_REPO_ENABLE": False,
-    "PLUGIN_REPOS": [],          # 多仓库：[{"url": "owner/repo", "token": ""}, ...]
+    "PLUGIN_REPOS": [],          # 公开仓库列表：[{"url": "owner/repo"}, ...]
     "PLUGIN_REPO_INTERVAL": 20,  # 轮询间隔（分钟）：刷新商店列表 + 检查已装插件更新
     # 插件依赖安装用的 pip 镜像源。默认清华源（境内直连、不经墙，开箱可用）；
     # 留空则走官方 pypi（此时若配了平台代理会自动用代理出墙）。
@@ -57,6 +57,40 @@ _DEFAULTS: dict[str, Any] = {
 ALLOWED_KEYS = tuple(_DEFAULTS.keys())
 
 
+def _clean_plugin_repos(value: Any) -> list[dict[str, str]]:
+    """只保留公开仓库地址，去重并删除旧版私有仓库凭据。"""
+    cleaned = []
+    seen = set()
+    for repo in value or []:
+        if not isinstance(repo, dict):
+            continue
+        url = str(repo.get("url") or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        cleaned.append({"url": url})
+    return cleaned
+
+
+def _write_config(values: dict[str, Any]) -> None:
+    """原子写入配置文件。"""
+    import os
+    import tempfile
+    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(values, ensure_ascii=False, indent=2)
+    fd, tmp = tempfile.mkstemp(dir=str(_CONFIG_PATH.parent), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, _CONFIG_PATH)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def load() -> dict[str, Any]:
     """读取 config.json，缺失字段用默认值补齐（顶层 dict 字段做二级合并补子键）。"""
     data: dict[str, Any] = {}
@@ -65,6 +99,13 @@ def load() -> dict[str, Any]:
             data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             data = {}
+    cleaned_repos = _clean_plugin_repos(data.get("PLUGIN_REPOS"))
+    if "PLUGIN_REPOS" in data and data.get("PLUGIN_REPOS") != cleaned_repos:
+        data["PLUGIN_REPOS"] = cleaned_repos
+        try:
+            _write_config(data)
+        except OSError:
+            pass  # 配置只读时仍使用清理后的内存值，不让旧 token 进入后端。
     merged = {**_DEFAULTS, **(data or {})}
     # 二级合并：proxy_set / DB_INFO 等嵌套 dict，补齐用户配置缺失的子键，
     # 避免旧配置只有部分子键时整块覆盖掉默认值导致 KeyError。
@@ -75,6 +116,8 @@ def load() -> dict[str, Any]:
             if k == "proxy_set" and isinstance(default_v.get("proxy"), dict) \
                     and isinstance(merged[k].get("proxy"), dict):
                 merged[k]["proxy"] = {**default_v["proxy"], **merged[k]["proxy"]}
+    # 私有仓库已不再支持，只保留公开仓库地址并丢弃旧配置里的 token。
+    merged["PLUGIN_REPOS"] = _clean_plugin_repos(merged.get("PLUGIN_REPOS"))
     return merged
 
 
@@ -84,25 +127,11 @@ def save(new_values: dict[str, Any]) -> dict[str, Any]:
     原子写：先写临时文件再 os.replace，避免写到一半崩溃导致 JSON 损坏。
     返回写回后的完整配置。
     """
-    import os
-    import tempfile
     current = load()
     for k, v in (new_values or {}).items():
         if k in ALLOWED_KEYS:
             current[k] = v
-    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(current, ensure_ascii=False, indent=2)
-    fd, tmp = tempfile.mkstemp(dir=str(_CONFIG_PATH.parent), suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(text)
-        os.replace(tmp, _CONFIG_PATH)  # 原子替换
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+    _write_config(current)
     _apply(current)
     return current
 
