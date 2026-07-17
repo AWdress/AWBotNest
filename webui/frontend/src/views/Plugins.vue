@@ -686,16 +686,12 @@ onUnmounted(() => {
             尚未设置 Webhook 密钥。请先到「系统设置 → 通知 → 平台 Webhook」生成密钥。
           </div>
         </div>
-        <!-- vue 模式由插件组件自己管保存，这里只留关闭；schema 模式给平台保存按钮 -->
-        <div class="modal-foot">
-          <template v-if="configRenderMode === 'vue'">
-            <button class="btn" @click="configOpen=false">关闭</button>
-          </template>
-          <template v-else>
-            <button class="btn" @click="configOpen=false">取消</button>
-            <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
-              {{ configSaving ? '保存中…' : '保存并应用' }}
-            </button>
+        <!-- vue 模式由插件组件自己管保存，右上角已有 × 关闭，底部不再重复关闭按钮；schema 模式给平台保存按钮 -->
+        <div v-if="configRenderMode !== 'vue'" class="modal-foot">
+          <button class="btn" @click="configOpen=false">取消</button>
+          <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
+            {{ configSaving ? '保存中…' : '保存并应用' }}
+          </button>
           </template>
         </div>
       </div>
