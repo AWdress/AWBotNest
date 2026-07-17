@@ -142,6 +142,10 @@ onMounted(load)
             <div class="acc-meta mono">
               {{ acc.session }}<template v-if="acc.tgid"> · {{ acc.tgid }}</template>
             </div>
+            <div class="acc-status-row">
+              <span class="health-pill" :class="`health-${acc.health || 'info'}`">{{ acc.status_text || (acc.online ? '在线' : '离线') }}</span>
+              <span class="muted small">{{ acc.session_exists ? '已有 session' : '还未完成登录' }}</span>
+            </div>
           </div>
           <span class="badge" :class="acc.online ? 'badge-on' : 'badge-off'">
             {{ acc.online ? '在线' : '离线' }}
@@ -248,6 +252,15 @@ onMounted(load)
 .acc-head { display: flex; justify-content: space-between; align-items: flex-start; }
 .acc-name { font-size: 15px; font-weight: 600; }
 .acc-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.acc-status-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.small { font-size: 12px; }
+.health-pill {
+  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
+  font-size: 11px; font-weight: 600;
+}
+.health-ok { background: var(--accent-2-dim); color: var(--accent-2); }
+.health-warn { background: var(--danger-dim); color: var(--danger); }
+.health-info { background: var(--accent-dim); color: var(--accent); }
 .acc-actions { display: flex; gap: 8px; }
 .btn.sm { padding: 6px 14px; font-size: 12px; }
 

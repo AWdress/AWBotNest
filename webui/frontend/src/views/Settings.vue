@@ -5,7 +5,7 @@ import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
 
-const tab = ref('login')   // login | telegram | bots | web | proxy | db
+const tab = ref('login')   // login | telegram | bots | web | proxy | db | maint
 
 const TABS = [
   { key: 'login',    label: '控制台登录' },
@@ -14,6 +14,7 @@ const TABS = [
   { key: 'web',      label: 'Web 控制台' },
   { key: 'proxy',    label: '运行代理' },
   { key: 'db',       label: '数据库' },
+  { key: 'maint',    label: '维护' },
 ]
 
 const s = ref(null)
@@ -98,6 +99,59 @@ async function testDb() {
   try { dbTest.value = await api.testDb(s.value.DB_INFO) }
   catch (e) { dbTest.value = { ok: false, message: e.message } }
   finally { dbTesting.value = false }
+}
+
+// ── 备份 / 恢复 ──
+const backupBusy = ref(false)
+const restoreBusy = ref(false)
+const restoreInput = ref(null)
+
+function openRestorePicker() {
+  restoreInput.value?.click()
+}
+
+async function downloadBackup() {
+  backupBusy.value = true
+  try {
+    const { blob, filename } = await api.downloadBackup()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('备份包已开始下载')
+  } catch (e) {
+    toast.error('导出备份失败：' + e.message)
+  } finally {
+    backupBusy.value = false
+  }
+}
+
+async function onRestoreFile(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (!file) return
+  const ok = await confirm({
+    title: '导入恢复',
+    message: '恢复会覆盖平台中的 data、sessions、db_file、plugins 目录内容。建议先确认备份包来源可信。继续恢复？',
+    confirmText: '继续恢复',
+    danger: true,
+  })
+  if (!ok) return
+
+  restoreBusy.value = true
+  try {
+    const r = await api.restoreBackup(file)
+    restartHint.value = !!r.restart_required
+    toast.success(`恢复完成，共写入 ${r.restored_files || 0} 个文件`)
+  } catch (err) {
+    toast.error('恢复失败：' + err.message)
+  } finally {
+    restoreBusy.value = false
+  }
 }
 
 // ── 多 Bot（额外 Bot 增删） ──
@@ -468,6 +522,38 @@ onBeforeRouteLeave(async () => {
         </div>
       </div>
 
+      <!-- 维护 -->
+      <div v-show="tab === 'maint'" class="card">
+        <div class="card-title">维护</div>
+        <div class="hint muted">
+          这里可以导出当前平台快照，或从已有备份包恢复。备份会包含 `data/`、`sessions/`、`db_file/`、`plugins/`。
+          恢复完成后建议立即重启平台。
+        </div>
+
+        <div class="maint-box">
+          <div class="maint-item">
+            <div>
+              <div class="maint-name">导出备份</div>
+              <div class="maint-desc muted">生成 zip 备份包，便于迁移、回滚或手动归档。</div>
+            </div>
+            <button class="btn btn-primary" @click="downloadBackup" :disabled="backupBusy">
+              {{ backupBusy ? '导出中…' : '下载备份' }}
+            </button>
+          </div>
+
+          <div class="maint-item">
+            <div>
+              <div class="maint-name">导入恢复</div>
+              <div class="maint-desc muted">导入之前导出的 zip 备份包，覆盖恢复平台运行数据。</div>
+            </div>
+            <button class="btn" @click="openRestorePicker" :disabled="restoreBusy">
+              {{ restoreBusy ? '恢复中…' : '选择备份包' }}
+            </button>
+            <input ref="restoreInput" type="file" accept=".zip,application/zip" style="display:none" @change="onRestoreFile" />
+          </div>
+        </div>
+      </div>
+
       <div class="hint muted foot" v-if="tab === 'telegram'">提示：账号登录在「账号管理」页完成，账号列表会随登录自动写入。</div>
     </div>
   </div>
@@ -571,6 +657,14 @@ onBeforeRouteLeave(async () => {
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route-sel { max-width: 220px; flex: 0 0 auto; }
 .small { font-size: 12px; }
+.maint-box { display: flex; flex-direction: column; gap: 12px; }
+.maint-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.maint-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.maint-desc { font-size: 12px; margin-top: 4px; max-width: 520px; }
 
 /* 平台 webhook 地址展示 */
 .row.gap { display: flex; align-items: center; gap: 8px; }
@@ -589,5 +683,6 @@ onBeforeRouteLeave(async () => {
   .tabs { flex-wrap: wrap; }
   .tab { white-space: nowrap; flex: 1 1 auto; justify-content: center; padding: 8px 12px; }
   .panel { max-width: 100%; }
+  .maint-item { flex-direction: column; align-items: stretch; }
 }
 </style>

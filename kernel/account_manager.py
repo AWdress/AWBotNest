@@ -284,12 +284,37 @@ class AccountManager:
         configured = [(a["session"] if isinstance(a, dict) else a) for a in raw_accounts]
         extra = [a.name for a in self.user_apps if a.name not in configured]
         names = configured + extra
+        paused = _paused_set(self.workdir)
 
         result: list[dict] = []
         for sname in names:
             app = next((a for a in self.user_apps if a.name == sname), None)
             online = bool(app and app.is_connected)
-            entry = {"session": sname, "online": online, "name": sname, "tgid": None}
+            session_exists = (self.workdir / f"{sname}.session").exists()
+            manually_paused = sname in paused
+            if online:
+                health = "ok"
+                status_text = "在线"
+            elif not session_exists:
+                health = "warn"
+                status_text = "未登录"
+            elif manually_paused:
+                health = "info"
+                status_text = "已手动下线"
+            else:
+                health = "warn"
+                status_text = "离线"
+
+            entry = {
+                "session": sname,
+                "online": online,
+                "name": sname,
+                "tgid": None,
+                "session_exists": session_exists,
+                "paused": manually_paused,
+                "health": health,
+                "status_text": status_text,
+            }
             acc = next(
                 (a for a in raw_accounts
                  if (a["session"] if isinstance(a, dict) else a) == sname),
