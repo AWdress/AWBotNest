@@ -138,7 +138,7 @@ function getColSpan(spec) {
 /* 移动端回退到单列 */
 @media (max-width: 768px) {
   .fields-grid { grid-template-columns: 1fr; }
-  .fields-grid > * { grid-column: span 12 !important; }
+  .fields-grid > * { grid-column: 1 / -1 !important; }
 }
 .section-title {
   font-size: 12px; font-weight: 600; color: var(--accent);

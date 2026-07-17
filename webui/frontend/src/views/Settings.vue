@@ -110,18 +110,22 @@ function openRestorePicker() {
   restoreInput.value?.click()
 }
 
+function saveBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 async function downloadBackup() {
   backupBusy.value = true
   try {
     const { blob, filename } = await api.downloadBackup()
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = filename
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
+    saveBlob(blob, filename)
     toast.success('备份包已开始下载')
   } catch (e) {
     toast.error('导出备份失败：' + e.message)
@@ -146,7 +150,15 @@ async function onRestoreFile(e) {
   try {
     const r = await api.restoreBackup(file)
     restartHint.value = !!r.restart_required
-    toast.success(`恢复完成，共写入 ${r.restored_files || 0} 个文件`)
+    if (r.pre_restore_backup) {
+      try {
+        const snapshot = await api.downloadStoredBackup(r.pre_restore_backup)
+        saveBlob(snapshot.blob, snapshot.filename)
+      } catch (downloadError) {
+        toast.error('恢复包已暂存，但恢复前快照下载失败：' + downloadError.message)
+      }
+    }
+    toast.success(`备份已校验，共 ${r.staged_files || 0} 个文件；重启平台后应用恢复`)
   } catch (err) {
     toast.error('恢复失败：' + err.message)
   } finally {
@@ -526,8 +538,8 @@ onBeforeRouteLeave(async () => {
       <div v-show="tab === 'maint'" class="card">
         <div class="card-title">维护</div>
         <div class="hint muted">
-          这里可以导出当前平台快照，或从已有备份包恢复。备份会包含 `data/`、`sessions/`、`db_file/`、`plugins/`。
-          恢复完成后建议立即重启平台。
+          这里可以导出当前平台快照，或从已有备份包恢复。备份会包含 data/、sessions/、db_file/、plugins/。
+          导入时会先校验并下载当前快照，重启平台后再应用恢复，避免损坏运行中的数据库。
         </div>
 
         <div class="maint-box">
@@ -544,7 +556,7 @@ onBeforeRouteLeave(async () => {
           <div class="maint-item">
             <div>
               <div class="maint-name">导入恢复</div>
-              <div class="maint-desc muted">导入之前导出的 zip 备份包，覆盖恢复平台运行数据。</div>
+              <div class="maint-desc muted">导入平台生成的 zip 备份包；重启后完整替换平台运行数据。</div>
             </div>
             <button class="btn" @click="openRestorePicker" :disabled="restoreBusy">
               {{ restoreBusy ? '恢复中…' : '选择备份包' }}

@@ -17,6 +17,15 @@ import os
 import json
 from pathlib import Path
 
+# A restore is applied before config, databases, Telegram sessions, or plugins are opened.
+try:
+    from webui.backup import apply_pending_restore as _apply_pending_restore
+    _restored_files = _apply_pending_restore()
+    if _restored_files:
+        print(f"[restore] 平台备份恢复完成，共恢复 {_restored_files} 个文件")
+except Exception as _restore_error:  # noqa: BLE001 - keep the rolled-back platform bootable
+    print(f"[restore] 待恢复备份应用失败，已保留原数据: {_restore_error}")
+
 _base = os.getcwd()
 os.makedirs(os.path.join(_base, "data"), exist_ok=True)
 
