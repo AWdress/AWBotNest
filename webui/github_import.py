@@ -134,6 +134,7 @@ async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[di
                 "version": meta.get("version", ""),
                 "author": meta.get("author", ""),
                 "description": meta.get("description", ""),
+                "changelog": str(meta.get("changelog", "") or ""),
                 "icon": meta.get("icon", ""),
                 "is_folder": is_folder,
                 "path": (base + path).strip("/") + ("/" if is_folder else ""),
@@ -162,7 +163,7 @@ async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
             if it.get("type") == "file" and nm.endswith(".py") and not nm.startswith("_"):
                 results.append({
                     "id": nm[:-3], "name": nm[:-3], "version": "", "author": "",
-                    "description": "", "icon": "", "is_folder": False,
+                    "description": "", "changelog": "", "icon": "", "is_folder": False,
                     "path": it["path"], "download_url": it["download_url"],
                     "from_manifest": False, "owner": owner, "repo": repo, "branch": branch,
                 })
@@ -174,7 +175,7 @@ async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
                 if rr.status_code == 200:
                     results.append({
                         "id": nm, "name": nm, "version": "", "author": "",
-                        "description": "", "icon": "", "is_folder": True,
+                        "description": "", "changelog": "", "icon": "", "is_folder": True,
                         "path": it["path"] + "/",
                         "from_manifest": False, "owner": owner, "repo": repo, "branch": branch,
                     })
@@ -186,7 +187,7 @@ async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
 async def list_plugins(src: str) -> dict:
     """
     列出来源中的插件。返回 {"source_type": "manifest"|"scan"|"raw", "plugins": [...]}
-    每个 plugin 含 id/name/version/author/description/icon/is_folder/path 等。
+    每个 plugin 含 id/name/version/author/description/changelog/icon/is_folder/path 等。
     """
     info = parse_source(src)
     async with httpx.AsyncClient(timeout=20, follow_redirects=True, proxy=_proxy()) as client:
@@ -195,7 +196,7 @@ async def list_plugins(src: str) -> dict:
             return {"source_type": "raw", "plugins": [{
                 "id": name[:-3] if name.endswith(".py") else name,
                 "name": name[:-3] if name.endswith(".py") else name,
-                "version": "", "author": "", "description": "", "icon": "",
+                "version": "", "author": "", "description": "", "changelog": "", "icon": "",
                 "is_folder": False, "path": name, "download_url": info["url"],
                 "from_manifest": False,
             }]}

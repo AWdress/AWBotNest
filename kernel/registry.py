@@ -42,6 +42,7 @@ class PluginMeta:
     version: str = "0.0.0"
     author: str = ""
     description: str = ""
+    changelog: str = ""  # 可选：面向用户的版本更新说明
     icon: str = ""       # 可选：插件图标 URL，前端卡片展示；空则回退平台 logo
     scope: str = "user"  # user | bot | both
     default_enabled: bool = False
@@ -214,6 +215,7 @@ class PluginRegistry:
             version=str(raw.get("version", "0.0.0")),
             author=raw.get("author", ""),
             description=raw.get("description", ""),
+            changelog=str(raw.get("changelog", "") or ""),
             icon=raw.get("icon", "") or "",
             scope=scope,
             default_enabled=bool(raw.get("default_enabled", False)),
