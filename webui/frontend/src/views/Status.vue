@@ -1,20 +1,115 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { api } from '../api'
 
 const st = ref(null)
 const error = ref('')
+const loading = ref(true)
+const pageReady = ref(false)
+const hoveredBar = ref(null)
+const focusedPlugin = ref('')
+const changedAccounts = ref([])
+const changedJobs = ref([])
+const animated = ref({ user: 0, plugin: 0, uptime: 0, donut: 0, donutAngle: 0 })
 let timer = null
+let changeTimer = null
+let loadingRequest = false
+let firstPaintFrame = null
+const animationFrames = new Map()
+
+const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+function animateNumber(key, target, duration = 650) {
+  const next = Number(target) || 0
+  const previousFrame = animationFrames.get(key)
+  if (previousFrame) cancelAnimationFrame(previousFrame)
+  if (reduceMotion()) {
+    animated.value[key] = next
+    return
+  }
+  const from = Number(animated.value[key]) || 0
+  const started = performance.now()
+  const tick = (now) => {
+    const progress = Math.min(1, (now - started) / duration)
+    const eased = 1 - Math.pow(1 - progress, 3)
+    animated.value[key] = Math.round(from + (next - from) * eased)
+    if (progress < 1) animationFrames.set(key, requestAnimationFrame(tick))
+    else animationFrames.delete(key)
+  }
+  animationFrames.set(key, requestAnimationFrame(tick))
+}
+
+function activityTotal(data) {
+  return Object.values(data?.activity?.totals || {}).reduce((sum, count) => sum + count, 0)
+}
+
+function markChangedRows(previous, next) {
+  if (!previous) return
+  const oldAccounts = new Map(previous.accounts.map(account => [account.session, account]))
+  changedAccounts.value = next.accounts
+    .filter(account => {
+      const old = oldAccounts.get(account.session)
+      return !old || old.online !== account.online || old.name !== account.name || old.tgid !== account.tgid
+    })
+    .map(account => account.session)
+
+  const oldJobs = new Map(previous.scheduler_jobs.map(job => [job.id, job]))
+  changedJobs.value = next.scheduler_jobs
+    .filter(job => {
+      const old = oldJobs.get(job.id)
+      return !old || old.next !== job.next || old.trigger !== job.trigger || old.name !== job.name
+    })
+    .map(job => job.id)
+
+  clearTimeout(changeTimer)
+  changeTimer = setTimeout(() => {
+    changedAccounts.value = []
+    changedJobs.value = []
+  }, 1400)
+}
 
 async function load() {
-  try { st.value = await api.status(); error.value = '' }
-  catch (e) { error.value = e.message }
+  if (loadingRequest) return
+  loadingRequest = true
+  try {
+    const previous = st.value
+    const next = await api.status()
+    markChangedRows(previous, next)
+    st.value = next
+    error.value = ''
+    loading.value = false
+
+    animateNumber('user', next.user_count)
+    animateNumber('plugin', next.plugins.enabled)
+    animateNumber('uptime', next.uptime_seconds, 500)
+    animateNumber('donut', activityTotal(next))
+
+    if (!previous) {
+      animated.value.donutAngle = 0
+      await nextTick()
+      firstPaintFrame = requestAnimationFrame(() => {
+        pageReady.value = true
+        animateNumber('donutAngle', 360, 900)
+      })
+    }
+  } catch (e) {
+    error.value = e.message
+    loading.value = false
+  } finally {
+    loadingRequest = false
+  }
 }
 onMounted(() => { load(); timer = setInterval(load, 8000) })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => {
+  clearInterval(timer)
+  clearTimeout(changeTimer)
+  if (firstPaintFrame) cancelAnimationFrame(firstPaintFrame)
+  for (const frame of animationFrames.values()) cancelAnimationFrame(frame)
+  animationFrames.clear()
+})
 
-const uptime = computed(() => {
-  let s = st.value?.uptime_seconds || 0
+function formatUptime(seconds) {
+  let s = seconds || 0
   const d = Math.floor(s / 86400); s %= 86400
   const h = Math.floor(s / 3600); s %= 3600
   const m = Math.floor(s / 60)
@@ -23,7 +118,9 @@ const uptime = computed(() => {
   if (h) parts.push(`${h}时`)
   parts.push(`${m}分`)
   return parts.join('')
-})
+}
+
+const uptime = computed(() => formatUptime(animated.value.uptime))
 
 // APScheduler trigger 字符串转人类可读
 // interval[0:01:00] / cron[hour='9',minute='0'] / date[2026-06-27 14:30:00 CST]
@@ -91,9 +188,9 @@ const cards = computed(() => {
   return [
     { key: 'bot', label: 'Bot 账号', value: s.bot_connected ? '在线' : '离线',
       tone: s.bot_connected ? 'green' : 'gray', icon: 'bot' },
-    { key: 'user', label: '在线用户账号', value: s.user_count, sub: `共 ${s.accounts.length} 个`,
+    { key: 'user', label: '在线用户账号', value: animated.value.user, sub: `共 ${s.accounts.length} 个`,
       tone: s.user_count ? 'blue' : 'gray', icon: 'user' },
-    { key: 'plugin', label: '已启用插件', value: s.plugins.enabled, sub: `共 ${s.plugins.total} 个${s.plugins.error ? ' · ' + s.plugins.error + ' 异常' : ''}`,
+    { key: 'plugin', label: '已启用插件', value: animated.value.plugin, sub: `共 ${s.plugins.total} 个${s.plugins.error ? ' · ' + s.plugins.error + ' 异常' : ''}`,
       tone: s.plugins.error ? 'amber' : 'green', icon: 'plug' },
     { key: 'uptime', label: '运行时长', value: uptime.value,
       tone: 'teal', icon: 'clock', small: true },
@@ -172,19 +269,51 @@ const donut = computed(() => {
     const to = (acc + frac) * 360
     const col = colorOf(pid)
     stops.push(`${col} ${from}deg ${to}deg`)
-    segs.push({ pid, count: totals[pid], pct: Math.round(frac * 100), color: col })
+    segs.push({ pid, count: totals[pid], pct: Math.round(frac * 100), color: col, from, to })
     acc += frac
   }
   return { sum, gradient: `conic-gradient(${stops.join(',')})`, segs }
 })
+
+const donutBackground = computed(() => {
+  if (!focusedPlugin.value) return donut.value.gradient
+  const stops = donut.value.segs.map(seg => {
+    const color = seg.pid === focusedPlugin.value ? seg.color : `${seg.color}38`
+    return `${color} ${seg.from}deg ${seg.to}deg`
+  })
+  return `conic-gradient(${stops.join(',')})`
+})
+
+const donutStyle = computed(() => ({
+  background: donutBackground.value,
+  '--reveal-angle': `${animated.value.donutAngle}deg`,
+}))
 </script>
 
 <template>
   <div v-if="error" class="alert">{{ error }}</div>
-  <div v-if="st" class="status">
-    <!-- 概览卡片：固定 4 列均分 -->
+  <div v-if="loading" class="status skeleton-status" aria-label="正在加载平台状态" aria-busy="true">
     <div class="grid">
-      <div v-for="c in cards" :key="c.key" class="card stat" :class="c.tone">
+      <div v-for="i in 4" :key="i" class="card stat skeleton-card">
+        <span class="skeleton-block skeleton-icon"></span>
+        <span class="skeleton-lines"><i></i><i></i><i></i></span>
+      </div>
+    </div>
+    <div class="cols cols-activity">
+      <div class="card skeleton-panel"><span></span><i></i></div>
+      <div class="card skeleton-panel"><span></span><i class="round"></i></div>
+    </div>
+    <div class="cols">
+      <div class="card skeleton-list"><span></span><i></i><i></i><i></i></div>
+      <div class="card skeleton-list"><span></span><i></i><i></i><i></i></div>
+    </div>
+  </div>
+  <div v-else-if="st" class="status" :class="{ ready: pageReady }">
+    <!-- 概览卡片：固定 4 列均分 -->
+    <div class="grid reveal section-0">
+      <div v-for="(c, index) in cards" :key="c.key" class="card stat"
+           :class="[c.tone, { 'bot-live': c.key === 'bot' && st.bot_connected }]"
+           :style="{ '--item-delay': `${index * 55}ms` }">
         <div class="stat-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
                stroke-linecap="round" stroke-linejoin="round"><path :d="icons[c.icon]" /></svg>
@@ -198,15 +327,28 @@ const donut = computed(() => {
     </div>
 
     <!-- 活跃时间线 + 占比环形 -->
-    <div class="cols cols-activity">
+    <div class="cols cols-activity reveal section-1">
       <!-- 时间线 -->
       <div class="card info chart-card">
         <div class="card-title">插件活跃时间线 <span class="muted sub">近 24 小时</span></div>
         <div v-if="!hasActivity" class="muted empty-chart">暂无插件活跃记录，插件处理消息后这里会出现时间线。</div>
         <template v-else>
           <div class="bars">
-            <div v-for="(bar, i) in timeline" :key="i" class="bar-col" :title="`${bar.label} · ${bar.total} 次`">
-              <div class="bar-stack" :style="{ height: bar.heightPct + '%' }">
+            <div v-for="(bar, i) in timeline" :key="i" class="bar-col"
+                 :class="{ active: hoveredBar === i, dimmed: hoveredBar !== null && hoveredBar !== i }"
+                 :style="{ '--bar-height': `${bar.heightPct}%`, '--bar-delay': `${i * 18}ms` }"
+                 :aria-label="`${bar.label}，共 ${bar.total} 次触发`" tabindex="0"
+                 @mouseenter="hoveredBar = i" @mouseleave="hoveredBar = null"
+                 @focus="hoveredBar = i" @blur="hoveredBar = null">
+              <div v-if="hoveredBar === i" class="bar-tooltip"
+                   :class="{ left: i < 3, right: i > timeline.length - 4 }">
+                <strong>{{ bar.label }} · {{ bar.total }} 次</strong>
+                <span v-for="seg in bar.segs" :key="seg.pid">
+                  <i class="dot" :style="{ background: colorOf(seg.pid) }"></i>
+                  {{ nameOf(seg.pid) }} {{ seg.count }} 次
+                </span>
+              </div>
+              <div class="bar-stack" :style="{ height: pageReady ? `${bar.heightPct}%` : '0%' }">
                 <div v-for="seg in bar.segs" :key="seg.pid" class="bar-seg"
                      :style="{ height: (seg.frac * 100) + '%', background: colorOf(seg.pid) }"></div>
               </div>
@@ -230,14 +372,17 @@ const donut = computed(() => {
         <div class="card-title">活跃占比</div>
         <div v-if="!donut.sum" class="muted empty-chart">暂无数据</div>
         <div v-else class="donut-wrap">
-          <div class="donut" :style="{ background: donut.gradient }">
+          <div class="donut" :style="donutStyle" :class="{ focused: focusedPlugin }">
             <div class="donut-hole">
-              <div class="donut-num">{{ donut.sum }}</div>
+              <div class="donut-num">{{ animated.donut }}</div>
               <div class="donut-cap">总触发</div>
             </div>
           </div>
           <div class="donut-legend">
-            <div v-for="seg in donut.segs" :key="seg.pid" class="dl-row">
+            <div v-for="seg in donut.segs" :key="seg.pid" class="dl-row" tabindex="0"
+                 :class="{ active: focusedPlugin === seg.pid, dimmed: focusedPlugin && focusedPlugin !== seg.pid }"
+                 @mouseenter="focusedPlugin = seg.pid" @mouseleave="focusedPlugin = ''"
+                 @focus="focusedPlugin = seg.pid" @blur="focusedPlugin = ''">
               <i class="dot" :style="{ background: seg.color }"></i>
               <span class="dl-name">{{ nameOf(seg.pid) }}</span>
               <span class="dl-pct mono">{{ seg.pct }}%</span>
@@ -247,7 +392,7 @@ const donut = computed(() => {
       </div>
     </div>
 
-    <div class="cols">
+    <div class="cols reveal section-2">
       <!-- 账号 -->
       <div class="card info">
         <div class="card-title">账号 ({{ st.accounts.length }})</div>
@@ -256,7 +401,7 @@ const donut = computed(() => {
           <table class="tbl">
             <thead><tr><th>名称</th><th>session</th><th>TGID</th><th>状态</th></tr></thead>
             <tbody>
-              <tr v-for="a in st.accounts" :key="a.session">
+              <tr v-for="a in st.accounts" :key="a.session" :class="{ changed: changedAccounts.includes(a.session) }">
                 <td>{{ a.name }}</td>
                 <td class="mono">{{ a.session }}</td>
                 <td class="mono">{{ a.tgid || '—' }}</td>
@@ -272,7 +417,7 @@ const donut = computed(() => {
         <div class="card-title">定时任务 ({{ st.scheduler_jobs.length }})</div>
         <div v-if="st.scheduler_jobs.length === 0" class="muted empty">无定时任务</div>
         <div v-else class="job-list">
-          <div v-for="j in st.scheduler_jobs" :key="j.id" class="job">
+          <div v-for="j in st.scheduler_jobs" :key="j.id" class="job" :class="{ changed: changedJobs.includes(j.id) }">
             <div class="job-main">
               <span class="job-name">{{ jobName(j) }}</span>
               <span class="job-plugin">{{ j.plugin }}</span>
@@ -287,7 +432,7 @@ const donut = computed(() => {
     </div>
 
     <!-- 平台信息：全宽长条 -->
-    <div class="card info">
+    <div class="card info reveal section-3">
       <div class="card-title">平台信息</div>
       <div class="info-bar">
         <div class="ib"><span class="ib-k">版本</span><span class="ib-v mono">v{{ st.version }}</span></div>
@@ -303,6 +448,37 @@ const donut = computed(() => {
 
 <style scoped>
 .status { display: flex; flex-direction: column; gap: var(--gap); }
+.reveal {
+  opacity: 0; transform: translateY(10px);
+  transition: opacity .42s ease, transform .42s cubic-bezier(.2,.8,.2,1);
+}
+.status.ready .reveal { opacity: 1; transform: translateY(0); }
+.status.ready .section-1 { transition-delay: 90ms; }
+.status.ready .section-2 { transition-delay: 160ms; }
+.status.ready .section-3 { transition-delay: 230ms; }
+
+/* 首次请求期间保持版面稳定，数据回来后不会整页跳动。 */
+.skeleton-card, .skeleton-panel, .skeleton-list { overflow: hidden; position: relative; }
+.skeleton-card { min-height: 104px; }
+.skeleton-block, .skeleton-lines i, .skeleton-panel span, .skeleton-panel i,
+.skeleton-list span, .skeleton-list i {
+  display: block; border-radius: 7px;
+  background: linear-gradient(100deg, var(--bg-elevated) 20%, rgba(60,69,89,.5) 45%, var(--bg-elevated) 70%);
+  background-size: 220% 100%; animation: skeleton-flow 1.35s ease-in-out infinite;
+}
+.skeleton-icon { width: 48px; height: 48px; border-radius: 12px; flex: 0 0 auto; }
+.skeleton-lines { width: min(150px, 60%); display: flex; flex-direction: column; gap: 8px; }
+.skeleton-lines i:nth-child(1) { width: 58%; height: 9px; }
+.skeleton-lines i:nth-child(2) { width: 82%; height: 21px; }
+.skeleton-lines i:nth-child(3) { width: 45%; height: 8px; }
+.skeleton-panel { min-height: 254px; }
+.skeleton-panel span { width: 120px; height: 11px; }
+.skeleton-panel > i { width: 84%; height: 120px; margin: 38px auto 0; }
+.skeleton-panel > i.round { width: 126px; height: 126px; border-radius: 50%; }
+.skeleton-list { min-height: 235px; }
+.skeleton-list span { width: 92px; height: 11px; margin-bottom: 28px; }
+.skeleton-list i { width: 100%; height: 10px; margin-top: 18px; }
+@keyframes skeleton-flow { to { background-position: -120% 0; } }
 
 .health-hero {
   position: relative; overflow: hidden; display: flex; align-items: center; gap: 18px;
@@ -335,9 +511,22 @@ const donut = computed(() => {
 @media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 560px)  { .grid { grid-template-columns: 1fr; } }
 .stat { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.status.ready .stat { animation: stat-enter .44s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--item-delay); }
+@keyframes stat-enter { from { opacity: 0; transform: translateY(9px) scale(.985); } }
 .stat-icon {
+  position: relative;
   width: 48px; height: 48px; border-radius: 12px; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+}
+.stat-icon::after {
+  content: ''; position: absolute; inset: -1px; border-radius: inherit;
+  border: 1px solid currentColor; opacity: 0; pointer-events: none;
+}
+.stat.bot-live .stat-icon::after { animation: online-pulse 2.4s ease-out infinite; }
+@keyframes online-pulse {
+  0%, 45% { opacity: 0; transform: scale(.96); }
+  62% { opacity: .28; }
+  100% { opacity: 0; transform: scale(1.2); }
 }
 .stat-icon svg { width: 24px; height: 24px; }
 .stat.green .stat-icon { background: var(--accent-2-dim); color: var(--accent-2); }
@@ -368,14 +557,35 @@ const donut = computed(() => {
   display: flex; align-items: flex-end; gap: 3px;
   height: 150px; padding-top: 8px;
 }
-.bar-col { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+.bar-col {
+  position: relative; flex: 1; height: 100%; display: flex; align-items: flex-end;
+  outline: none; transition: opacity .2s ease, filter .2s ease;
+}
+.bar-col.dimmed { opacity: .38; filter: saturate(.6); }
+.bar-col.active .bar-stack { filter: brightness(1.14); box-shadow: 0 0 18px rgba(48,128,240,.18); }
 .bar-stack {
   width: 100%; min-height: 2px; border-radius: 3px 3px 0 0; overflow: hidden;
   display: flex; flex-direction: column-reverse;
   background: var(--bg-elevated);
-  transition: height 0.3s ease;
+  transition: height .56s cubic-bezier(.2,.8,.2,1), filter .2s ease, box-shadow .2s ease;
+  transition-delay: var(--bar-delay);
 }
-.bar-seg { width: 100%; }
+.bar-seg { width: 100%; transition: height .45s ease, opacity .2s ease; }
+.bar-tooltip {
+  position: absolute; z-index: 4; left: 50%; bottom: calc(var(--bar-height) + 8px);
+  width: max-content; min-width: 130px; max-width: 210px; padding: 9px 10px;
+  border: 1px solid var(--border-light); border-radius: 8px;
+  color: var(--text-secondary); background: rgba(10,13,20,.96); box-shadow: var(--shadow);
+  transform: translateX(-50%); animation: tooltip-in .16s ease both; pointer-events: none;
+}
+.bar-tooltip.left { left: 0; transform: none; }
+.bar-tooltip.right { right: 0; left: auto; transform: none; }
+.bar-tooltip strong { display: block; margin-bottom: 5px; color: var(--text-primary); font-size: 12px; }
+.bar-tooltip span { display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 1.7; }
+.bar-tooltip .dot { width: 7px; height: 7px; }
+@keyframes tooltip-in { from { opacity: 0; transform: translate(-50%, 4px); } }
+.bar-tooltip.left, .bar-tooltip.right { animation-name: tooltip-edge-in; }
+@keyframes tooltip-edge-in { from { opacity: 0; transform: translateY(4px); } }
 .bars-axis { display: flex; gap: 3px; margin-top: 6px; }
 .axis-tick { flex: 1; font-size: 10px; color: var(--text-muted); text-align: left; white-space: nowrap; }
 .legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; max-height: 88px; overflow-y: auto; }
@@ -385,17 +595,33 @@ const donut = computed(() => {
 /* 环形图 */
 .donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
 .donut {
+  position: relative;
   width: 150px; height: 150px; border-radius: 50%; flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
+  transition: background .26s ease, transform .26s cubic-bezier(.2,.8,.2,1), filter .26s ease;
 }
+.donut::before {
+  content: ''; position: absolute; inset: -1px; z-index: 1; border-radius: 50%;
+  background: conic-gradient(transparent 0deg var(--reveal-angle), var(--bg-card) var(--reveal-angle) 360deg);
+  pointer-events: none;
+}
+.donut.focused { transform: scale(1.035); filter: saturate(1.08); }
 .donut-hole {
+  position: relative; z-index: 2;
   width: 96px; height: 96px; border-radius: 50%; background: var(--bg-card);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
 }
 .donut-num { font-size: 24px; font-weight: 700; }
 .donut-cap { font-size: 11px; color: var(--text-muted); }
 .donut-legend { width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 14px; max-height: 132px; overflow-y: auto; }
-.dl-row { display: flex; align-items: center; gap: 8px; font-size: 13px; min-width: 0; }
+.dl-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 5px;
+  border-radius: 6px; font-size: 13px; outline: none;
+  transition: opacity .18s ease, color .18s ease, background .18s ease, transform .18s ease;
+}
+.dl-row.active { color: var(--text-primary); background: var(--bg-hover); transform: translateX(2px); }
+.dl-row.dimmed { opacity: .42; }
+.dl-row:focus-visible { box-shadow: 0 0 0 2px var(--accent-dim); }
 .dl-name { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl-pct { color: var(--text-primary); }
 
@@ -423,6 +649,12 @@ const donut = computed(() => {
 .job {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
   font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--border);
+}
+.job.changed, .tbl tr.changed { animation: row-changed 1.35s ease both; }
+@keyframes row-changed {
+  0% { background: transparent; }
+  18% { background: rgba(48,128,240,.16); box-shadow: inset 3px 0 var(--accent); }
+  100% { background: transparent; box-shadow: inset 3px 0 transparent; }
 }
 .job:last-child { border-bottom: none; }
 .job-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -456,5 +688,16 @@ const donut = computed(() => {
   .tbl { white-space: nowrap; }
   .info-bar { gap: 10px 0; }
   .ib { flex-basis: 50%; }
+  .reveal { transform: translateY(6px); transition-duration: .3s; }
+  .bar-tooltip { max-width: 160px; }
+  .stat.bot-live .stat-icon::after { animation-duration: 3.2s; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .status.ready .reveal { opacity: 1; transform: none; transition: none; }
+  .status.ready .stat, .stat.bot-live .stat-icon::after, .skeleton-block, .skeleton-lines i,
+  .skeleton-panel span, .skeleton-panel i, .skeleton-list span, .skeleton-list i,
+  .job.changed, .tbl tr.changed, .bar-tooltip { animation: none; }
+  .bar-stack, .bar-seg, .bar-col, .donut, .dl-row { transition: none; }
 }
 </style>
