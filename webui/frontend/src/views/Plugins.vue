@@ -341,7 +341,6 @@ const stats = computed(() => ({
   error: plugins.value.filter((p) => p.error).length,
 }))
 
-const density = ref(localStorage.getItem('awbotnest_plugin_density') || 'comfortable')
 const pluginFilter = ref('all')
 const filteredPlugins = computed(() => {
   if (pluginFilter.value === 'enabled') return plugins.value.filter((p) => p.enabled && !p.error)
@@ -349,11 +348,6 @@ const filteredPlugins = computed(() => {
   if (pluginFilter.value === 'error') return plugins.value.filter((p) => p.error)
   return plugins.value
 })
-
-function setDensity(value) {
-  density.value = value
-  localStorage.setItem('awbotnest_plugin_density', value)
-}
 
 // ── 插件市场（多仓库聚合） ──
 const store = ref([])
@@ -673,10 +667,6 @@ onUnmounted(() => {
         <button v-if="stats.error" class="danger" :class="{ active: pluginFilter === 'error' }" @click="pluginFilter='error'">异常 {{ stats.error }}</button>
       </div>
       <div v-else class="control-caption">浏览并安装公开仓库中的插件</div>
-      <div class="density-switch" aria-label="卡片显示密度">
-        <button :class="{ active: density === 'comfortable' }" @click="setDensity('comfortable')">舒适</button>
-        <button :class="{ active: density === 'compact' }" @click="setDensity('compact')">紧凑</button>
-      </div>
     </div>
 
     <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
@@ -692,7 +682,7 @@ onUnmounted(() => {
         <p>没有符合当前筛选条件的插件。</p>
         <button class="btn" @click="pluginFilter='all'">查看全部插件</button>
       </div>
-      <div v-else class="grid" :class="{ compact: density === 'compact' }">
+      <div v-else class="grid">
         <div v-for="p in filteredPlugins" :key="p.id" class="card plugin-card clickable"
              :class="{ err: p.error, 'menu-open': menuFor === p.id }"
              @click="openConfig(p)">
@@ -1106,9 +1096,6 @@ onUnmounted(() => {
 .filter-pills button:hover, .density-switch button:hover, .search-filters button:hover { color: var(--text-primary); background: var(--bg-hover); }
 .filter-pills button.active, .search-filters button.active { color: var(--accent); border-color: rgba(48,128,240,.22); background: var(--accent-dim); }
 .filter-pills button.danger.active { color: var(--danger); border-color: var(--danger-dim); background: var(--danger-dim); }
-.density-switch { padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: rgba(10,14,23,.45); }
-.density-switch button { border-radius: 6px; padding: 4px 9px; }
-.density-switch button.active { color: var(--text-primary); background: var(--bg-elevated); }
 .control-caption { color: var(--text-muted); font-size: 12px; }
 
 /* Tab 切换 */
