@@ -226,10 +226,12 @@ def _extract_archive(archive_path: Path, target: Path, inspection: BackupInspect
         for info in inspection.members:
             parts = _safe_member_parts(info)
             destination = target.joinpath(*parts)
-            resolved = destination.resolve()
-            if target_resolved not in resolved.parents:
-                raise BackupError(f"备份包路径越界: {info.filename}")
             destination.parent.mkdir(parents=True, exist_ok=True)
+            resolved = destination.resolve()
+            try:
+                resolved.relative_to(target_resolved)
+            except ValueError:
+                raise BackupError(f"备份包路径越界: {info.filename}")
 
             member_written = 0
             with zf.open(info, "r") as source, destination.open("xb") as output:
@@ -323,4 +325,5 @@ def apply_pending_restore() -> int:
         shutil.rmtree(stage, ignore_errors=True)
 
     shutil.rmtree(rollback, ignore_errors=True)
+    PENDING_RESTORE.unlink(missing_ok=True)
     return inspection.file_count
