@@ -182,19 +182,6 @@ const donut = computed(() => {
 <template>
   <div v-if="error" class="alert">{{ error }}</div>
   <div v-if="st" class="status">
-    <section class="health-hero" :class="health.tone">
-      <div class="health-mark"><span></span></div>
-      <div class="health-copy">
-        <div class="health-eyebrow">平台概览</div>
-        <h2>{{ health.title }}</h2>
-        <p>{{ health.desc }}</p>
-      </div>
-      <div class="health-links">
-        <RouterLink to="/accounts" class="health-link">查看账号</RouterLink>
-        <RouterLink to="/plugins" class="health-link primary">查看插件</RouterLink>
-      </div>
-    </section>
-
     <!-- 概览卡片：固定 4 列均分 -->
     <div class="grid">
       <div v-for="c in cards" :key="c.key" class="card stat" :class="c.tone">
