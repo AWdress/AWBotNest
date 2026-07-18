@@ -465,19 +465,16 @@ async function runSearchAction(p) {
 
 const detailOpen = ref(false)
 const detailTargetId = ref('')
-const detailTab = ref('info')
 const detailTarget = computed(() => searchablePlugins.value.find((p) => p.id === detailTargetId.value) || null)
 
 function openPluginDetails(p) {
   detailTargetId.value = p.id
-  detailTab.value = 'info'
   detailOpen.value = true
   closeMenu()
 }
 
 function closePluginDetails() {
   detailOpen.value = false
-  detailTab.value = 'info'
 }
 
 async function runDetailAction() {
@@ -711,9 +708,6 @@ onUnmounted(() => {
                 <button class="menu-item" @click.stop="openLogs(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看日志
                 </button>
-                <button class="menu-item" @click.stop="openPluginDetails(p)">
-                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg> 版本历史
-                </button>
                 <button class="menu-item" v-if="p.scope === 'user' || p.scope === 'both'" @click.stop="openAccounts(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM4 21a8 8 0 0 1 16 0"/></svg> 应用账号
                 </button>
@@ -936,25 +930,6 @@ onUnmounted(() => {
           <div v-if="detailTarget.author"><span>作者</span><strong>{{ detailTarget.author }}</strong></div>
           <div v-if="detailTarget.repo"><span>来源仓库</span><strong class="mono">{{ detailTarget.repo }}</strong></div>
           <div><span>安装状态</span><strong>{{ detailTarget.installed ? '已安装' : '未安装' }}</strong></div>
-        </div>
-
-        <div v-if="detailTarget.updateAvailable || detailTarget.localPlugin?.changelog || detailTarget.marketPlugin?.changelog" class="drawer-changelog">
-          <h3 class="changelog-title">版本信息</h3>
-          <div v-if="detailTarget.updateAvailable" class="changelog-item">
-            <div class="changelog-header">
-              <span class="version-tag new">新版本</span>
-              <span class="version-num">v{{ detailTarget.marketPlugin?.version }}</span>
-            </div>
-            <p v-if="detailTarget.marketPlugin?.changelog" class="changelog-text">{{ detailTarget.marketPlugin.changelog }}</p>
-            <p v-else class="changelog-empty">暂无更新说明</p>
-          </div>
-          <div v-if="detailTarget.localPlugin" class="changelog-item current">
-            <div class="changelog-header">
-              <span class="version-tag">当前版本</span>
-              <span class="version-num">v{{ detailTarget.localPlugin.version }}</span>
-            </div>
-            <p v-if="detailTarget.localPlugin.changelog" class="changelog-text">{{ detailTarget.localPlugin.changelog }}</p>
-          </div>
         </div>
         <div v-if="detailTarget.localPlugin" class="drawer-tools">
           <button class="btn" @click="openLogs(detailTarget.localPlugin); closePluginDetails()">查看日志</button>
@@ -1418,19 +1393,6 @@ onUnmounted(() => {
 .drawer-info > div:last-child { border-bottom: 0; }
 .drawer-info span { color: var(--text-muted); font-size: 12px; }
 .drawer-info strong { max-width: 66%; color: var(--text-primary); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
-
-.drawer-changelog { padding: 16px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,.02); }
-.changelog-title { font-size: 14px; font-weight: 650; margin-bottom: 12px; color: var(--text-primary); }
-.changelog-item { padding: 12px 0; border-bottom: 1px solid var(--border); }
-.changelog-item:last-child { border-bottom: 0; padding-bottom: 0; }
-.changelog-item.current { opacity: 0.7; }
-.changelog-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.version-tag { padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; color: var(--accent-2); background: var(--accent-2-dim); }
-.version-tag.new { color: var(--warning); background: rgba(224,160,32,.15); }
-.version-num { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
-.changelog-text { margin: 0; font-size: 12px; line-height: 1.65; color: var(--text-secondary); white-space: pre-line; }
-.changelog-empty { margin: 0; font-size: 12px; color: var(--text-muted); font-style: italic; }
-
 .drawer-tools { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
 .drawer-tools .btn { justify-content: center; }
 .drawer-actions {
