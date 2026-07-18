@@ -934,7 +934,7 @@ onUnmounted(() => {
         <div v-if="detailTarget.localPlugin" class="drawer-tools">
           <button class="btn" @click="openLogs(detailTarget.localPlugin); closePluginDetails()">查看日志</button>
           <button v-if="detailTarget.localPlugin.scope === 'user' || detailTarget.localPlugin.scope === 'both'" class="btn" @click="openAccounts(detailTarget.localPlugin); closePluginDetails()">应用账号</button>
-          <button class="btn" :disabled="detailTarget.error || busy[detailTarget.id]" @click="toggle(detailTarget.localPlugin)">
+          <button class="btn" :disabled="detailTarget.error || busy[detailTarget.localPlugin?.id]" @click="toggle(detailTarget.localPlugin)">
             {{ detailTarget.enabled ? '停用插件' : '启用插件' }}
           </button>
         </div>
