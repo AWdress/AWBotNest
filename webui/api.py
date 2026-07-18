@@ -775,10 +775,11 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             for r in v:
                 if not isinstance(r, dict):
                     continue
-                url = str(r.get("url") or "").strip()
-                if not url or url in seen_repos:
+                url = cfg.normalize_plugin_repo(r.get("url"))
+                key = url.casefold()
+                if not url or key in seen_repos:
                     continue
-                seen_repos.add(url)
+                seen_repos.add(key)
                 cleaned_repos.append({"url": url})
             v = cleaned_repos
         # 额外 Bot：打码 token 按 id 匹配原值保留；剔除缺 id/token 的畸形项
