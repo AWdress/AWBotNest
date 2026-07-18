@@ -393,6 +393,7 @@ const searchablePlugins = computed(() => {
       id,
       name: local?.name || market?.name || id,
       description: local?.description || market?.description || '',
+      changelog: local?.changelog || market?.changelog || '',
       author: local?.author || market?.author || '',
       icon: local?.icon || market?.icon || '',
       version: market?.version || local?.version || '',
@@ -463,31 +464,14 @@ async function runSearchAction(p) {
   }
 }
 
-const detailOpen = ref(false)
-const detailTargetId = ref('')
-const detailTarget = computed(() => searchablePlugins.value.find((p) => p.id === detailTargetId.value) || null)
+// ── 版本历史弹窗 ──
+const changelogOpen = ref(false)
+const changelogTarget = ref(null)
 
-function openPluginDetails(p) {
-  detailTargetId.value = p.id
-  detailOpen.value = true
+function openChangelog(p) {
   closeMenu()
-}
-
-function closePluginDetails() {
-  detailOpen.value = false
-}
-
-async function runDetailAction() {
-  const p = detailTarget.value
-  if (!p) return
-  if (p.updateAvailable || !p.installed) {
-    if (p.marketPlugin) await download(p.marketPlugin)
-    return
-  }
-  if (p.localPlugin) {
-    closePluginDetails()
-    await openConfig(p.localPlugin)
-  }
+  changelogTarget.value = p
+  changelogOpen.value = true
 }
 
 function onSearchHotkey(e) {
@@ -670,7 +654,7 @@ onUnmounted(() => {
       <div v-else class="grid" :class="{ compact: density === 'compact' }">
         <div v-for="p in filteredPlugins" :key="p.id" class="card plugin-card clickable"
              :class="{ err: p.error, 'menu-open': menuFor === p.id }"
-             @click="openPluginDetails(p)">
+             @click="openConfig(p)">
           <div class="card-head">
             <div class="store-title">
               <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -705,6 +689,9 @@ onUnmounted(() => {
                 <button class="menu-item" @click.stop="openConfig(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 配置
                 </button>
+                <button class="menu-item" v-if="p.changelog" @click.stop="openChangelog(p)">
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看历史
+                </button>
                 <button class="menu-item" @click.stop="openLogs(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看日志
                 </button>
@@ -736,7 +723,7 @@ onUnmounted(() => {
         <div v-if="storeUpdatable.length" class="update-section">
           <div class="section-label">可更新（{{ storeUpdatable.length }}）</div>
           <div class="grid" :class="{ compact: density === 'compact' }">
-            <div v-for="p in storeUpdatable" :key="p.id" class="card plugin-card store-card has-update clickable" @click="openPluginDetails(p)">
+            <div v-for="p in storeUpdatable" :key="p.id" class="card plugin-card store-card has-update">
               <div class="card-head">
                 <div class="store-title">
                   <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -775,7 +762,7 @@ onUnmounted(() => {
           <p class="muted">市场里没有可安装的新插件（仓库里的都已安装），或还没配置额外仓库。</p>
         </div>
         <div v-else-if="storeAvailable.length" class="grid" :class="{ compact: density === 'compact' }">
-        <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card clickable" @click="openPluginDetails(p)">
+        <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card">
           <div class="card-head">
             <div class="store-title">
               <img :src="p.icon || logo" class="store-icon" :class="{ 'store-icon-fallback': !p.icon }" alt="" />
@@ -900,51 +887,32 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- 插件详情侧栏 -->
-    <div v-if="detailOpen && detailTarget" class="detail-mask" @click.self="closePluginDetails">
-      <aside class="plugin-drawer" role="dialog" aria-modal="true" aria-label="插件详情">
-        <div class="drawer-head">
-          <span class="drawer-kicker">插件详情</span>
-          <button class="search-close" type="button" aria-label="关闭" @click="closePluginDetails">
-            <svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
-          </button>
+    <!-- 版本历史弹窗 -->
+    <div v-if="changelogOpen && changelogTarget" class="modal-mask" @click.self="changelogOpen=false">
+      <div class="modal card modal-changelog">
+        <div class="modal-head">
+          <h2>{{ changelogTarget.name }} · 版本历史</h2>
+          <span class="close" @click="changelogOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
-        <div class="drawer-identity">
-          <img :src="detailTarget.icon || logo" :class="{ fallback: !detailTarget.icon }" alt="" />
-          <div>
-            <div class="drawer-name-row">
-              <h2>{{ detailTarget.name }}</h2>
-              <span v-if="detailTarget.official" class="badge-official">官方</span>
+        <div class="modal-body">
+          <div class="changelog-header">
+            <div class="changelog-plugin-info">
+              <img :src="changelogTarget.icon || logo" class="changelog-icon" :class="{ 'changelog-icon-fallback': !changelogTarget.icon }" alt="" />
+              <div>
+                <div class="changelog-plugin-name">{{ changelogTarget.name }}</div>
+                <div v-if="changelogTarget.version" class="changelog-plugin-version">v{{ changelogTarget.version }}</div>
+              </div>
             </div>
-            <div class="drawer-version" v-if="detailTarget.version">版本 v{{ detailTarget.version }}</div>
+          </div>
+          <div class="changelog-content">
+            <h3>更新日志</h3>
+            <pre class="changelog-text">{{ changelogTarget.changelog }}</pre>
           </div>
         </div>
-        <div class="drawer-state" :class="detailTarget.updateAvailable ? 'update' : detailTarget.error ? 'error' : detailTarget.installed ? 'installed' : 'available'">
-          <strong>{{ detailTarget.updateAvailable ? '有新版本可更新' : detailTarget.error ? '插件运行异常' : detailTarget.installed ? (detailTarget.enabled ? '插件已启用' : '插件已安装') : '可以从市场安装' }}</strong>
-          <span>{{ detailTarget.updateAvailable ? '更新后会使用仓库中的最新版本。' : detailTarget.error ? '请查看错误信息或运行日志。' : detailTarget.installed ? '可以继续配置插件或查看运行情况。' : '安装后需要在“我的插件”中手动启用。' }}</span>
+        <div class="modal-foot">
+          <button class="btn btn-primary" @click="changelogOpen=false">关闭</button>
         </div>
-        <p class="drawer-desc">{{ detailTarget.description || '这个插件暂时没有填写功能说明。' }}</p>
-        <div v-if="detailTarget.error" class="drawer-error mono">{{ detailTarget.error }}</div>
-        <div class="drawer-info">
-          <div><span>英文标识</span><strong class="mono">{{ detailTarget.id }}</strong></div>
-          <div v-if="detailTarget.author"><span>作者</span><strong>{{ detailTarget.author }}</strong></div>
-          <div v-if="detailTarget.repo"><span>来源仓库</span><strong class="mono">{{ detailTarget.repo }}</strong></div>
-          <div><span>安装状态</span><strong>{{ detailTarget.installed ? '已安装' : '未安装' }}</strong></div>
-        </div>
-        <div v-if="detailTarget.localPlugin" class="drawer-tools">
-          <button class="btn" @click="openLogs(detailTarget.localPlugin); closePluginDetails()">查看日志</button>
-          <button v-if="detailTarget.localPlugin.scope === 'user' || detailTarget.localPlugin.scope === 'both'" class="btn" @click="openAccounts(detailTarget.localPlugin); closePluginDetails()">应用账号</button>
-          <button class="btn" :disabled="detailTarget.error || busy[detailTarget.localPlugin?.id]" @click="toggle(detailTarget.localPlugin)">
-            {{ detailTarget.enabled ? '停用插件' : '启用插件' }}
-          </button>
-        </div>
-        <div class="drawer-actions">
-          <button class="btn" @click="closePluginDetails">关闭</button>
-          <button class="btn btn-primary" :disabled="dlBusy[detailTarget.id]" @click="runDetailAction">
-            {{ dlBusy[detailTarget.id] ? '处理中…' : detailTarget.updateAvailable ? '更新插件' : detailTarget.installed ? '打开设置' : '安装插件' }}
-          </button>
-        </div>
-      </aside>
+      </div>
     </div>
 
     <!-- 配置弹窗 -->
@@ -1357,51 +1325,6 @@ onUnmounted(() => {
   color: var(--text-secondary); background: var(--bg-elevated); font-family: inherit;
 }
 
-.detail-mask {
-  position: fixed; inset: 0; z-index: 210; display: flex; justify-content: flex-end;
-  background: rgba(3,6,12,.66); backdrop-filter: blur(4px);
-  animation: detail-fade-in .18s ease both;
-}
-.plugin-drawer {
-  width: 430px; max-width: 94vw; height: 100%; overflow-y: auto;
-  padding: 24px; border-left: 1px solid var(--border-light);
-  background: linear-gradient(155deg, #171b25, #10131b 72%);
-  box-shadow: -24px 0 70px rgba(0,0,0,.42);
-  display: flex; flex-direction: column; gap: 20px;
-  animation: drawer-in .24s ease both;
-}
-@keyframes detail-fade-in { from { opacity: 0; } }
-@keyframes drawer-in { from { transform: translateX(26px); opacity: .7; } }
-.drawer-head { display: flex; align-items: center; justify-content: space-between; }
-.drawer-kicker { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 1.2px; }
-.drawer-identity { display: flex; align-items: center; gap: 14px; }
-.drawer-identity > img { width: 62px; height: 62px; border-radius: 17px; object-fit: cover; border: 1px solid var(--border-light); background: var(--bg-elevated); }
-.drawer-identity > img.fallback { object-fit: contain; padding: 10px; }
-.drawer-name-row { display: flex; align-items: center; gap: 8px; }
-.drawer-name-row h2 { font-size: 21px; line-height: 1.25; }
-.drawer-version { margin-top: 5px; color: var(--text-muted); font-size: 12px; }
-.drawer-state { display: flex; flex-direction: column; gap: 4px; padding: 13px 15px; border-radius: 11px; background: var(--accent-2-dim); color: var(--accent-2); }
-.drawer-state.update { color: var(--warning); background: rgba(224,160,32,.13); }
-.drawer-state.error { color: var(--danger); background: var(--danger-dim); }
-.drawer-state.available { color: var(--accent); background: var(--accent-dim); }
-.drawer-state strong { font-size: 13px; }
-.drawer-state span { color: var(--text-secondary); font-size: 11px; }
-.drawer-desc { color: var(--text-secondary); line-height: 1.75; font-size: 13px; }
-.drawer-error { padding: 12px; border-radius: 9px; color: var(--danger); background: var(--danger-dim); font-size: 11px; word-break: break-word; }
-.drawer-info { border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-.drawer-info > div { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 11px 0; border-bottom: 1px solid var(--border); }
-.drawer-info > div:last-child { border-bottom: 0; }
-.drawer-info span { color: var(--text-muted); font-size: 12px; }
-.drawer-info strong { max-width: 66%; color: var(--text-primary); font-size: 12px; text-align: right; overflow-wrap: anywhere; }
-.drawer-tools { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
-.drawer-tools .btn { justify-content: center; }
-.drawer-actions {
-  position: sticky; bottom: -24px; margin: auto -24px -24px; padding: 16px 24px calc(16px + env(safe-area-inset-bottom));
-  display: grid; grid-template-columns: 1fr 1.5fr; gap: 10px;
-  border-top: 1px solid var(--border); background: rgba(16,19,27,.94); backdrop-filter: blur(18px);
-}
-.drawer-actions .btn { justify-content: center; }
-
 .modal-mask {
   position: fixed; inset: 0;
   background: rgba(0, 0, 0, 0.6);
@@ -1465,6 +1388,24 @@ onUnmounted(() => {
 .logs-modal .log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }
 .logs-modal .log-line:hover { background: rgba(255,255,255,0.03); }
 .logs-modal .time { color: var(--text-muted); flex-shrink: 0; }
+
+/* Changelog 弹窗 */
+.modal-changelog { width: 600px; max-width: 90vw; }
+.changelog-header { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.changelog-plugin-info { display: flex; align-items: center; gap: 12px; }
+.changelog-icon { width: 48px; height: 48px; border-radius: 10px; object-fit: cover; }
+.changelog-icon-fallback { filter: brightness(0.7); }
+.changelog-plugin-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+.changelog-plugin-version { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
+.changelog-content { margin-top: 16px; }
+.changelog-content h3 { font-size: 14px; font-weight: 600; color: var(--accent); margin-bottom: 12px; }
+.changelog-text {
+  white-space: pre-wrap; word-break: break-word; line-height: 1.7;
+  font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px;
+  color: var(--text-secondary); background: var(--bg-elevated);
+  padding: 14px; border-radius: var(--radius-sm); max-height: 400px; overflow-y: auto;
+}
+
 .logs-modal .level { flex-shrink: 0; width: 60px; font-weight: 600; }
 .logs-modal .msg { color: var(--text-primary); }
 .logs-modal .center { padding: 40px; }
@@ -1503,8 +1444,6 @@ onUnmounted(() => {
   .search-meta span:nth-child(n+3) { display: none; }
   .search-foot { padding: 10px 16px; }
   .search-foot > span:first-child { display: none; }
-  .plugin-drawer { width: 100vw; max-width: 100vw; padding: 18px 16px; }
-  .drawer-actions { bottom: -18px; margin: auto -16px -18px; padding-left: 16px; padding-right: 16px; }
   /* 窄屏照 MoviePilot 直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
   .modal.modal-wide {
