@@ -231,9 +231,9 @@ async def setup(ctx):
 
 1. **配置项**（平台级，存 `data/config.json`，前端可改）：
    - `PLUGIN_REPO_ENABLE`：**已废弃**——轮询强制常开，不再受此开关控制。
-   - `PLUGIN_REPOS`：公开仓库列表 `[{"url": "..."}, ...]`。`url` 格式同 §7.5；官方仓库 `AWdress/AWBotNest-Plugins` 由平台内置，不在此列。
+   - `PLUGIN_REPOS`：公开仓库列表，例如 `[{"url": "AWdress/AWBotNest-Plugins"}, ...]`。用户名可以不同，仓库名必须是 `AWBotNest-Plugins`；输入完整 GitHub 链接时也会自动缩短。官方仓库 `AWdress/AWBotNest-Plugins` 由平台内置，不在此列。
    - `PLUGIN_REPO_INTERVAL`：后台使用的轮询间隔，默认 20 分钟；前端不提供修改入口。
-2. **仓库格式**：与 §7.5 完全一致——优先 `manifest.json`（推荐，带版本号才能识别"更新"），无清单则目录扫描。多仓库出现同 id 插件时先到先得。
+2. **仓库格式**：额外仓库使用与 `AWdress/AWBotNest-Plugins` 相同的命名格式，并按仓库根目录读取。优先 `manifest.json`（推荐，带版本号才能识别"更新"），无清单则目录扫描。多仓库出现同 id 插件时先到先得。
 3. **插件商店（显示，不自动下载）**：聚合所有仓库的插件列表，标记 `installed`。商店只展示**未安装**的；用户点「下载」才落盘。下载 = 写入 `plugins/`，**绝不自动启用**（启用 = 在服务器执行远程代码，须用户到「我的插件」手动开启，同 §7.5 安全铁律）。
 4. **自动轮询只做两件事**（不自动下载新插件）：
    - ①刷新商店列表缓存（让仓库新插件出现在商店）；

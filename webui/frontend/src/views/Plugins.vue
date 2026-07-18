@@ -485,15 +485,24 @@ function onSearchHotkey(e) {
   }
 }
 
-// 仓库来源只显示 owner/repo（去掉 https://github.com/、.git、/tree/分支/子目录 等）
-function shortRepo(url) {
-  if (!url) return ''
-  let s = String(url).trim()
-  s = s.replace(/^https?:\/\/(www\.)?github\.com\//i, '')  // 去协议+域名
-  s = s.replace(/^https?:\/\/[^/]+\//i, '')                 // 其它主机也去掉
-  s = s.replace(/\.git$/i, '')
-  const parts = s.split('/').filter(Boolean)
-  return parts.length >= 2 ? `${parts[0]}/${parts[1]}` : s
+// GitHub 链接和简写统一显示为 owner/repo。
+function normalizeRepo(value) {
+  if (!value) return ''
+  let source = String(value).trim()
+  source = source.replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+  source = source.split(/[?#]/, 1)[0].replace(/^\/+|\/+$/g, '')
+  const parts = source.split('/')
+  if (parts.length < 2) return ''
+  const owner = parts[0].trim()
+  const repo = parts[1].trim().replace(/\.git$/i, '')
+  const validPart = /^[A-Za-z0-9_.-]+$/
+  return validPart.test(owner) && repo.toLowerCase() === 'awbotnest-plugins'
+    ? `${owner}/AWBotNest-Plugins`
+    : ''
+}
+
+function shortRepo(value) {
+  return normalizeRepo(value) || String(value || '').trim()
 }
 
 async function loadStore(refresh = false) {
@@ -548,7 +557,7 @@ async function openRepos() {
   try {
     const d = await api.getSettings()
     const s = d.settings || {}
-    repoList.value = (s.PLUGIN_REPOS || []).map((r) => ({ url: r.url || '' }))
+    repoList.value = (s.PLUGIN_REPOS || []).map((r) => ({ url: normalizeRepo(r.url) || '' }))
     repoOpen.value = true
   } catch (e) {
     repoErr.value = e.message
@@ -557,18 +566,50 @@ async function openRepos() {
 
 function addRepo() { repoList.value.push({ url: '' }) }
 function delRepo(i) { repoList.value.splice(i, 1) }
+function normalizeRepoRow(repo) {
+  const source = (repo.url || '').trim()
+  if (!source) return
+  const normalized = normalizeRepo(source)
+  if (normalized) repo.url = normalized
+}
 
 async function saveRepos() {
   repoSaving.value = true; repoErr.value = ''
   try {
-    const repos = repoList.value
-      .map((r) => ({ url: (r.url || '').trim() }))
-      .filter((r) => r.url)
+    const repos = []
+    const seen = new Set()
+    const duplicates = []
+    let officialSkipped = false
+    for (let i = 0; i < repoList.value.length; i += 1) {
+      const source = (repoList.value[i].url || '').trim()
+      if (!source) continue
+      const url = normalizeRepo(source)
+      if (!url) throw new Error(`第 ${i + 1} 个仓库不符合要求，仓库名必须是 AWBotNest-Plugins`)
+      repoList.value[i].url = url
+      const key = url.toLowerCase()
+      if (key === 'awdress/awbotnest-plugins') {
+        officialSkipped = true
+        continue
+      }
+      if (seen.has(key)) {
+        duplicates.push(url)
+        continue
+      }
+      seen.add(key)
+      repos.push({ url })
+    }
     await api.saveSettings({
       PLUGIN_REPOS: repos,
     })
     repoOpen.value = false
     await loadStore(true)
+    if (officialSkipped) toast.info('官方仓库 AWdress/AWBotNest-Plugins 已内置，无需重复添加')
+    if (duplicates.length) toast.info(`仓库已存在，已忽略：${[...new Set(duplicates)].join('、')}`)
+    if (!officialSkipped && !duplicates.length) {
+      toast.success(repos.length ? `已保存 ${repos.length} 个额外仓库` : '额外仓库已清空')
+    } else if (repos.length) {
+      toast.success(`其余 ${repos.length} 个额外仓库已保存`)
+    }
   } catch (e) {
     repoErr.value = e.message
   } finally {
@@ -1029,10 +1070,12 @@ onUnmounted(() => {
             <label>额外公开插件仓库（可加多个）</label>
             <div v-for="(r, i) in repoList" :key="i" class="repo-row">
               <input class="input" v-model="r.url"
-                     placeholder="owner/repo 或 https://github.com/owner/repo（可带 /tree/分支/子目录）" />
+                     placeholder="例如 AWdress/AWBotNest-Plugins"
+                     @blur="normalizeRepoRow(r)" />
               <button class="btn sm btn-danger" @click="delRepo(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
+            <div class="hint muted">仓库名必须是 AWBotNest-Plugins，例如 AWdress/AWBotNest-Plugins。</div>
             <div class="hint muted">推荐仓库带 manifest.json 并写好 version，平台才能识别「更新」。</div>
           </div>
         </div>

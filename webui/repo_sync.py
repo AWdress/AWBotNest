@@ -67,15 +67,16 @@ def _get_repos() -> list[dict[str, Any]]:
     import config.config as cfg
     cfg.reload()
     out: list[dict[str, Any]] = [{"url": OFFICIAL_REPO, "official": True}]
-    seen = {OFFICIAL_REPO}
+    seen = {OFFICIAL_REPO.casefold()}
     repos = getattr(cfg, "PLUGIN_REPOS", None) or []
     for r in repos:
         if not isinstance(r, dict):
             continue
         url = (r.get("url") or "").strip()
-        if not url or url in seen:
+        key = url.casefold()
+        if not url or key in seen:
             continue
-        seen.add(url)
+        seen.add(key)
         out.append({"url": url, "official": False})
     return out
 

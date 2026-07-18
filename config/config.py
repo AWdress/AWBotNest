@@ -46,7 +46,7 @@ _DEFAULTS: dict[str, Any] = {
     },
     # 插件仓库自动同步（定时从 GitHub 仓库拉取插件列表到「插件商店」，按需下载）
     "PLUGIN_REPO_ENABLE": False,
-    "PLUGIN_REPOS": [],          # 公开仓库列表：[{"url": "owner/repo"}, ...]
+    "PLUGIN_REPOS": [],          # 公开仓库列表：[{"url": "AWdress/AWBotNest-Plugins"}, ...]
     "PLUGIN_REPO_INTERVAL": 20,  # 轮询间隔（分钟）：刷新商店列表 + 检查已装插件更新
     # 插件依赖安装用的 pip 镜像源。默认清华源（境内直连、不经墙，开箱可用）；
     # 留空则走官方 pypi（此时若配了平台代理会自动用代理出墙）。
@@ -57,17 +57,37 @@ _DEFAULTS: dict[str, Any] = {
 ALLOWED_KEYS = tuple(_DEFAULTS.keys())
 
 
+def normalize_plugin_repo(value: Any) -> str:
+    """把 GitHub 链接或简写统一成 owner/repo。"""
+    import re
+
+    source = str(value or "").strip()
+    source = re.sub(r"^https?://(?:www\.)?github\.com/", "", source, flags=re.IGNORECASE)
+    source = source.split("#", 1)[0].split("?", 1)[0].strip("/")
+    parts = source.split("/")
+    if len(parts) < 2:
+        return ""
+    owner = parts[0].strip()
+    repo = re.sub(r"\.git$", "", parts[1].strip(), flags=re.IGNORECASE)
+    valid_part = re.compile(r"^[A-Za-z0-9_.-]+$")
+    if (not valid_part.fullmatch(owner)
+            or repo.casefold() != "awbotnest-plugins"):
+        return ""
+    return f"{owner}/AWBotNest-Plugins"
+
+
 def _clean_plugin_repos(value: Any) -> list[dict[str, str]]:
-    """只保留公开仓库地址，去重并删除旧版私有仓库凭据。"""
+    """只保留公开仓库地址，统一格式、去重并删除旧版私有仓库凭据。"""
     cleaned = []
     seen = set()
     for repo in value or []:
         if not isinstance(repo, dict):
             continue
-        url = str(repo.get("url") or "").strip()
-        if not url or url in seen:
+        url = normalize_plugin_repo(repo.get("url"))
+        key = url.casefold()
+        if not url or key in seen:
             continue
-        seen.add(url)
+        seen.add(key)
         cleaned.append({"url": url})
     return cleaned
 
