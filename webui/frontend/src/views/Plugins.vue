@@ -240,6 +240,8 @@ const logLevelClass = (lv) => ({
   ERROR: 'lv-err', CRITICAL: 'lv-err',
 }[lv] || 'lv-info')
 
+const pluginLogTime = (item) => item.date ? `${item.date.slice(5)} ${item.time}` : item.time
+
 function matchesPlugin(item, id) {
   // 插件 ctx.log 会把 source 设成插件 id；兜底再匹配 msg 里的 [id] 前缀
   return item.source === id || (item.msg && item.msg.startsWith(`[${id}]`))
@@ -262,7 +264,7 @@ function logsConnect() {
       const item = JSON.parse(e.data)
       if (logsTarget.value && matchesPlugin(item, logsTarget.value.id)) {
         logsList.value.push(item)
-        if (logsList.value.length > 500) logsList.value.splice(0, logsList.value.length - 500)
+        if (logsList.value.length > 1000) logsList.value.splice(0, logsList.value.length - 1000)
         nextTick(logsScrollBottom)
       }
     } catch {}
@@ -1039,7 +1041,7 @@ onUnmounted(() => {
         <div class="log-box" ref="logsBox">
           <div v-if="logsList.length === 0" class="muted center">该插件暂无日志</div>
           <div v-for="(l, i) in logsList" :key="i" class="log-line">
-            <span class="time">{{ l.time }}</span>
+            <span class="time">{{ pluginLogTime(l) }}</span>
             <span class="level" :class="logLevelClass(l.level)">{{ l.level }}</span>
             <span class="msg">{{ l.msg }}</span>
           </div>
