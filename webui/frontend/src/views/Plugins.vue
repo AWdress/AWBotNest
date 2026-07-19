@@ -1281,7 +1281,9 @@ onUnmounted(() => {
 .store-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
 .store-icon { width: 38px; height: 38px; border-radius: 12px; object-fit: cover; flex-shrink: 0; }
 .store-icon-fallback {
-  object-fit: contain; padding: 6px; background: var(--bg-elevated);
+  object-fit: contain;
+  padding: 6px;
+  background-color: var(--bg-elevated);
   background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>');
   background-repeat: no-repeat;
   background-position: center;
