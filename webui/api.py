@@ -36,7 +36,7 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.0.2"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -738,6 +738,8 @@ async def get_settings_api(user=Depends(_auth)):
                 b["token"] = _MASK
     except Exception:  # noqa: BLE001
         pass
+    from schedulers.universal.log_cleaner import get_log_cleaner_settings
+    out["LOG_CLEANER"] = get_log_cleaner_settings()
     return {"settings": out}
 
 
@@ -801,8 +803,17 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             v = cleaned_bots
         merged[k] = v
 
+    restart_keys = {"API_ID", "API_HASH", "BOT_TOKEN", "BOTS", "proxy_set", "DB_INFO", "WEB_UI_PORT"}
+    restart_required = any(current.get(key) != merged.get(key) for key in restart_keys)
+
     cfg.save(merged)
     logger.info("平台设置已更新（config.json）")
+
+    if "LOG_CLEANER" in incoming:
+        from schedulers.universal.log_cleaner import save_log_cleaner_settings, start_log_cleaner
+        save_log_cleaner_settings(incoming["LOG_CLEANER"])
+        await start_log_cleaner()
+        logger.info("日志清理设置已更新")
 
     # 额外 Bot 列表变更：被删除的 Bot 若有插件推送路由指向它，回退默认 Bot 并重挂已加载插件
     if "BOTS" in incoming:
@@ -840,8 +851,8 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
         except Exception as e:  # noqa: BLE001
             logger.warning("重排插件仓库轮询失败: %r", e)
 
-    # 凭据/代理/DB 变更需重启才能完全生效
-    return {"status": "success", "restart_required": True}
+    # 只有凭据、代理、数据库和监听端口等运行参数发生变化时才需要重启。
+    return {"status": "success", "restart_required": restart_required}
 
 
 @app.post("/api/system/restart")

@@ -19,6 +19,8 @@ const levelClass = (lv) => ({
   ERROR: 'lv-err', CRITICAL: 'lv-err',
 }[lv] || 'lv-info')
 
+const logTime = (item) => item.date ? `${item.date.slice(5)} ${item.time}` : item.time
+
 const filtered = computed(() => {
   return logs.value.filter((l) => {
     if (levelFilter.value !== 'ALL' && l.level !== levelFilter.value) return false
@@ -89,7 +91,7 @@ onUnmounted(() => {
     <div class="log-box card" ref="logBox">
       <div v-if="filtered.length === 0" class="muted center">暂无日志</div>
       <div v-for="(l, i) in filtered" :key="i" class="log-line">
-        <span class="time">{{ l.time }}</span>
+        <span class="time">{{ logTime(l) }}</span>
         <span class="level" :class="levelClass(l.level)">{{ l.level }}</span>
         <span class="msg">{{ l.msg }}</span>
       </div>

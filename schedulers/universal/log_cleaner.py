@@ -8,6 +8,55 @@ from core import logger
 from libs.state import state_manager
 
 
+def _bounded_int(value, default, minimum, maximum):
+    try:
+        return min(max(int(value), minimum), maximum)
+    except (ValueError, TypeError):
+        return default
+
+
+def _enabled(value, default=True):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"on", "true", "1", "yes"}
+    return default
+
+
+def get_log_cleaner_settings():
+    """返回清理设置，并修正旧配置或异常值。"""
+    return {
+        "enabled": _enabled(state_manager.get_item("SYSTEM", "log_cleaner_enabled", "on")),
+        "keep_lines": _bounded_int(
+            state_manager.get_item("SYSTEM", "log_keep_lines", 100), 100, 1, 1000
+        ),
+        "hour": _bounded_int(
+            state_manager.get_item("SYSTEM", "log_clean_hour", 3), 3, 0, 23
+        ),
+        "minute": _bounded_int(
+            state_manager.get_item("SYSTEM", "log_clean_minute", 0), 0, 0, 59
+        ),
+    }
+
+
+def save_log_cleaner_settings(value):
+    """保存维护页提交的日志清理设置。"""
+    value = value if isinstance(value, dict) else {}
+    settings = {
+        "enabled": _enabled(value.get("enabled", True)),
+        "keep_lines": _bounded_int(value.get("keep_lines"), 100, 1, 1000),
+        "hour": _bounded_int(value.get("hour"), 3, 0, 23),
+        "minute": _bounded_int(value.get("minute"), 0, 0, 59),
+    }
+    state_manager.set_section("SYSTEM", {
+        "log_cleaner_enabled": "on" if settings["enabled"] else "off",
+        "log_keep_lines": settings["keep_lines"],
+        "log_clean_hour": settings["hour"],
+        "log_clean_minute": settings["minute"],
+    })
+    return settings
+
+
 def clean_log_file(log_file_path, keep_lines=100):
     """
     清理日志文件，只保留最后N行
@@ -52,16 +101,11 @@ async def log_cleaner_action():
     """日志清理任务"""
     try:
         # 检查开关
-        log_cleaner_enabled = state_manager.get_item("SYSTEM", "log_cleaner_enabled", "on")
-        if log_cleaner_enabled != "on":
+        settings = get_log_cleaner_settings()
+        if not settings["enabled"]:
             return
 
-        # 获取保留行数配置
-        keep_lines_str = state_manager.get_item("SYSTEM", "log_keep_lines", "100")
-        try:
-            keep_lines = int(keep_lines_str)
-        except (ValueError, TypeError):
-            keep_lines = 100
+        keep_lines = settings["keep_lines"]
 
         logger.info(f"开始清理日志，保留最后 {keep_lines} 行")
 
@@ -75,6 +119,11 @@ async def log_cleaner_action():
             if clean_log_file(log_file, keep_lines):
                 cleaned_count += 1
 
+        # 插件历史同时存在内存和磁盘中，必须通过统一入口同步清理。
+        from webui.log_stream import trim_history
+        if trim_history(keep_lines):
+            cleaned_count += 1
+
         if cleaned_count > 0:
             logger.info(f"日志清理完成，共清理 {cleaned_count} 个文件")
 
@@ -87,20 +136,15 @@ async def start_log_cleaner():
     from schedulers import scheduler
 
     # 检查开关
-    log_cleaner_enabled = state_manager.get_item("SYSTEM", "log_cleaner_enabled", "on")
+    settings = get_log_cleaner_settings()
 
     # 移除旧任务（如果存在）
     if scheduler.get_job("log_cleaner"):
         scheduler.remove_job("log_cleaner")
 
-    if log_cleaner_enabled == "on":
-        # 获取清理时间配置
-        try:
-            clean_hour = int(state_manager.get_item("SYSTEM", "log_clean_hour", "3"))
-            clean_minute = int(state_manager.get_item("SYSTEM", "log_clean_minute", "0"))
-        except (ValueError, TypeError):
-            clean_hour = 3
-            clean_minute = 0
+    if settings["enabled"]:
+        clean_hour = settings["hour"]
+        clean_minute = settings["minute"]
 
         # 添加新任务
         scheduler.add_job(

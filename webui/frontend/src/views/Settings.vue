@@ -46,6 +46,7 @@ async function load(silent = false) {
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
     if (s.value.WEBHOOK_SECRET === undefined) s.value.WEBHOOK_SECRET = ''
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
+    s.value.LOG_CLEANER = s.value.LOG_CLEANER || { enabled: true, keep_lines: 100, hour: 3, minute: 0 }
     // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
     s.value.BOTS.forEach((b) => { if (b.chat_id === undefined) b.chat_id = '' })
     savedSnap.value = JSON.stringify(s.value)   // 基线快照
@@ -538,11 +539,39 @@ onBeforeRouteLeave(async () => {
       <div v-show="tab === 'maint'" class="card">
         <div class="card-title">维护</div>
         <div class="hint muted">
-          这里可以导出当前平台快照，或从已有备份包恢复。备份会包含 data/、sessions/、db_file/、plugins/。
+          这里可以设置日志自动清理、导出当前平台快照，或从已有备份包恢复。备份会包含 data/、sessions/、db_file/、plugins/。
           导入时会先校验并下载当前快照，重启平台后再应用恢复，避免损坏运行中的数据库。
         </div>
 
         <div class="maint-box">
+          <div class="maint-item maint-settings">
+            <div class="maint-heading">
+              <div>
+                <div class="maint-name">日志清理</div>
+                <div class="maint-desc muted">定时清理平台运行日志和插件历史日志，避免长期占用磁盘空间。</div>
+              </div>
+              <button type="button" class="toggle" :class="{ on: s.LOG_CLEANER.enabled }"
+                      :aria-pressed="s.LOG_CLEANER.enabled" aria-label="启用日志清理"
+                      @click="s.LOG_CLEANER.enabled = !s.LOG_CLEANER.enabled"></button>
+            </div>
+            <div class="grid3" :class="{ disabled: !s.LOG_CLEANER.enabled }">
+              <div class="field">
+                <label>每天执行时间</label>
+                <div class="time-fields">
+                  <input class="input" type="number" min="0" max="23" aria-label="执行小时"
+                         v-model.number="s.LOG_CLEANER.hour" />
+                  <span>:</span>
+                  <input class="input" type="number" min="0" max="59" aria-label="执行分钟"
+                         v-model.number="s.LOG_CLEANER.minute" />
+                </div>
+              </div>
+              <div class="field">
+                <label>每个日志保留条数</label>
+                <input class="input" type="number" min="1" max="1000" v-model.number="s.LOG_CLEANER.keep_lines" />
+              </div>
+            </div>
+          </div>
+
           <div class="maint-item">
             <div>
               <div class="maint-name">导出备份</div>
@@ -677,6 +706,12 @@ onBeforeRouteLeave(async () => {
 }
 .maint-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .maint-desc { font-size: 12px; margin-top: 4px; max-width: 520px; }
+.maint-settings { align-items: stretch; flex-direction: column; }
+.maint-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.grid3 { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr); gap: 14px; }
+.grid3.disabled { opacity: 0.45; pointer-events: none; }
+.time-fields { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
+.time-fields span { color: var(--text-muted); font-weight: 700; }
 
 /* 平台 webhook 地址展示 */
 .row.gap { display: flex; align-items: center; gap: 8px; }
@@ -696,5 +731,6 @@ onBeforeRouteLeave(async () => {
   .tab { white-space: nowrap; flex: 1 1 auto; justify-content: center; padding: 8px 12px; }
   .panel { max-width: 100%; }
   .maint-item { flex-direction: column; align-items: stretch; }
+  .grid3 { grid-template-columns: 1fr; }
 }
 </style>
