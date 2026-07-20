@@ -23,6 +23,13 @@ const configValues = ref({})
 const configSaving = ref(false)
 const configRenderMode = ref('schema')   // schema | vue
 const configHasFrontend = ref(false)
+const configBots = ref([])
+const configBotChoice = ref('')
+const configBotConfirmed = ref('')
+const configBotLoading = ref(false)
+const configBotSaving = ref(false)
+const configBotReady = ref(false)
+let configBotRequestId = 0
 
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
@@ -139,8 +146,48 @@ async function openConfig(p) {
     configHasFrontend.value = !!data.has_frontend
     configOpen.value = true
     loadWebhook()
+    loadConfigBot(p.id)
   } catch (e) {
     error.value = e.message
+  }
+}
+
+async function loadConfigBot(pluginId) {
+  const requestId = ++configBotRequestId
+  configBotLoading.value = true
+  configBotReady.value = false
+  configBots.value = []
+  configBotChoice.value = ''
+  configBotConfirmed.value = ''
+  try {
+    const data = await api.getBotsRouting()
+    if (requestId !== configBotRequestId) return
+    const selected = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
+    configBots.value = data.bots || []
+    configBotChoice.value = selected
+    configBotConfirmed.value = selected
+    configBotReady.value = true
+  } catch (e) {
+    if (requestId === configBotRequestId) toast.error('读取通知 Bot 失败：' + e.message)
+  } finally {
+    if (requestId === configBotRequestId) configBotLoading.value = false
+  }
+}
+
+async function saveConfigBot() {
+  if (!configTarget.value || configBotSaving.value) return
+  const previous = configBotConfirmed.value
+  configBotSaving.value = true
+  try {
+    const data = await api.setBotRouting(configTarget.value.id, configBotChoice.value || '')
+    configBotChoice.value = data.bot || ''
+    configBotConfirmed.value = configBotChoice.value
+    toast.success(`「${configTarget.value.name}」通知 Bot 已更新`)
+  } catch (e) {
+    configBotChoice.value = previous
+    toast.error('保存通知 Bot 失败：' + e.message)
+  } finally {
+    configBotSaving.value = false
   }
 }
 
@@ -501,6 +548,20 @@ function shortRepo(value) {
   return normalizeRepo(value) || String(value || '').trim()
 }
 
+function pluginHomepage(p) {
+  const source = store.value.find((item) => item.id === p.id)?.repo_url
+  const repo = normalizeRepo(source)
+  return repo ? `https://github.com/${repo}` : ''
+}
+
+function openPluginHomepage(p) {
+  const url = pluginHomepage(p)
+  if (!url) return
+  closeMenu()
+  const opened = window.open(url, '_blank', 'noopener,noreferrer')
+  if (opened) opened.opener = null
+}
+
 async function loadStore(refresh = false) {
   storeBusy.value = true; storeErr.value = ''
   try {
@@ -727,7 +788,10 @@ onUnmounted(() => {
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 配置
                 </button>
                 <button class="menu-item" v-if="p.changelog" @click.stop="openChangelog(p)">
-                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看历史
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 版本历史
+                </button>
+                <button class="menu-item" v-if="pluginHomepage(p)" @click.stop="openPluginHomepage(p)">
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg> 项目主页
                 </button>
                 <button class="menu-item" @click.stop="openLogs(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看日志
@@ -965,6 +1029,20 @@ onUnmounted(() => {
         <ConfigForm v-else-if="Object.keys(configSchema).length" ref="configFormRef"
                     v-model="configValues" :schema="configSchema" :plugin-id="configTarget?.id" />
         <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
+
+        <div class="config-routing-box">
+          <div>
+            <div class="config-routing-title">通知 Bot</div>
+            <div class="hint muted small">这个插件的通知、Bot 发送和消息监听都会使用这里选择的 Bot，切换后立即生效。</div>
+          </div>
+          <select class="select config-bot-select" v-model="configBotChoice" @change="saveConfigBot"
+                  :disabled="!configBotReady || configBotLoading || configBotSaving">
+            <option value="">{{ configBotLoading ? '正在读取…' : '默认 Bot' }}</option>
+            <option v-for="bot in configBots.filter(item => !item.is_default)" :key="bot.id" :value="bot.id">
+              {{ bot.name || bot.id }}{{ bot.username ? ` (@${bot.username})` : '' }}{{ bot.online ? '' : '（离线）' }}
+            </option>
+          </select>
+        </div>
 
         <!-- Webhook（仅插件声明 "webhook": True 时显示） -->
         <div v-if="configTarget?.webhook" class="webhook-box">
@@ -1279,7 +1357,7 @@ onUnmounted(() => {
 }
 
 .store-title { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
-.store-icon { width: 38px; height: 38px; border-radius: 12px; object-fit: cover; flex-shrink: 0; }
+.store-icon { width: 38px; height: 38px; border-radius: 12px; object-fit: contain; flex-shrink: 0; }
 .store-icon-fallback {
   object-fit: contain;
   padding: 6px;
@@ -1465,7 +1543,7 @@ onUnmounted(() => {
 .search-item.active { background: var(--accent-dim); border-color: rgba(48,128,240,.24); }
 .search-item.actionable { cursor: pointer; }
 .search-icon {
-  width: 42px; height: 42px; border-radius: 12px; object-fit: cover;
+  width: 42px; height: 42px; border-radius: 12px; object-fit: contain;
   background: var(--bg-elevated); border: 1px solid var(--border);
 }
 .search-icon.fallback { object-fit: contain; padding: 7px; }
@@ -1527,6 +1605,13 @@ onUnmounted(() => {
 .form .field label { font-size: 13px; color: var(--text-secondary); }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 .hint { font-size: 12px; }
+.config-routing-box {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  margin-top: 18px; padding: 14px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-elevated);
+}
+.config-routing-title { margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.config-bot-select { width: min(280px, 42%); flex: 0 0 auto; }
 .repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .repo-row .input { flex: 1; }
 .acct-row { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
@@ -1569,7 +1654,7 @@ onUnmounted(() => {
 .modal-changelog { width: 600px; max-width: 90vw; }
 .changelog-header { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .changelog-plugin-info { display: flex; align-items: center; gap: 12px; }
-.changelog-icon { width: 48px; height: 48px; border-radius: 10px; object-fit: cover; }
+.changelog-icon { width: 48px; height: 48px; border-radius: 10px; object-fit: contain; }
 .changelog-icon-fallback { filter: brightness(0.7); }
 .changelog-plugin-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .changelog-plugin-version { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
@@ -1648,6 +1733,8 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .search-meta span:nth-child(n+3) { display: none; }
   .search-foot { padding: 10px 16px; }
   .search-foot > span:first-child { display: none; }
+  .config-routing-box { align-items: stretch; flex-direction: column; gap: 10px; }
+  .config-bot-select { width: 100%; }
   /* 窄屏照 MoviePilot 直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
   .modal.modal-wide {
