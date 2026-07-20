@@ -1266,8 +1266,8 @@ onUnmounted(() => {
 .badge-official::before {
   content: '';
   display: inline-block;
-  width: 10px; height: 10px;
-  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>') no-repeat center;
+  width: 12px; height: 12px;
+  background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m9 12 2 2 4-4"/></svg>') no-repeat center;
   background-size: contain;
 }
 
@@ -1284,10 +1284,6 @@ onUnmounted(() => {
   object-fit: contain;
   padding: 6px;
   background-color: var(--bg-elevated);
-  background-image: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23666" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="m21 15-5-5L5 21"/></svg>');
-  background-repeat: no-repeat;
-  background-position: center;
-  background-size: 24px;
 }
 .store-card:hover {
   border-color: var(--accent-dim);
@@ -1448,7 +1444,16 @@ onUnmounted(() => {
   min-width: 26px; padding: 2px 7px; border-radius: 8px; text-align: center;
   color: var(--text-secondary); background: var(--bg-elevated); font-size: 11px;
 }
-.search-filters { margin: 0 20px 10px; overflow-x: auto; }
+.search-filters {
+  flex: 0 0 auto;
+  min-height: 32px;
+  margin: 0 20px 10px;
+  padding: 1px 0 3px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.search-filters::-webkit-scrollbar { display: none; }
 .search-filters button { flex: 0 0 auto; }
 .search-list { flex: 1; min-height: 160px; overflow-y: auto; padding: 2px 10px 8px; }
 .search-item {
