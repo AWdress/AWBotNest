@@ -76,7 +76,7 @@ class PluginRegistry:
         self._enabled_state: dict[str, bool] = {}
         self._config_state: dict[str, dict[str, Any]] = {}
         self._account_scope: dict[str, list[str]] = {}  # 插件id -> [session名]，空/缺失=全部
-        self._bot_choice: dict[str, str] = {}  # 插件id -> bot id，空/缺失/"default"=默认 Bot
+        self._bot_choice: dict[str, str] = {}  # 插件id -> bot id；空/缺失=跟随默认，"default"=内置 Bot
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -380,18 +380,18 @@ class PluginRegistry:
         return affected
 
     # ──────────────────────────────────────────────
-    # 通知推送 Bot 选择（单选；空/缺失/"default"=默认 Bot）
+    # 通知推送 Bot 选择（单选；空/缺失=跟随默认，"default"=内置 Bot）
     # ──────────────────────────────────────────────
     def get_bot_choice(self, plugin_id: str) -> str:
-        """返回插件选定的 Bot id；空字符串表示默认 Bot。"""
+        """返回插件选定的 Bot id；空字符串表示跟随当前默认 Bot。"""
         with self._lock:
             return self._bot_choice.get(plugin_id, "") or ""
 
     def set_bot_choice(self, plugin_id: str, bot_id: str) -> None:
-        """设置插件推送/handler 用的 Bot；空或 "default" =默认 Bot（删除该记录）。"""
+        """设置插件推送/handler 用的 Bot；空=跟随默认，"default"=内置 Bot。"""
         with self._lock:
             bot_id = (bot_id or "").strip()
-            if bot_id and bot_id != "default":
+            if bot_id:
                 self._bot_choice[plugin_id] = bot_id
             else:
                 self._bot_choice.pop(plugin_id, None)

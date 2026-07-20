@@ -36,7 +36,7 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.0.4"
+APP_VERSION = "1.1.0.5"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -577,7 +577,7 @@ async def get_bots_routing(user=Depends(_auth)):
 
 @app.put("/api/bots/routing")
 async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
-    """设置某个插件推送到哪个 Bot（bot_id 空/"default"=默认 Bot）。
+    """设置某个插件推送到哪个 Bot（bot_id 空=跟随默认，"default"=内置 Bot）。
     影响通知推送与 scope=bot/both 插件的 handler 挂载，已加载则重载重挂。"""
     plugin_id = str(body.get("plugin_id") or "").strip()
     bot_id = str(body.get("bot_id") or "").strip()
@@ -585,8 +585,8 @@ async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
         raise HTTPException(status_code=400, detail="缺少 plugin_id")
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
-    # 校验 bot_id 真实存在（默认 Bot 恒合法；空=默认）
-    if bot_id and bot_id != "default":
+    # 校验 bot_id 真实存在；空值表示跟随当前默认 Bot。
+    if bot_id:
         accounts = _get_accounts()
         valid = {b["id"] for b in await accounts.list_bots()}
         if bot_id not in valid:
@@ -803,7 +803,12 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             v = cleaned_bots
         merged[k] = v
 
-    restart_keys = {"API_ID", "API_HASH", "BOT_TOKEN", "BOTS", "proxy_set", "DB_INFO", "WEB_UI_PORT"}
+    merged["BOT_NAME"] = str(merged.get("BOT_NAME") or "").strip() or "默认 Bot"
+    merged["DEFAULT_BOT_ID"] = cfg.normalize_default_bot_id(
+        merged.get("DEFAULT_BOT_ID"), merged.get("BOTS")
+    )
+
+    restart_keys = {"API_ID", "API_HASH", "proxy_set", "DB_INFO", "WEB_UI_PORT"}
     restart_required = any(current.get(key) != merged.get(key) for key in restart_keys)
 
     cfg.save(merged)
@@ -815,7 +820,39 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
         await start_log_cleaner()
         logger.info("日志清理设置已更新")
 
-    # 额外 Bot 列表变更：被删除的 Bot 若有插件推送路由指向它，回退默认 Bot 并重挂已加载插件
+    bot_sync = None
+    bot_keys = {"BOT_TOKEN", "BOT_NAME", "DEFAULT_BOT_ID", "BOTS"}
+    bot_changed = any(current.get(key) != merged.get(key) for key in bot_keys)
+    connection_base_changed = any(current.get(key) != merged.get(key) for key in ("API_ID", "API_HASH", "proxy_set"))
+
+    # Bot 名称、Token、默认项和列表都支持热更新；基础连接参数变化时仍随平台重启生效。
+    if bot_changed and not connection_base_changed:
+        try:
+            accounts = _get_accounts()
+            bot_sync = await accounts.sync_bots(current, merged)
+            if merged.get("DEFAULT_BOT_ID") != bot_sync["default_id"]:
+                merged["DEFAULT_BOT_ID"] = bot_sync["default_id"]
+            failed_ids = {item["id"] for item in bot_sync.get("failed", [])}
+            if "default" in failed_ids and current.get("BOT_TOKEN"):
+                merged["BOT_TOKEN"] = current["BOT_TOKEN"]
+            old_tokens = {
+                str(bot.get("id") or ""): bot.get("token", "")
+                for bot in current.get("BOTS") or [] if isinstance(bot, dict)
+            }
+            for bot in merged.get("BOTS") or []:
+                bot_id = str(bot.get("id") or "") if isinstance(bot, dict) else ""
+                if bot_id in failed_ids and bot_id in old_tokens:
+                    bot["token"] = old_tokens[bot_id]
+            if failed_ids or merged.get("DEFAULT_BOT_ID") != current.get("DEFAULT_BOT_ID"):
+                cfg.save(merged)
+            logger.info("Bot 设置已热更新")
+        except Exception as e:  # noqa: BLE001
+            restart_required = True
+            bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启平台后生效"}
+            logger.warning("Bot 设置热更新失败，将在重启后生效: %r", e)
+
+    # 被删除的 Bot 若有插件路由指向它，回退默认 Bot；连接变化时统一重挂插件。
+    routing_changed = False
     if "BOTS" in incoming:
         try:
             old_ids = {b.get("id") for b in (current.get("BOTS") or []) if isinstance(b, dict)}
@@ -825,15 +862,16 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             for bid in removed:
                 affected.update(registry.purge_bot(bid))
             if affected:
-                from kernel import state as kernel_state
-                runtime = kernel_state.runtime
-                if runtime is not None:
-                    for pid in affected:
-                        if runtime.is_loaded(pid):
-                            await runtime.reload(pid)
+                routing_changed = True
                 logger.info("已删除 %d 个 Bot，%d 个插件推送路由回退默认 Bot", len(removed), len(affected))
         except Exception as e:  # noqa: BLE001
             logger.warning("处理 Bot 删除的推送路由回退失败: %r", e)
+
+    if routing_changed or (bot_sync and bot_sync.get("needs_resync")):
+        try:
+            await _get_runtime().resync()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Bot 更新后重新挂载插件失败: %r", e)
 
     # 代理变更 → 立即刷新进程环境变量，新启动/重载的插件即时生效（长连接旧客户端仍需重启）
     if "proxy_set" in incoming:
@@ -852,7 +890,7 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             logger.warning("重排插件仓库轮询失败: %r", e)
 
     # 只有凭据、代理、数据库和监听端口等运行参数发生变化时才需要重启。
-    return {"status": "success", "restart_required": restart_required}
+    return {"status": "success", "restart_required": restart_required, "bot_sync": bot_sync}
 
 
 @app.post("/api/system/restart")

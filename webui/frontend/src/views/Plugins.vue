@@ -191,6 +191,10 @@ async function saveConfigBot() {
   }
 }
 
+function configDefaultBotName() {
+  return configBots.value.find((bot) => bot.is_default)?.name || '默认 Bot'
+}
+
 // 复制到剪贴板：优先 navigator.clipboard（需安全上下文），
 // 非 HTTPS（http://IP:端口）下降级到临时 textarea + execCommand('copy')。
 async function copyText(text) {
@@ -1037,7 +1041,7 @@ onUnmounted(() => {
           </div>
           <select class="select config-bot-select" v-model="configBotChoice" @change="saveConfigBot"
                   :disabled="!configBotReady || configBotLoading || configBotSaving">
-            <option value="">{{ configBotLoading ? '正在读取…' : '默认 Bot' }}</option>
+            <option value="">{{ configBotLoading ? '正在读取…' : `默认（${configDefaultBotName()}）` }}</option>
             <option v-for="bot in configBots.filter(item => !item.is_default)" :key="bot.id" :value="bot.id">
               {{ bot.name || bot.id }}{{ bot.username ? ` (@${bot.username})` : '' }}{{ bot.online ? '' : '（离线）' }}
             </option>

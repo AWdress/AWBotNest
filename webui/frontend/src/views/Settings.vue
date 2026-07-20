@@ -46,6 +46,8 @@ async function load(silent = false) {
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
     if (s.value.WEBHOOK_SECRET === undefined) s.value.WEBHOOK_SECRET = ''
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
+    if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '默认 Bot'
+    if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
     s.value.LOG_CLEANER = s.value.LOG_CLEANER || { enabled: true, keep_lines: 100, hour: 3, minute: 0 }
     // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
     s.value.BOTS.forEach((b) => { if (b.chat_id === undefined) b.chat_id = '' })
@@ -61,9 +63,14 @@ async function save() {
     // 静默重载：同步服务端清洗后的值（如剔除畸形 Bot）并重置基线快照
     await load(true)
     restartHint.value = needRestart
-    toast.success(needRestart
-      ? '已保存。凭据/代理/数据库/新增 Bot 等改动需重启平台生效。'
-      : '已保存。')
+    const failedBots = r.bot_sync?.failed || []
+    if (failedBots.length) {
+      toast.error(`已保存，但这些 Bot 连接失败：${failedBots.map((bot) => bot.name).join('、')}`)
+    } else {
+      toast.success(needRestart
+        ? '已保存。基础凭据、代理或数据库等改动需重启平台生效。'
+        : (r.bot_sync ? '已保存，Bot 设置已立即生效。' : '已保存。'))
+    }
     // Bot 列表可能变化 → 刷新推送路由的可选项
     if (tab.value === 'bots') loadRouting()
   } catch (e) { toast.error('保存失败：' + e.message) } finally { saving.value = false }
@@ -171,7 +178,17 @@ async function onRestoreFile(e) {
 function addBot() {
   s.value.BOTS.push({ id: 'bot_' + Date.now().toString(36), name: '', token: '', chat_id: '' })
 }
-function removeBot(i) { s.value.BOTS.splice(i, 1) }
+function removeBot(i) {
+  const removed = s.value.BOTS[i]
+  if (removed?.id === s.value.DEFAULT_BOT_ID) s.value.DEFAULT_BOT_ID = 'default'
+  s.value.BOTS.splice(i, 1)
+}
+function setDefaultBot(id) { s.value.DEFAULT_BOT_ID = id || 'default' }
+
+function configuredDefaultBotName() {
+  if (s.value?.DEFAULT_BOT_ID === 'default') return s.value.BOT_NAME || '默认 Bot'
+  return s.value?.BOTS?.find((bot) => bot.id === s.value.DEFAULT_BOT_ID)?.name || '默认 Bot'
+}
 
 // ── 平台 Webhook（密钥 + 随机按钮 + 地址展示） ──
 function randomHex(bytesLen = 24) {
@@ -351,14 +368,14 @@ onBeforeRouteLeave(async () => {
         <div class="card-title">通知</div>
         <div class="hint muted">
           平台的插件通知（ctx.notify）与 bot 类插件都通过 Bot 发送。可配置多个 Bot，
-          再在下方指定「每个插件推送到哪个 Bot」。Token 从 @BotFather 获取；新增/删除 Bot 需重启平台生效。
+          再在下方指定「每个插件推送到哪个 Bot」。Token 从 @BotFather 获取；Bot 改动保存后立即生效。
         </div>
 
         <!-- 通知 Bot 卡片网格 -->
         <div class="field">
           <label>通知 Bot</label>
           <div class="bot-grid">
-            <!-- 默认 Bot -->
+            <!-- 内置 Bot -->
             <div class="bot-card">
               <div class="bot-card-head">
                 <span class="bot-ava">
@@ -367,8 +384,9 @@ onBeforeRouteLeave(async () => {
                 </span>
                 <div class="bot-id">
                   <div class="bot-name-row">
-                    <span class="bot-name-text">默认 Bot</span>
-                    <span class="badge badge-default">默认</span>
+                    <input class="input bot-name-input" v-model="s.BOT_NAME" placeholder="Bot 名称" />
+                    <span v-if="s.DEFAULT_BOT_ID === 'default'" class="badge badge-default">默认</span>
+                    <button v-else class="set-default-btn" type="button" @click="setDefaultBot('default')">设为默认</button>
                   </div>
                   <div class="bot-status">
                     <span class="dot" :class="{ on: botStatus('default')?.online }"></span>
@@ -390,10 +408,14 @@ onBeforeRouteLeave(async () => {
                        stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
                 </span>
                 <div class="bot-id">
-                  <input class="input bot-name-input" v-model="b.name" placeholder="名称（如 订单Bot）" />
+                  <div class="bot-name-row">
+                    <input class="input bot-name-input" v-model="b.name" placeholder="名称（如 订单Bot）" />
+                    <span v-if="s.DEFAULT_BOT_ID === b.id" class="badge badge-default">默认</span>
+                    <button v-else class="set-default-btn" type="button" @click="setDefaultBot(b.id)">设为默认</button>
+                  </div>
                   <div class="bot-status">
                     <span class="dot" :class="{ on: botStatus(b.id)?.online }"></span>
-                    <span class="muted">{{ botStatus(b.id)?.online ? '在线' : (botStatus(b.id) ? '离线' : '未连接（需保存并重启）') }}</span>
+                    <span class="muted">{{ botStatus(b.id)?.online ? '在线' : (botStatus(b.id) ? '离线' : '未连接（需保存）') }}</span>
                     <span v-if="botStatus(b.id)?.username" class="muted mono">@{{ botStatus(b.id).username }}</span>
                   </div>
                 </div>
@@ -408,13 +430,13 @@ onBeforeRouteLeave(async () => {
               <span>添加 Bot</span>
             </button>
           </div>
-          <div class="hint muted small" style="margin-top:2px">额外 Bot 用于给不同插件分流通知；名称仅用于识别。修改后点右上「保存设置」。</div>
+          <div class="hint muted small" style="margin-top:2px">所有 Bot 都可以改名或设为默认，修改后点右上“保存设置”立即生效。</div>
         </div>
 
         <!-- 推送路由 -->
         <div class="field" style="margin-top:10px">
           <label>推送路由（哪个插件推到哪个 Bot）</label>
-          <div class="hint muted small" style="margin-bottom:8px">选择每个插件的通知发到哪个 Bot；选择立即生效（无需保存设置）。默认 = 默认 Bot。</div>
+          <div class="hint muted small" style="margin-bottom:8px">选择每个插件的通知发到哪个 Bot；选择立即生效（无需保存设置）。未单独选择时使用当前默认 Bot。</div>
           <div v-if="routingLoading" class="muted small">加载中…</div>
           <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
           <template v-else>
@@ -424,8 +446,8 @@ onBeforeRouteLeave(async () => {
               <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row">
                 <span class="route-name" :title="p.id">{{ p.name }}</span>
                 <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
-                  <option value="">默认 Bot</option>
-                  <option v-for="b in routing.bots.filter(x => !x.is_default)" :key="b.id" :value="b.id">
+                  <option value="">默认（{{ configuredDefaultBotName() }}）</option>
+                  <option v-for="b in routing.bots.filter(x => x.id !== s.DEFAULT_BOT_ID)" :key="b.id" :value="b.id">
                     {{ b.name }}{{ b.online ? '' : '（离线）' }}
                   </option>
                 </select>
@@ -666,10 +688,15 @@ onBeforeRouteLeave(async () => {
 }
 .bot-ava svg { width: 20px; height: 20px; }
 .bot-id { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
-.bot-name-row { display: flex; align-items: center; gap: 8px; }
+.bot-name-row { width: 100%; display: flex; align-items: center; gap: 8px; }
 .bot-name-text { font-size: 14px; font-weight: 600; color: var(--text-primary); }
 .badge-default { background: var(--accent-dim); color: var(--accent); font-size: 10px; padding: 1px 8px; }
-.bot-name-input { padding: 6px 10px; font-size: 13px; }
+.bot-name-input { min-width: 0; flex: 1; padding: 6px 10px; font-size: 13px; }
+.set-default-btn {
+  flex: 0 0 auto; padding: 4px 8px; border: 1px solid var(--border-light); border-radius: 7px;
+  color: var(--text-secondary); background: transparent; font-size: 11px; cursor: pointer;
+}
+.set-default-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
 .bot-chat { padding: 6px 10px; font-size: 12px; }
 .bot-status { display: flex; align-items: center; gap: 6px; font-size: 11px; }
 .bot-status .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }

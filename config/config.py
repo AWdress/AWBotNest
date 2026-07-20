@@ -24,6 +24,9 @@ _DEFAULTS: dict[str, Any] = {
     "API_ID": 0,
     "API_HASH": "",
     "BOT_TOKEN": "",
+    # BOT_TOKEN 对应的内置 Bot 显示名，以及当前作为默认出口的 Bot id。
+    "BOT_NAME": "默认 Bot",
+    "DEFAULT_BOT_ID": "default",
     # 默认 Bot 的通知目标 Chat ID（用户/群/频道）。留空=发给平台管理员（现有行为）。
     "DEFAULT_BOT_CHAT_ID": "",
     # 额外 Bot（多 Bot 通知推送用）。默认 Bot 仍由 BOT_TOKEN 表示（id="default"）。
@@ -55,6 +58,18 @@ _DEFAULTS: dict[str, Any] = {
 
 # 允许前端读写的字段（白名单，防止写入任意键）
 ALLOWED_KEYS = tuple(_DEFAULTS.keys())
+
+
+def normalize_default_bot_id(value: Any, bots: Any) -> str:
+    """只允许内置 Bot 或现有额外 Bot 成为默认项。"""
+    selected = str(value or "default").strip()
+    valid_ids = {"default"}
+    for bot in bots or []:
+        if isinstance(bot, dict):
+            bot_id = str(bot.get("id") or "").strip()
+            if bot_id and bot_id != "default":
+                valid_ids.add(bot_id)
+    return selected if selected in valid_ids else "default"
 
 
 def normalize_plugin_repo(value: Any) -> str:
@@ -138,6 +153,10 @@ def load() -> dict[str, Any]:
                 merged[k]["proxy"] = {**default_v["proxy"], **merged[k]["proxy"]}
     # 私有仓库已不再支持，只保留公开仓库地址并丢弃旧配置里的 token。
     merged["PLUGIN_REPOS"] = _clean_plugin_repos(merged.get("PLUGIN_REPOS"))
+    merged["BOT_NAME"] = str(merged.get("BOT_NAME") or "").strip() or "默认 Bot"
+    merged["DEFAULT_BOT_ID"] = normalize_default_bot_id(
+        merged.get("DEFAULT_BOT_ID"), merged.get("BOTS")
+    )
     return merged
 
 
@@ -151,6 +170,10 @@ def save(new_values: dict[str, Any]) -> dict[str, Any]:
     for k, v in (new_values or {}).items():
         if k in ALLOWED_KEYS:
             current[k] = v
+    current["BOT_NAME"] = str(current.get("BOT_NAME") or "").strip() or "默认 Bot"
+    current["DEFAULT_BOT_ID"] = normalize_default_bot_id(
+        current.get("DEFAULT_BOT_ID"), current.get("BOTS")
+    )
     _write_config(current)
     _apply(current)
     return current

@@ -10,6 +10,7 @@ kernel/account_manager.py
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 from typing import Optional
@@ -23,19 +24,19 @@ from infra.config import get_settings
 
 config = get_settings()
 
-# 默认 Bot 的固定 id（由 config 的 BOT_TOKEN 表示，session 文件名保持 bot_account 向后兼容）
-DEFAULT_BOT_ID = "default"
+# BOT_TOKEN 对应的内置 Bot 固定 id。
+BUILTIN_BOT_ID = "default"
 
 
 def _load_bots_config() -> list[dict]:
-    """读取「默认 Bot + 额外 Bot」的统一列表：[{id, name, token}]。
-    默认 Bot 恒在首位（id=default，token=BOT_TOKEN）；额外 Bot 取自 config 的 BOTS。
+    """读取「内置 Bot + 额外 Bot」的统一列表：[{id, name, token}]。
+    内置 Bot 恒在首位（id=default，token=BOT_TOKEN）；额外 Bot 取自 config 的 BOTS。
     token 为空的额外 Bot 会被跳过。"""
     import config.config as _cfg
     _cfg.reload()
     bots: list[dict] = [{
-        "id": DEFAULT_BOT_ID,
-        "name": "默认 Bot",
+        "id": BUILTIN_BOT_ID,
+        "name": str(getattr(_cfg, "BOT_NAME", "") or "").strip() or "默认 Bot",
         "token": str(getattr(_cfg, "BOT_TOKEN", "") or ""),
     }]
     for b in (getattr(_cfg, "BOTS", None) or []):
@@ -43,9 +44,34 @@ def _load_bots_config() -> list[dict]:
             continue
         bid = str(b.get("id") or "").strip()
         token = str(b.get("token") or "").strip()
-        if not bid or bid == DEFAULT_BOT_ID or not token:
+        if not bid or bid == BUILTIN_BOT_ID or not token:
             continue
         bots.append({"id": bid, "name": str(b.get("name") or bid), "token": token})
+    return bots
+
+
+def _bots_from_settings(settings: dict) -> list[dict]:
+    """把一份设置转换成可启动的 Bot 列表，不依赖全局配置刷新。"""
+    builtin_token = str(settings.get("BOT_TOKEN") or "").strip()
+    bots: list[dict] = []
+    if builtin_token:
+        bots.append({
+            "id": BUILTIN_BOT_ID,
+            "name": str(settings.get("BOT_NAME") or "").strip() or "默认 Bot",
+            "token": builtin_token,
+        })
+    for bot in settings.get("BOTS") or []:
+        if not isinstance(bot, dict):
+            continue
+        bot_id = str(bot.get("id") or "").strip()
+        token = str(bot.get("token") or "").strip()
+        if not bot_id or bot_id == BUILTIN_BOT_ID or not token:
+            continue
+        bots.append({
+            "id": bot_id,
+            "name": str(bot.get("name") or bot_id).strip() or bot_id,
+            "token": token,
+        })
     return bots
 
 
@@ -63,8 +89,10 @@ class AccountManager:
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
         self.user_apps: list[Client] = []
-        # 多 Bot：id -> Client。默认 Bot 的 id 为 DEFAULT_BOT_ID。
+        # 多 Bot：id -> Client；内置 Bot 的 id 固定为 default。
         self.bot_apps: dict[str, Client] = {}
+        self.default_bot_id = BUILTIN_BOT_ID
+        self._bot_sync_lock = asyncio.Lock()
         # 各 Bot 的显示名（id -> name），供通知/列表展示
         self._bot_names: dict[str, str] = {}
 
@@ -89,15 +117,17 @@ class AccountManager:
     @property
     def bot_app(self) -> Optional[Client]:
         """默认 Bot（向后兼容旧代码：notifier / DI 容器 / manager 等仍用 bot_app）。"""
-        return self.bot_apps.get(DEFAULT_BOT_ID)
+        return self.bot_apps.get(self.default_bot_id)
+
+    def resolve_bot_id(self, bot_id: str | None = None) -> str:
+        """返回实际使用的 Bot id；未指定或不存在时使用当前默认 Bot。"""
+        if bot_id and bot_id in self.bot_apps:
+            return bot_id
+        return self.default_bot_id
 
     def get_bot(self, bot_id: str | None = None) -> Optional[Client]:
         """按 id 取 Bot；未指定 / 不存在 / 未连接则回退默认 Bot。"""
-        if bot_id and bot_id != DEFAULT_BOT_ID:
-            app = self.bot_apps.get(bot_id)
-            if app is not None:
-                return app
-        return self.bot_apps.get(DEFAULT_BOT_ID)
+        return self.bot_apps.get(self.resolve_bot_id(bot_id))
 
     async def list_bots(self) -> list[dict]:
         """返回所有已配置 Bot 及在线状态，供前端「通知」页与推送路由用。
@@ -115,7 +145,8 @@ class AccountManager:
                 "name": b.get("name") or bid,
                 "online": online,
                 "username": username,
-                "is_default": bid == DEFAULT_BOT_ID,
+                "is_default": bid == self.default_bot_id,
+                "is_builtin": bid == BUILTIN_BOT_ID,
             })
         return result
 
@@ -134,9 +165,10 @@ class AccountManager:
         )
 
     def _build_bot_client(self, bot_id: str, bot_token: str) -> Client:
-        """构建 Bot 账号 Client。默认 Bot 的 session 沿用 bot_account（向后兼容），
-        额外 Bot 用 bot_<id> 独立 session 文件。"""
-        session_name = "bot_account" if bot_id == DEFAULT_BOT_ID else f"bot_{bot_id}"
+        """构建 Bot 客户端；Token 变化时使用新 session，避免误连回旧 Bot。"""
+        base_name = "bot_account" if bot_id == BUILTIN_BOT_ID else f"bot_{bot_id}"
+        token_fingerprint = hashlib.sha256(bot_token.encode("utf-8")).hexdigest()[:12]
+        session_name = f"{base_name}_{token_fingerprint}"
         return Client(
             session_name,
             api_id=API_ID,
@@ -145,6 +177,101 @@ class AccountManager:
             workdir=str(self.workdir.resolve()),
             proxy=self.proxy,
         )
+
+    async def _start_bot_client(self, bot_id: str, name: str, token: str) -> tuple[Optional[Client], str]:
+        """创建并启动一个 Bot，失败时清理半连接客户端并返回白话错误。"""
+        app = self._build_bot_client(bot_id, token)
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                await app.start()
+                logger.info("Bot [%s] 启动成功", name)
+                return app, ""
+            except Exception as e:  # noqa: BLE001
+                last_error = e
+                logger.warning("Bot [%s] 启动失败（第 %s/3 次）: %r", name, attempt, e)
+                if attempt < 3:
+                    await asyncio.sleep(2 * attempt)
+        try:
+            if getattr(app, "is_connected", False):
+                await app.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.error("Bot [%s] 无法启动，已跳过: %r", name, last_error)
+        return None, str(last_error or "连接失败")
+
+    async def sync_bots(self, previous: dict, current: dict) -> dict:
+        """按设置差异热更新 Bot，并返回前端可展示的同步结果。"""
+        async with self._bot_sync_lock:
+            old_specs = {bot["id"]: bot for bot in _bots_from_settings(previous)}
+            new_specs = {bot["id"]: bot for bot in _bots_from_settings(current)}
+            failed: list[dict[str, str]] = []
+            topology_changed = False
+
+            for bot_id, spec in new_specs.items():
+                existing = self.bot_apps.get(bot_id)
+                old_spec = old_specs.get(bot_id)
+                token_changed = old_spec is None or old_spec["token"] != spec["token"]
+                self._bot_names[bot_id] = spec["name"]
+                if existing is not None and not token_changed:
+                    continue
+
+                # Token 对应不同 session，新连接成功后再停旧连接，失败时旧 Bot 不受影响。
+                candidate, error = await self._start_bot_client(bot_id, spec["name"], spec["token"])
+                if candidate is not None:
+                    if existing is not None and getattr(existing, "is_connected", False):
+                        try:
+                            await existing.stop()
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("停止旧 Bot [%s] 连接失败: %r", spec["name"], e)
+                            try:
+                                await candidate.stop()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            failed.append({
+                                "id": bot_id,
+                                "name": spec["name"],
+                                "message": "旧连接无法关闭，已保留原 Bot",
+                            })
+                            continue
+                    self.bot_apps[bot_id] = candidate
+                    topology_changed = True
+                    continue
+
+                failed.append({"id": bot_id, "name": spec["name"], "message": error})
+
+            for bot_id in list(self.bot_apps):
+                if bot_id in new_specs:
+                    continue
+                app = self.bot_apps.pop(bot_id)
+                try:
+                    if getattr(app, "is_connected", False):
+                        await app.stop()
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("删除 Bot [%s] 时断开连接失败: %r", self._bot_names.get(bot_id, bot_id), e)
+                self._bot_names.pop(bot_id, None)
+                topology_changed = True
+
+            previous_default = self.default_bot_id
+            requested_default = str(current.get("DEFAULT_BOT_ID") or BUILTIN_BOT_ID)
+            if requested_default in self.bot_apps:
+                self.default_bot_id = requested_default
+            elif previous_default in self.bot_apps:
+                self.default_bot_id = previous_default
+            elif BUILTIN_BOT_ID in self.bot_apps:
+                self.default_bot_id = BUILTIN_BOT_ID
+            elif self.bot_apps:
+                self.default_bot_id = next(iter(self.bot_apps))
+            else:
+                self.default_bot_id = BUILTIN_BOT_ID
+
+            default_changed = self.default_bot_id != previous_default
+            manager.bot_app = self.bot_app
+            return {
+                "failed": failed,
+                "default_id": self.default_bot_id,
+                "needs_resync": topology_changed or default_changed,
+            }
 
     # ──────────────────────────────────────────────
     # 启动 / 停止
@@ -161,35 +288,28 @@ class AccountManager:
             raise RuntimeError("未配置 Telegram 凭据（API_ID/API_HASH），请在系统设置填写后重启")
 
         bots = _load_bots_config()
-        # 默认 Bot 无 token 时，视为「未配置 Bot」——与旧逻辑一致，交由 start_all 兜底跳过
-        if not bots or not bots[0].get("token"):
-            raise RuntimeError("未配置默认 Bot 的 BOT_TOKEN，请在系统设置填写后重启")
+        configured_default = str(getattr(_cfg, "DEFAULT_BOT_ID", BUILTIN_BOT_ID) or BUILTIN_BOT_ID)
+        runnable_bots = [bot for bot in bots if bot.get("token")]
+        if not runnable_bots:
+            raise RuntimeError("未配置可用的 Bot Token，请在系统设置填写后重启")
 
-        for b in bots:
+        for b in runnable_bots:
             bid, name, token = b["id"], b.get("name") or b["id"], b["token"]
             self._bot_names[bid] = name
-            app = self._build_bot_client(bid, token)
-            started = False
-            last_error = None
-            for attempt in range(1, 4):
-                try:
-                    await app.start()
-                    logger.info("Bot [%s] 启动成功", name)
-                    started = True
-                    break
-                except Exception as e:  # noqa: BLE001
-                    last_error = e
-                    logger.warning("Bot [%s] 启动失败（第 %s/3 次）: %r", name, attempt, e)
-                    if attempt < 3:
-                        await asyncio.sleep(2 * attempt)
-            if started:
+            app, _error = await self._start_bot_client(bid, name, token)
+            if app is not None:
                 self.bot_apps[bid] = app
-            else:
-                logger.error("Bot [%s] 无法启动，已跳过: %r", name, last_error)
 
-        if DEFAULT_BOT_ID not in self.bot_apps:
-            # 默认 Bot 都没起来 → 抛出，交由 start_all 记 warning（与旧行为一致）
-            raise RuntimeError("默认 Bot 无法启动（检查 BOT_TOKEN / 网络 / 代理）")
+        if not self.bot_apps:
+            raise RuntimeError("所有 Bot 都无法启动（请检查 Token / 网络 / 代理）")
+        if configured_default in self.bot_apps:
+            self.default_bot_id = configured_default
+        elif BUILTIN_BOT_ID in self.bot_apps:
+            self.default_bot_id = BUILTIN_BOT_ID
+        else:
+            self.default_bot_id = next(iter(self.bot_apps))
+        if self.default_bot_id != configured_default:
+            logger.warning("设置的默认 Bot 不可用，已临时改用 [%s]", self._bot_names[self.default_bot_id])
 
     async def start_users(self) -> None:
         """启动所有用户账号（无 session 或已暂停的跳过）"""
