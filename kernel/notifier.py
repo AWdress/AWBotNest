@@ -113,7 +113,7 @@ async def submit(
     bot_id = _plugin_bot_id(plugin_id)
     bot = _get_bot(accounts, bot_id)
     if bot and getattr(bot, "is_connected", False):
-        target = _bot_chat_id(bot_id)
+        target = _bot_chat_id(_resolved_bot_id(accounts, bot_id))
         if target is None:
             target = _owner_id() or None
         if target:
@@ -139,6 +139,14 @@ def _get_bot(accounts: Any, bot_id: str) -> Any:
     if callable(get_bot):
         return get_bot(bot_id)
     return getattr(accounts, "bot_app", None)
+
+
+def _resolved_bot_id(accounts: Any, bot_id: str) -> str:
+    """把空路由换成当前默认 Bot id，确保使用对应 Bot 的通知目标。"""
+    resolve = getattr(accounts, "resolve_bot_id", None)
+    if callable(resolve):
+        return resolve(bot_id)
+    return bot_id or "default"
 
 
 def _bot_chat_id(bot_id: str) -> Any:
