@@ -5,6 +5,7 @@ kernel/notification_channels.py
 from __future__ import annotations
 
 import json
+import time
 from typing import Any, Optional
 from core import logger
 
@@ -40,6 +41,12 @@ class TelegramChannel(NotificationChannel):
             return False
 
 
+import time
+
+# 企业微信 access_token 全局缓存（corpid+secret → {token, expires_at}）
+_wechat_token_cache: dict = {}
+
+
 class WeChatWorkChannel(NotificationChannel):
     """企业微信通知渠道"""
 
@@ -48,23 +55,37 @@ class WeChatWorkChannel(NotificationChannel):
         self.corpid = config.get("corpid", "")
         self.agentid = config.get("agentid", "")
         self.secret = config.get("secret", "")
-        self.touser = config.get("touser", "@all")  # 默认发送给所有人
-        self._access_token: Optional[str] = None
+        self.touser = config.get("touser", "@all")
+
+    def _cache_key(self) -> str:
+        return f"{self.corpid}:{self.secret}"
 
     async def _get_access_token(self) -> Optional[str]:
-        """获取企业微信access_token"""
+        """获取企业微信 access_token，优先从缓存取（有效期提前60秒刷新）"""
         if not httpx:
             logger.error("httpx库未安装，无法使用企业微信通知")
             return None
 
+        key = self._cache_key()
+        cached = _wechat_token_cache.get(key)
+        if cached and cached["expires_at"] > time.time() + 60:
+            return cached["token"]
+
         try:
-            url = f"https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid={self.corpid}&corpsecret={self.secret}"
+            url = (f"https://qyapi.weixin.qq.com/cgi-bin/gettoken"
+                   f"?corpid={self.corpid}&corpsecret={self.secret}")
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(url)
                 data = resp.json()
                 if data.get("errcode") == 0:
-                    self._access_token = data.get("access_token")
-                    return self._access_token
+                    token = data.get("access_token")
+                    # 企业微信 token 有效期 7200 秒
+                    expires_in = int(data.get("expires_in", 7200))
+                    _wechat_token_cache[key] = {
+                        "token": token,
+                        "expires_at": time.time() + expires_in,
+                    }
+                    return token
                 else:
                     logger.error(f"获取企业微信access_token失败: {data}")
                     return None
