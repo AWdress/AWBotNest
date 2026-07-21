@@ -36,7 +36,7 @@ def _load_bots_config() -> list[dict]:
     _cfg.reload()
     bots: list[dict] = [{
         "id": BUILTIN_BOT_ID,
-        "name": str(getattr(_cfg, "BOT_NAME", "") or "").strip() or "默认 Bot",
+        "name": str(getattr(_cfg, "BOT_NAME", "") or "").strip() or "主要通知渠道",
         "token": str(getattr(_cfg, "BOT_TOKEN", "") or ""),
     }]
     for b in (getattr(_cfg, "BOTS", None) or []):
@@ -57,7 +57,7 @@ def _bots_from_settings(settings: dict) -> list[dict]:
     if builtin_token:
         bots.append({
             "id": BUILTIN_BOT_ID,
-            "name": str(settings.get("BOT_NAME") or "").strip() or "默认 Bot",
+            "name": str(settings.get("BOT_NAME") or "").strip() or "主要通知渠道",
             "token": builtin_token,
         })
     for bot in settings.get("BOTS") or []:
