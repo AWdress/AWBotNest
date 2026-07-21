@@ -50,6 +50,46 @@ async function load(silent = false) {
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
     // 初始化通知渠道配置（数组格式）
     s.value.NOTIFICATION_CHANNELS = Array.isArray(s.value.NOTIFICATION_CHANNELS) ? s.value.NOTIFICATION_CHANNELS : []
+
+    // 自动迁移旧Bot配置到通知渠道
+    if (s.value.NOTIFICATION_CHANNELS.length === 0 && (s.value.BOT_TOKEN || s.value.BOTS?.length > 0)) {
+      // 迁移主Bot
+      if (s.value.BOT_TOKEN) {
+        s.value.NOTIFICATION_CHANNELS.push({
+          id: 'default',
+          name: s.value.BOT_NAME || '默认Bot',
+          type: 'telegram',
+          enabled: true,
+          is_default: s.value.DEFAULT_BOT_ID === 'default',
+          config: {
+            token: s.value.BOT_TOKEN,
+            chat_id: s.value.DEFAULT_BOT_CHAT_ID || ''
+          }
+        })
+      }
+
+      // 迁移额外的Bot
+      if (Array.isArray(s.value.BOTS)) {
+        s.value.BOTS.forEach((b) => {
+          if (b.token) {
+            s.value.NOTIFICATION_CHANNELS.push({
+              id: b.id || `migrated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+              name: b.name || '未命名Bot',
+              type: 'telegram',
+              enabled: true,
+              is_default: s.value.DEFAULT_BOT_ID === b.id,
+              config: {
+                token: b.token,
+                chat_id: b.chat_id || ''
+              }
+            })
+          }
+        })
+      }
+
+      console.log(`已自动迁移 ${s.value.NOTIFICATION_CHANNELS.length} 个Bot到通知渠道`)
+    }
+
     s.value.LOG_CLEANER = s.value.LOG_CLEANER || { enabled: true, keep_lines: 100, hour: 3, minute: 0 }
     // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
     s.value.BOTS.forEach((b) => { if (b.chat_id === undefined) b.chat_id = '' })
@@ -57,9 +97,53 @@ async function load(silent = false) {
   } catch (e) { err.value = e.message } finally { if (!silent) loading.value = false }
 }
 
+// 同步通知渠道到旧Bot配置，保持后端兼容
+function syncChannelsToOldBots() {
+  if (!Array.isArray(s.value.NOTIFICATION_CHANNELS)) return
+
+  // 清空旧配置
+  s.value.BOTS = []
+  s.value.BOT_TOKEN = ''
+  s.value.BOT_NAME = ''
+  s.value.DEFAULT_BOT_CHAT_ID = ''
+  s.value.DEFAULT_BOT_ID = ''
+
+  // 找到默认渠道
+  const defaultChannel = s.value.NOTIFICATION_CHANNELS.find(ch => ch.is_default && ch.type === 'telegram')
+
+  // 遍历所有Telegram渠道
+  s.value.NOTIFICATION_CHANNELS.forEach((ch) => {
+    if (ch.type !== 'telegram') return // 只处理Telegram类型
+
+    // 如果是默认渠道或者第一个渠道，设为主Bot
+    if (ch === defaultChannel || (!s.value.BOT_TOKEN && ch.enabled)) {
+      s.value.BOT_TOKEN = ch.config?.token || ''
+      s.value.BOT_NAME = ch.name || '默认Bot'
+      s.value.DEFAULT_BOT_CHAT_ID = ch.config?.chat_id || ''
+      s.value.DEFAULT_BOT_ID = ch.id
+    } else if (ch.enabled && ch.config?.token) {
+      // 其他渠道添加到BOTS数组
+      s.value.BOTS.push({
+        id: ch.id,
+        name: ch.name,
+        token: ch.config.token,
+        chat_id: ch.config?.chat_id || ''
+      })
+    }
+  })
+
+  // 确保DEFAULT_BOT_ID有值
+  if (!s.value.DEFAULT_BOT_ID && s.value.BOT_TOKEN) {
+    s.value.DEFAULT_BOT_ID = 'default'
+  }
+}
+
 async function save() {
   saving.value = true
   try {
+    // 保存前同步通知渠道到旧Bot配置，保持后端兼容
+    syncChannelsToOldBots()
+
     const r = await api.saveSettings(s.value)
     const needRestart = !!r.restart_required
     // 静默重载：同步服务端清洗后的值（如剔除畸形 Bot）并重置基线快照
