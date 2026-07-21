@@ -410,13 +410,42 @@ const storeErr = ref('')
 const storeLastSync = ref(null)
 const dlBusy = ref({})
 
-const storeAvailable = computed(() => store.value.filter((p) => !p.installed))
+// 应用筛选和排序
+function applyStoreFilters(list) {
+  let filtered = [...list]
+
+  // 应用作者筛选
+  if (filterAuthor.value) {
+    filtered = filtered.filter(p => p.author === filterAuthor.value)
+  }
+
+  // 应用仓库筛选
+  if (filterRepo.value) {
+    filtered = filtered.filter(p => p.repoUrl === filterRepo.value)
+  }
+
+  // 应用排序
+  if (filterSort.value === 'name') {
+    filtered.sort((a, b) => (a.name || a.id).localeCompare(b.name || b.id, 'zh-CN'))
+  } else if (filterSort.value === 'author') {
+    filtered.sort((a, b) => (a.author || '').localeCompare(b.author || '', 'zh-CN'))
+  } else if (filterSort.value === 'repo') {
+    filtered.sort((a, b) => (a.repo || '').localeCompare(b.repo || '', 'zh-CN'))
+  } else if (filterSort.value === 'latest') {
+    filtered.sort((a, b) => (b.id || '').localeCompare(a.id || ''))
+  }
+  // hot 排序保持原顺序（已在后端或初始列表中排序）
+
+  return filtered
+}
+
+const storeAvailable = computed(() => applyStoreFilters(store.value.filter((p) => !p.installed)))
 // 已安装但仓库有新版本的插件：仅当平台记录过下载版本(local_version)且与远端不同才提示，
 // 本地上传/手动导入(无 local_version)不误报更新，避免静默覆盖本地改动。
 function hasUpdate(p) {
   return p.installed && p.from_manifest && p.local_version && p.version && p.local_version !== p.version
 }
-const storeUpdatable = computed(() => store.value.filter(hasUpdate))
+const storeUpdatable = computed(() => applyStoreFilters(store.value.filter(hasUpdate)))
 const officialSet = computed(() => new Set(officialIds.value))
 function isOfficial(p) { return p.official || officialSet.value.has(p.id) }
 
@@ -429,6 +458,12 @@ const searchAuthorFilter = ref('')
 const searchRepoFilter = ref('')
 const searchSort = ref('hot')  // hot, name, author, repo, latest
 const searchActiveIndex = ref(0)
+
+// ── 插件市场筛选弹窗 ──
+const filterOpen = ref(false)
+const filterAuthor = ref('')
+const filterRepo = ref('')
+const filterSort = ref('hot')  // hot, name, author, repo, latest
 
 const searchablePlugins = computed(() => {
   const localById = new Map(plugins.value.map((p) => [p.id, p]))
@@ -505,6 +540,28 @@ const allAuthors = computed(() => {
     if (p.author && p.author.trim()) authors.add(p.author.trim())
   })
   return [...authors].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
+// 获取市场中的所有作者列表（用于市场筛选）
+const storeAuthors = computed(() => {
+  const authors = new Set()
+  store.value.forEach(p => {
+    if (p.author && p.author.trim()) authors.add(p.author.trim())
+  })
+  return [...authors].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
+// 获取所有仓库列表（用于市场筛选）
+const storeRepos = computed(() => {
+  const repos = new Map()  // repoUrl -> shortName
+  store.value.forEach(p => {
+    if (p.repoUrl && p.repo) {
+      repos.set(p.repoUrl, p.repo)
+    }
+  })
+  return [...repos.entries()]
+    .map(([url, name]) => ({ url, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 })
 
 // 获取所有仓库列表
@@ -770,6 +827,7 @@ onUnmounted(() => {
         </template>
         <template v-else>
           <span class="stats muted small" v-if="storeLastSync">上次刷新 {{ storeLastSync }}</span>
+          <button class="btn" @click="filterOpen = true">筛选</button>
           <button class="btn" @click="openRepos">设置仓库地址</button>
           <button class="btn btn-primary" @click="loadStore(true)" :disabled="storeBusy">
             {{ storeBusy ? '刷新中…' : '刷新市场' }}
@@ -1240,6 +1298,56 @@ onUnmounted(() => {
             {{ repoSaving ? '保存中…' : '保存并刷新市场' }}
           </button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 插件市场筛选弹窗 -->
+  <div v-if="filterOpen" class="modal-overlay" @click.self="filterOpen = false">
+    <div class="modal-box filter-modal">
+      <div class="modal-head">
+        <h3>筛选插件</h3>
+        <button class="close-btn" @click="filterOpen = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <!-- 排序方式 -->
+        <div class="filter-section">
+          <label class="filter-label">排序方式</label>
+          <div class="filter-options">
+            <button :class="{ active: filterSort === 'hot' }" @click="filterSort = 'hot'">热门</button>
+            <button :class="{ active: filterSort === 'name' }" @click="filterSort = 'name'">插件名称</button>
+            <button :class="{ active: filterSort === 'author' }" @click="filterSort = 'author'">作者</button>
+            <button :class="{ active: filterSort === 'repo' }" @click="filterSort = 'repo'">插件仓库</button>
+            <button :class="{ active: filterSort === 'latest' }" @click="filterSort = 'latest'">最新发布</button>
+          </div>
+          <div class="hint muted small">热门排序会优先显示可更新的插件</div>
+        </div>
+
+        <!-- 按作者筛选 -->
+        <div class="filter-section" v-if="storeAuthors.length > 0">
+          <label class="filter-label">按作者筛选</label>
+          <select class="select" v-model="filterAuthor">
+            <option value="">全部作者</option>
+            <option v-for="author in storeAuthors" :key="author" :value="author">{{ author }}</option>
+          </select>
+        </div>
+
+        <!-- 按仓库筛选 -->
+        <div class="filter-section" v-if="storeRepos.length > 0">
+          <label class="filter-label">按仓库筛选</label>
+          <select class="select" v-model="filterRepo">
+            <option value="">全部仓库</option>
+            <option v-for="repo in storeRepos" :key="repo.url" :value="repo.url">{{ repo.name }}</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button class="btn" @click="filterAuthor = ''; filterRepo = ''; filterSort = 'hot'">重置</button>
+        <button class="btn btn-primary" @click="filterOpen = false">确定</button>
       </div>
     </div>
   </div>
@@ -1824,6 +1932,55 @@ onUnmounted(() => {
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 13px;
   color: var(--text-secondary); background: var(--bg-elevated);
   padding: 14px; border-radius: var(--radius-sm); max-height: 400px; overflow-y: auto;
+}
+
+/* 筛选弹窗 */
+.filter-modal {
+  width: 500px;
+  max-width: 90vw;
+}
+
+.filter-section {
+  margin-bottom: 20px;
+}
+
+.filter-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 10px;
+}
+
+.filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.filter-options button {
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.filter-options button:hover {
+  border-color: var(--accent-dim);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.filter-options button.active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .logs-modal .level { flex-shrink: 0; width: 60px; font-weight: 600; }
