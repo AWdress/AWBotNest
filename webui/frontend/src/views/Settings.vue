@@ -391,7 +391,7 @@ function openEditChannel(index) {
   channelModalOpen.value = true
 }
 
-function saveChannel() {
+async function saveChannel() {
   if (!channelForm.value.name.trim()) {
     toast.error('请输入名称')
     return
@@ -415,7 +415,9 @@ function saveChannel() {
   syncChannelToRouting(channelForm.value)
 
   channelModalOpen.value = false
-  toast.success(channelModalMode.value === 'add' ? '已添加通知渠道' : '已更新通知渠道')
+
+  // 立即保存到后端，不需要用户再点"保存设置"
+  await save()
 }
 
 function deleteChannel(index) {
