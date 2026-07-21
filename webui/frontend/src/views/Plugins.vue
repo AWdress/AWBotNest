@@ -812,11 +812,18 @@ onMounted(() => {
   load(); loadStore(false)
   document.addEventListener('click', closeMenu)
   window.addEventListener('keydown', onSearchHotkey)
+  // 监听路由变更事件，刷新当前打开插件的渠道选择
+  eventBus.on(EVENTS.BOT_ROUTING_CHANGED, (data) => {
+    if (configOpen.value && configTarget.value?.id === data.pluginId) {
+      loadConfigBot(data.pluginId)
+    }
+  })
 })
 onUnmounted(() => {
   logsDisconnect()
   document.removeEventListener('click', closeMenu)
   window.removeEventListener('keydown', onSearchHotkey)
+  eventBus.off(EVENTS.BOT_ROUTING_CHANGED, () => {})
 })
 </script>
 
