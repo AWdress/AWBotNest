@@ -1574,15 +1574,15 @@ onBeforeRouteLeave(async () => {
 
 .add-menu-dropdown {
   position: absolute;
-  top: 56px;
-  right: 0;
+  bottom: calc(100% + 8px); /* 显示在按钮上方 */
+  left: 0; /* 左对齐按钮 */
   min-width: 180px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   padding: 6px;
-  z-index: 100;
+  z-index: 1000; /* 提升层级 */
 }
 
 .add-menu-dropdown button {
