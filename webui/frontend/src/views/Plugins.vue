@@ -1058,31 +1058,6 @@ onUnmounted(() => {
           <button :class="{ active: searchFilter === 'available' }" @click="searchFilter='available'">可安装</button>
         </div>
 
-        <div class="search-sort-section">
-          <div class="search-sort-label">排序</div>
-          <div class="search-sort-options">
-            <button :class="{ active: searchSort === 'hot' }" @click="searchSort='hot'">热门</button>
-            <button :class="{ active: searchSort === 'name' }" @click="searchSort='name'">插件名称</button>
-            <button :class="{ active: searchSort === 'author' }" @click="searchSort='author'">作者</button>
-            <button :class="{ active: searchSort === 'repo' }" @click="searchSort='repo'">插件仓库</button>
-            <button :class="{ active: searchSort === 'latest' }" @click="searchSort='latest'">最新发布</button>
-          </div>
-        </div>
-
-        <div class="search-filter-section">
-          <div class="search-filter-label">筛选</div>
-          <div class="search-filter-dropdowns">
-            <select v-if="allAuthors.length > 0" v-model="searchAuthorFilter" class="search-select">
-              <option value="">作者</option>
-              <option v-for="author in allAuthors" :key="author" :value="author">{{ author }}</option>
-            </select>
-            <select v-if="allRepos.length > 0" v-model="searchRepoFilter" class="search-select">
-              <option value="">仓库</option>
-              <option v-for="repo in allRepos" :key="repo.url" :value="repo.url">{{ repo.name }}</option>
-            </select>
-          </div>
-        </div>
-
         <div class="search-list">
           <div v-if="storeBusy && searchablePlugins.length === 0" class="search-empty">正在读取插件…</div>
           <div v-else-if="searchResults.length === 0" class="search-empty">
