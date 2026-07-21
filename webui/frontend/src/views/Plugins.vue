@@ -1983,7 +1983,20 @@ onUnmounted(() => {
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   min-width: 300px;
+  max-width: 400px;
   padding: 16px;
+
+  /* 自适应位置：如果右侧空间不足，改为左对齐 */
+  left: auto;
+}
+
+/* 当下拉菜单超出右边界时，改为右对齐 */
+@media (max-width: 768px) {
+  .filter-dropdown {
+    right: 0;
+    left: auto;
+    min-width: 280px;
+  }
 }
 
 .filter-section {
