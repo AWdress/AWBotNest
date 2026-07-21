@@ -562,6 +562,7 @@ async function syncChannelToRouting(channel) {
   const channelId = channel.id
   const selectedPlugins = channel.plugins || []
   const saves = []
+  const affectedPlugins = []
 
   routing.value.plugins.forEach(plugin => {
     const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
@@ -576,13 +577,21 @@ async function syncChannelToRouting(channel) {
     }
 
     plugin.bot = currentChannels.join(',')
+    affectedPlugins.push({ pluginId: plugin.id, botId: plugin.bot })
     // 收集所有保存请求，统一 await
     saves.push(api.setBotRouting(plugin.id, plugin.bot))
   })
 
   // 等所有路由都保存完再返回
   if (saves.length) await Promise.all(saves.map(p => p.catch(() => {})))
+
+  // 通知插件配置弹窗刷新渠道选择
+  affectedPlugins.forEach(({ pluginId, botId }) => {
+    eventBus.emit(EVENTS.BOT_ROUTING_CHANGED, { pluginId, botId })
+  })
 }
+
+// 双向同步：推送路由 → 渠道配置
 
 // 双向同步：推送路由 → 渠道配置
 function syncRoutingToChannel(pluginId, channelIds) {
