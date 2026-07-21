@@ -425,6 +425,7 @@ const searchOpen = ref(false)
 const searchQuery = ref('')
 const searchInput = ref(null)
 const searchFilter = ref('all')
+const searchAuthorFilter = ref('')
 const searchActiveIndex = ref(0)
 
 const searchablePlugins = computed(() => {
@@ -465,17 +466,28 @@ const searchResults = computed(() => {
     if (searchFilter.value === 'installed' && !p.installed) return false
     if (searchFilter.value === 'updates' && !p.updateAvailable) return false
     if (searchFilter.value === 'available' && p.installed) return false
+    if (searchAuthorFilter.value && p.author !== searchAuthorFilter.value) return false
     if (!words.length) return true
     const text = [p.name, p.id, p.description, p.author, p.repo].join(' ').toLowerCase()
     return words.every((word) => text.includes(word))
   })
 })
 
-watch([searchQuery, searchFilter], () => { searchActiveIndex.value = 0 })
+// 获取所有作者列表（用于筛选下拉）
+const allAuthors = computed(() => {
+  const authors = new Set()
+  searchablePlugins.value.forEach(p => {
+    if (p.author && p.author.trim()) authors.add(p.author.trim())
+  })
+  return [...authors].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
+watch([searchQuery, searchFilter, searchAuthorFilter], () => { searchActiveIndex.value = 0 })
 
 function openPluginSearch() {
   searchQuery.value = ''
   searchFilter.value = 'all'
+  searchAuthorFilter.value = ''
   searchActiveIndex.value = 0
   searchOpen.value = true
   if (store.value.length === 0 && !storeBusy.value) loadStore(false)
@@ -946,6 +958,14 @@ onUnmounted(() => {
           <button :class="{ active: searchFilter === 'installed' }" @click="searchFilter='installed'">已安装</button>
           <button :class="{ active: searchFilter === 'updates' }" @click="searchFilter='updates'">可更新</button>
           <button :class="{ active: searchFilter === 'available' }" @click="searchFilter='available'">可安装</button>
+        </div>
+
+        <div v-if="allAuthors.length > 0" class="search-author-filter">
+          <label for="author-select" class="search-author-label">作者</label>
+          <select id="author-select" v-model="searchAuthorFilter" class="search-author-select">
+            <option value="">全部作者</option>
+            <option v-for="author in allAuthors" :key="author" :value="author">{{ author }}</option>
+          </select>
         </div>
 
         <div class="search-list">
@@ -1537,6 +1557,42 @@ onUnmounted(() => {
 }
 .search-filters::-webkit-scrollbar { display: none; }
 .search-filters button { flex: 0 0 auto; }
+.search-author-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 20px 12px;
+  padding: 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+}
+.search-author-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  flex: 0 0 auto;
+}
+.search-author-select {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.search-author-select:hover {
+  border-color: var(--accent-dim);
+}
+.search-author-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
 .search-list { flex: 1; min-height: 160px; overflow-y: auto; padding: 2px 10px 8px; }
 .search-item {
   display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 12px;
