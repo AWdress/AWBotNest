@@ -114,17 +114,43 @@ async def submit(
     # 尝试从通知渠道配置中获取
     channel_config = _get_channel_config(bot_id)
     if channel_config and channel_config.get("enabled"):
-        bot = _get_bot(accounts, bot_id)
-        if bot and getattr(bot, "is_connected", False):
-            # 从通知渠道配置中读取Chat ID
-            chat_id_str = str(channel_config.get("config", {}).get("chat_id", "")).strip()
-            if chat_id_str:
-                target = _parse_chat_id(chat_id_str)
-            else:
-                # 渠道未配置Chat ID，发送给平台管理员
-                target = _owner_id() or None
-            if target:
-                return await bot.send_message(target, body, **send_kwargs)
+        channel_type = str(channel_config.get("type", "")).strip()
+        config_data = channel_config.get("config", {})
+
+        # 使用新的多渠道通知系统
+        from kernel.notification_channels import send_notification
+
+        if channel_type == "telegram":
+            # Telegram：使用已连接的Bot
+            bot = _get_bot(accounts, bot_id)
+            if bot and getattr(bot, "is_connected", False):
+                chat_id_str = str(config_data.get("chat_id", "")).strip()
+                if chat_id_str:
+                    target = _parse_chat_id(chat_id_str)
+                else:
+                    target = _owner_id() or None
+
+                if target:
+                    success = await send_notification(
+                        channel_type="telegram",
+                        config=config_data,
+                        message=body,
+                        bot=bot,
+                        target=target,
+                        **send_kwargs
+                    )
+                    if success:
+                        return True
+
+        elif channel_type in ["wechat", "bark"]:
+            # 企业微信和Bark：直接发送
+            success = await send_notification(
+                channel_type=channel_type,
+                config=config_data,
+                message=body
+            )
+            if success:
+                return True
 
     # 回退到旧的Bot配置（向后兼容）
     bot = _get_bot(accounts, bot_id)
