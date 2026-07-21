@@ -38,6 +38,22 @@ _DEFAULTS: dict[str, Any] = {
     # 平台级 webhook 密钥：外部服务 POST /api/v1/webhook?apikey=<此值> 即可把内容
     # 推给平台管理员（经默认 Bot，回退主账号收藏夹）。留空=关闭平台 webhook。
     "WEBHOOK_SECRET": "",
+    # 通知渠道配置
+    "NOTIFICATION_CHANNELS": {
+        "telegram": {"enabled": True},  # Telegram Bot 通知（默认）
+        "bark": {
+            "enabled": False,
+            "server": "",  # Bark 服务器地址，如 https://api.day.app
+            "device_key": "",  # 设备密钥
+        },
+        "wechat": {
+            "enabled": False,
+            "corpid": "",  # 企业ID
+            "corpsecret": "",  # 应用Secret
+            "agentid": "",  # 应用AgentId
+            "proxy": "",  # 可选：反向代理地址，如 https://qyapi.weixin.qq.com
+        },
+    },
     "proxy_set": {
         "proxy_enable": False,
         "proxy": {"scheme": "http", "hostname": "127.0.0.1", "port": 7890, "username": "", "password": ""},
