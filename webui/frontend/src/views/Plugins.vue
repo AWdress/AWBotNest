@@ -1978,7 +1978,7 @@ onUnmounted(() => {
   top: calc(100% + 8px);
   right: 0;
   z-index: 1000;
-  background: var(--bg-surface);
+  background: var(--bg-surface); /* 确保有背景色 */
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
@@ -2017,12 +2017,12 @@ onUnmounted(() => {
 
 .filter-options {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column; /* 改为竖向排列 */
   gap: 8px;
 }
 
 .filter-options button {
-  padding: 6px 12px;
+  padding: 8px 12px;
   font-size: 13px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -2030,6 +2030,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.2s;
+  text-align: left; /* 文字左对齐 */
 }
 
 .filter-options button:hover {
