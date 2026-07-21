@@ -827,7 +827,37 @@ onUnmounted(() => {
         </template>
         <template v-else>
           <span class="stats muted small" v-if="storeLastSync">上次刷新 {{ storeLastSync }}</span>
-          <button class="btn" @click="filterOpen = true">筛选</button>
+          <div class="filter-dropdown-wrapper">
+            <button class="btn" @click.stop="filterOpen = !filterOpen">筛选</button>
+            <div v-if="filterOpen" class="filter-dropdown" @click.stop>
+              <div class="filter-section">
+                <label class="filter-label">排序方式</label>
+                <div class="filter-options">
+                  <button :class="{ active: filterSort === 'hot' }" @click="filterSort = 'hot'">热门</button>
+                  <button :class="{ active: filterSort === 'name' }" @click="filterSort = 'name'">名称</button>
+                  <button :class="{ active: filterSort === 'author' }" @click="filterSort = 'author'">作者</button>
+                  <button :class="{ active: filterSort === 'latest' }" @click="filterSort = 'latest'">最新</button>
+                </div>
+              </div>
+              <div class="filter-section" v-if="storeAuthors.length > 0">
+                <label class="filter-label">按作者筛选</label>
+                <select class="select" v-model="filterAuthor">
+                  <option value="">全部作者</option>
+                  <option v-for="author in storeAuthors" :key="author" :value="author">{{ author }}</option>
+                </select>
+              </div>
+              <div class="filter-section" v-if="storeRepos.length > 0">
+                <label class="filter-label">按仓库筛选</label>
+                <select class="select" v-model="filterRepo">
+                  <option value="">全部仓库</option>
+                  <option v-for="repo in storeRepos" :key="repo.url" :value="repo.url">{{ repo.name }}</option>
+                </select>
+              </div>
+              <div class="filter-actions">
+                <button class="btn btn-sm" @click="filterAuthor = ''; filterRepo = ''; filterSort = 'hot'">重置</button>
+              </div>
+            </div>
+          </div>
           <button class="btn" @click="openRepos">设置仓库地址</button>
           <button class="btn btn-primary" @click="loadStore(true)" :disabled="storeBusy">
             {{ storeBusy ? '刷新中…' : '刷新市场' }}
@@ -1273,56 +1303,6 @@ onUnmounted(() => {
             {{ repoSaving ? '保存中…' : '保存并刷新市场' }}
           </button>
         </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- 插件市场筛选弹窗 -->
-  <div v-if="filterOpen" class="modal-overlay" @click.self="filterOpen = false">
-    <div class="modal-box filter-modal">
-      <div class="modal-head">
-        <h3>筛选插件</h3>
-        <button class="close-btn" @click="filterOpen = false">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 6 6 18M6 6l12 12"/>
-          </svg>
-        </button>
-      </div>
-      <div class="modal-body">
-        <!-- 排序方式 -->
-        <div class="filter-section">
-          <label class="filter-label">排序方式</label>
-          <div class="filter-options">
-            <button :class="{ active: filterSort === 'hot' }" @click="filterSort = 'hot'">热门</button>
-            <button :class="{ active: filterSort === 'name' }" @click="filterSort = 'name'">插件名称</button>
-            <button :class="{ active: filterSort === 'author' }" @click="filterSort = 'author'">作者</button>
-            <button :class="{ active: filterSort === 'repo' }" @click="filterSort = 'repo'">插件仓库</button>
-            <button :class="{ active: filterSort === 'latest' }" @click="filterSort = 'latest'">最新发布</button>
-          </div>
-          <div class="hint muted small">热门排序会优先显示可更新的插件</div>
-        </div>
-
-        <!-- 按作者筛选 -->
-        <div class="filter-section" v-if="storeAuthors.length > 0">
-          <label class="filter-label">按作者筛选</label>
-          <select class="select" v-model="filterAuthor">
-            <option value="">全部作者</option>
-            <option v-for="author in storeAuthors" :key="author" :value="author">{{ author }}</option>
-          </select>
-        </div>
-
-        <!-- 按仓库筛选 -->
-        <div class="filter-section" v-if="storeRepos.length > 0">
-          <label class="filter-label">按仓库筛选</label>
-          <select class="select" v-model="filterRepo">
-            <option value="">全部仓库</option>
-            <option v-for="repo in storeRepos" :key="repo.url" :value="repo.url">{{ repo.name }}</option>
-          </select>
-        </div>
-      </div>
-      <div class="modal-foot">
-        <button class="btn" @click="filterAuthor = ''; filterRepo = ''; filterSort = 'hot'">重置</button>
-        <button class="btn btn-primary" @click="filterOpen = false">确定</button>
       </div>
     </div>
   </div>
@@ -1987,7 +1967,84 @@ onUnmounted(() => {
   border-top: 1px solid var(--border);
 }
 
-/* 筛选弹窗 */
+/* 筛选下拉菜单 */
+.filter-dropdown-wrapper {
+  position: relative;
+  display: inline-block;
+}
+
+.filter-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 1000;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  min-width: 300px;
+  padding: 16px;
+}
+
+.filter-section {
+  margin-bottom: 16px;
+}
+
+.filter-section:last-child {
+  margin-bottom: 0;
+}
+
+.filter-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.filter-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filter-options button {
+  padding: 6px 12px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.filter-options button:hover {
+  background: var(--bg-active);
+  border-color: var(--accent);
+}
+
+.filter-options button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* 筛选弹窗（模态框样式，保留兼容性） */
 .filter-modal {
   width: 500px;
   max-width: 90vw;
