@@ -424,7 +424,7 @@ async function saveChannel() {
   loadRouting()
 }
 
-function deleteChannel(index) {
+async function deleteChannel(index) {
   if (!confirm(`确定删除通知渠道「${s.value.NOTIFICATION_CHANNELS[index].name}」？`)) return
 
   const channelId = s.value.NOTIFICATION_CHANNELS[index].id
@@ -441,6 +441,9 @@ function deleteChannel(index) {
   })
 
   s.value.NOTIFICATION_CHANNELS.splice(index, 1)
+
+  // 立即保存到后端
+  await save()
   toast.success('已删除')
 }
 
@@ -655,6 +658,8 @@ async function togglePluginChannel(plugin, channelId) {
   // 保存到后端
   try {
     await api.setBotRouting(plugin.id, plugin.bot)
+    // 渠道配置已更新，立即保存
+    await save()
     const channelNames = ids.map(id => {
       const ch = (s.value.NOTIFICATION_CHANNELS || []).find(c => c.id === id)
       return ch ? ch.name : id
@@ -721,8 +726,10 @@ onMounted(() => document.addEventListener('click', handleClickOutside))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 
 // 监听插件通知渠道变更事件，反向同步到渠道配置
-function handleRoutingChanged(data) {
+async function handleRoutingChanged(data) {
   syncRoutingToChannel(data.pluginId, data.botId)
+  // 渠道配置已更新，立即保存到后端
+  await save()
 }
 onMounted(() => eventBus.on(EVENTS.BOT_ROUTING_CHANGED, handleRoutingChanged))
 onUnmounted(() => eventBus.off(EVENTS.BOT_ROUTING_CHANGED, handleRoutingChanged))
