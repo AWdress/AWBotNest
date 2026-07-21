@@ -1413,11 +1413,14 @@ onBeforeRouteLeave(async () => {
   border-radius: var(--radius-sm);
   transition: all 0.15s;
   cursor: pointer;
+  position: relative;
+  z-index: 1;
 }
 
 .channel-card-mp:hover {
   border-color: var(--accent-dim);
   background: var(--bg-hover);
+  z-index: 2;
 }
 
 /* 顶部行：状态灯+名称+默认标识 | 删除按钮 */
