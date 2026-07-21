@@ -108,9 +108,25 @@ async def submit(
     acc_tag = f"[{account_label}]" if account_label else ""
     logger.info("[通知][%s]%s %s%s", plugin_name, acc_tag, f"({category}) " if category else "", text)
 
-    # 投递：优先本插件路由 Bot 配置的通知目标 Chat ID，其次平台管理员；
-    # Bot 都不可用时回退主账号「收藏夹」。
+    # 投递：优先使用通知渠道配置，回退到旧的Bot配置（向后兼容）
     bot_id = _plugin_bot_id(plugin_id)
+
+    # 尝试从通知渠道配置中获取
+    channel_config = _get_channel_config(bot_id)
+    if channel_config and channel_config.get("enabled"):
+        bot = _get_bot(accounts, bot_id)
+        if bot and getattr(bot, "is_connected", False):
+            # 从通知渠道配置中读取Chat ID
+            chat_id_str = str(channel_config.get("config", {}).get("chat_id", "")).strip()
+            if chat_id_str:
+                target = _parse_chat_id(chat_id_str)
+            else:
+                # 渠道未配置Chat ID，发送给平台管理员
+                target = _owner_id() or None
+            if target:
+                return await bot.send_message(target, body, **send_kwargs)
+
+    # 回退到旧的Bot配置（向后兼容）
     bot = _get_bot(accounts, bot_id)
     if bot and getattr(bot, "is_connected", False):
         target = _bot_chat_id(_resolved_bot_id(accounts, bot_id))
@@ -118,6 +134,8 @@ async def submit(
             target = _owner_id() or None
         if target:
             return await bot.send_message(target, body, **send_kwargs)
+
+    # 最后回退到主账号收藏夹
     user = getattr(accounts, "primary_user_app", None)
     if user and getattr(user, "is_connected", False):
         return await user.send_message("me", body, **send_kwargs)
@@ -149,6 +167,33 @@ def _get_default_channel_id() -> str:
         return ""
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _get_channel_config(channel_id: str) -> Optional[dict]:
+    """根据渠道ID获取通知渠道配置。"""
+    try:
+        import config.config as cfg
+        d = cfg.load()
+        channels = d.get("NOTIFICATION_CHANNELS", [])
+        for ch in channels:
+            if isinstance(ch, dict) and ch.get("id") == channel_id:
+                return ch
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _parse_chat_id(chat_id: str) -> Any:
+    """解析Chat ID：纯数字转int，否则原样返回（如@username）。"""
+    if not chat_id:
+        return None
+    chat_id = chat_id.strip()
+    if chat_id.lstrip("-").isdigit():
+        try:
+            return int(chat_id)
+        except ValueError:
+            return chat_id
+    return chat_id
 
 
 def _get_bot(accounts: Any, bot_id: str) -> Any:
