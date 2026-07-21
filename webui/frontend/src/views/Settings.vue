@@ -1574,8 +1574,8 @@ onBeforeRouteLeave(async () => {
 
 .add-menu-dropdown {
   position: absolute;
-  bottom: calc(100% + 8px); /* 显示在按钮上方 */
-  left: 0; /* 左对齐按钮 */
+  top: calc(100% + 8px); /* 显示在按钮下方 */
+  right: 0; /* 右对齐按钮 */
   min-width: 180px;
   background: var(--bg-card);
   border: 1px solid var(--border);
