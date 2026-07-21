@@ -48,6 +48,15 @@ async function load(silent = false) {
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
     if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '默认 Bot'
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
+    // 初始化通知渠道配置
+    s.value.NOTIFICATION_CHANNELS = s.value.NOTIFICATION_CHANNELS || {
+      telegram: { enabled: true },
+      bark: { enabled: false, server: '', device_key: '' },
+      wechat: { enabled: false, corpid: '', corpsecret: '', agentid: '', proxy: '' }
+    }
+    if (!s.value.NOTIFICATION_CHANNELS.telegram) s.value.NOTIFICATION_CHANNELS.telegram = { enabled: true }
+    if (!s.value.NOTIFICATION_CHANNELS.bark) s.value.NOTIFICATION_CHANNELS.bark = { enabled: false, server: '', device_key: '' }
+    if (!s.value.NOTIFICATION_CHANNELS.wechat) s.value.NOTIFICATION_CHANNELS.wechat = { enabled: false, corpid: '', corpsecret: '', agentid: '', proxy: '' }
     s.value.LOG_CLEANER = s.value.LOG_CLEANER || { enabled: true, keep_lines: 100, hour: 3, minute: 0 }
     // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
     s.value.BOTS.forEach((b) => { if (b.chat_id === undefined) b.chat_id = '' })
@@ -475,6 +484,69 @@ onBeforeRouteLeave(async () => {
           <div v-if="platformWebhookUrl" class="webhook-url mono">{{ platformWebhookUrl }}</div>
           <button v-if="platformWebhookUrl" class="btn sm" style="align-self:flex-start" @click="copyPlatformWebhook">复制地址</button>
         </div>
+
+        <!-- 通知渠道配置 -->
+        <div class="field" style="margin-top:20px">
+          <label>通知渠道</label>
+          <div class="hint muted small" style="margin-bottom:12px">
+            配置除 Telegram Bot 外的其他通知方式。启用后插件的 ctx.notify 会同时推送到这些渠道。
+          </div>
+
+          <!-- Bark -->
+          <div class="notification-channel-card">
+            <div class="channel-header">
+              <label class="checkbox-label" style="margin:0">
+                <input type="checkbox" v-model="s.NOTIFICATION_CHANNELS.bark.enabled" />
+                <span class="channel-name">Bark（iOS 推送）</span>
+              </label>
+            </div>
+            <div v-if="s.NOTIFICATION_CHANNELS.bark.enabled" class="channel-body">
+              <div class="field">
+                <label class="small-label">服务器地址</label>
+                <input class="input" v-model="s.NOTIFICATION_CHANNELS.bark.server"
+                       placeholder="https://api.day.app" />
+              </div>
+              <div class="field">
+                <label class="small-label">设备密钥</label>
+                <input class="input" v-model="s.NOTIFICATION_CHANNELS.bark.device_key"
+                       placeholder="从 Bark App 中获取" />
+              </div>
+            </div>
+          </div>
+
+          <!-- 微信 -->
+          <div class="notification-channel-card">
+            <div class="channel-header">
+              <label class="checkbox-label" style="margin:0">
+                <input type="checkbox" v-model="s.NOTIFICATION_CHANNELS.wechat.enabled" />
+                <span class="channel-name">企业微信</span>
+              </label>
+            </div>
+            <div v-if="s.NOTIFICATION_CHANNELS.wechat.enabled" class="channel-body">
+              <div class="field">
+                <label class="small-label">企业 ID</label>
+                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.corpid"
+                       placeholder="企业微信后台获取" />
+              </div>
+              <div class="field">
+                <label class="small-label">应用 Secret</label>
+                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.corpsecret"
+                       placeholder="应用管理 - 自建应用" />
+              </div>
+              <div class="field">
+                <label class="small-label">应用 AgentId</label>
+                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.agentid"
+                       placeholder="应用的 AgentId" />
+              </div>
+              <div class="field">
+                <label class="small-label">API 地址（可选）</label>
+                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.proxy"
+                       placeholder="反向代理地址，如 https://qyapi.weixin.qq.com（留空使用官方地址）" />
+                <div class="hint muted small">如果无法直连企业微信 API，可填写反向代理地址</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- Web 控制台 -->
@@ -748,6 +820,48 @@ onBeforeRouteLeave(async () => {
   background: #07090f; border-radius: var(--radius-sm); color: var(--text-primary);
 }
 .mono { font-family: 'SFMono-Regular', Consolas, monospace; }
+
+/* 通知渠道卡片 */
+.notification-channel-card {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.channel-header {
+  padding: 12px 14px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+.channel-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-left: 8px;
+}
+.channel-body {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.small-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+.checkbox-label input[type="checkbox"] {
+  cursor: pointer;
+}
+
 @media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } .bot-grid { grid-template-columns: 1fr; } }
 
 /* 手机适配 */
