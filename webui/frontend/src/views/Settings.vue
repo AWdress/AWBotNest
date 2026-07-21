@@ -1068,6 +1068,23 @@ onBeforeRouteLeave(async () => {
         </button>
       </div>
       <div class="modal-body">
+        <!-- 弹窗副标题：显示渠道类型 -->
+        <div class="channel-type-subtitle">
+          <span class="channel-type-icon-sm">
+            <svg v-if="channelForm.type === 'telegram'" viewBox="0 0 24 24" fill="currentColor" style="color:#0088cc;width:16px;height:16px;">
+              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+            </svg>
+            <svg v-else-if="channelForm.type === 'wechat'" viewBox="0 0 24 24" fill="currentColor" style="color:#07c160;width:16px;height:16px;">
+              <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.045c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/>
+            </svg>
+            <svg v-else-if="channelForm.type === 'bark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color:var(--accent);width:16px;height:16px;">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+              <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+            </svg>
+          </span>
+          <span class="channel-type-name-sm">{{ getChannelTypeName(channelForm.type) }} 通知渠道</span>
+        </div>
+
         <!-- 启用状态 -->
         <div class="field">
           <label class="checkbox-label">
@@ -1083,17 +1100,6 @@ onBeforeRouteLeave(async () => {
             <span>设为默认</span>
           </label>
           <div class="hint muted small">默认渠道用于接收平台通知，只能有一个默认渠道</div>
-        </div>
-
-        <!-- 类型选择（仅添加时显示） -->
-        <div v-if="channelModalMode === 'add'" class="field">
-          <label>类型</label>
-          <select class="select" v-model="channelForm.type" disabled>
-            <option v-for="type in channelTypes" :key="type.value" :value="type.value">
-              {{ type.label }}
-            </option>
-          </select>
-          <div class="hint muted small">已选择的通知渠道类型</div>
         </div>
 
         <!-- 名称 -->
@@ -1511,6 +1517,21 @@ onBeforeRouteLeave(async () => {
 .channel-type-label {
   font-size: 13px;
   color: var(--text-secondary);
+}
+
+/* 弹窗渠道类型副标题 */
+.channel-type-subtitle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+.channel-type-name-sm {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .channel-icon-mp {
