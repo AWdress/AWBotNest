@@ -4,6 +4,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
+import { eventBus, EVENTS } from '../utils/eventBus'
 
 const tab = ref('login')   // login | telegram | bots | web | proxy | db | maint
 
@@ -432,10 +433,11 @@ function deleteChannel(index) {
   routing.value.plugins.forEach(plugin => {
     const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
     const filteredChannels = currentChannels.filter(id => id !== channelId)
-    plugin.bot = filteredChannels.join(',')
-
-    // 立即保存到后端
-    api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
+    if (currentChannels.length !== filteredChannels.length) {
+      plugin.bot = filteredChannels.join(',')
+      syncRoutingToChannel(plugin.id, plugin.bot)  // 反向同步到渠道配置
+      api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
+    }
   })
 
   s.value.NOTIFICATION_CHANNELS.splice(index, 1)
@@ -454,6 +456,7 @@ async function toggleChannel(index) {
       const filtered = ids.filter(id => id !== channelId)
       if (filtered.length !== ids.length) {
         plugin.bot = filtered.join(',')
+        syncRoutingToChannel(plugin.id, plugin.bot)  // 反向同步到渠道配置
         api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
       }
     })
@@ -716,6 +719,13 @@ function handleClickOutside(e) {
 }
 onMounted(() => document.addEventListener('click', handleClickOutside))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside))
+
+// 监听插件通知渠道变更事件，反向同步到渠道配置
+function handleRoutingChanged(data) {
+  syncRoutingToChannel(data.pluginId, data.botId)
+}
+onMounted(() => eventBus.on(EVENTS.BOT_ROUTING_CHANGED, handleRoutingChanged))
+onUnmounted(() => eventBus.off(EVENTS.BOT_ROUTING_CHANGED, handleRoutingChanged))
 
 // 未保存改动保护：刷新/关页 + 站内切换路由时提醒
 function beforeUnload(e) { if (dirty.value) { e.preventDefault(); e.returnValue = '' } }
