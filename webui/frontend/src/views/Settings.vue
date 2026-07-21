@@ -778,7 +778,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 通知渠道 -->
-      <div v-show="tab === 'bots'" class="card">
+      <div v-show="tab === 'bots'" class="card" style="max-width: 1200px; margin-left: auto; margin-right: auto;">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
           设置消息发送渠道参数
