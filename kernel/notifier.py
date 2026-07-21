@@ -135,11 +135,8 @@ async def submit(
         if target:
             return await bot.send_message(target, body, **send_kwargs)
 
-    # 最后回退到主账号收藏夹
-    user = getattr(accounts, "primary_user_app", None)
-    if user and getattr(user, "is_connected", False):
-        return await user.send_message("me", body, **send_kwargs)
-    raise RuntimeError("无可用账号投递通知（Bot 未连接/未配置 Chat ID，且无在线用户账号）")
+    # 所有Bot都不可用，直接报错
+    raise RuntimeError("无可用通知渠道投递通知（Bot 未连接或未配置 Chat ID）")
 
 
 def _plugin_bot_id(plugin_id: str) -> str:
