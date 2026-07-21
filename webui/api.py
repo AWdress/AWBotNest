@@ -564,9 +564,32 @@ async def list_bots_api(user=Depends(_auth)):
 
 @app.get("/api/bots/routing")
 async def get_bots_routing(user=Depends(_auth)):
-    """推送路由总览：可选 Bot 列表 + 每个插件当前推送到哪个 Bot（空=默认 Bot）。"""
+    """推送路由总览：可选渠道列表 + 每个插件当前推送到哪个渠道（空=默认渠道）。"""
     accounts = _get_accounts()
     bots = await accounts.list_bots()
+
+    # 将所有启用的非 Telegram 通知渠道也加入列表（供前端多选展示）
+    cfg_data = config.load()
+    for ch in (cfg_data.get("NOTIFICATION_CHANNELS") or []):
+        if not isinstance(ch, dict):
+            continue
+        if ch.get("type") == "telegram":
+            continue   # Telegram 渠道已通过 list_bots() 返回
+        if not ch.get("enabled"):
+            continue
+        ch_id = str(ch.get("id") or "").strip()
+        if not ch_id or any(b["id"] == ch_id for b in bots):
+            continue
+        ch_type = str(ch.get("type") or "").upper()
+        bots.append({
+            "id": ch_id,
+            "name": ch.get("name") or ch_id,
+            "online": True,
+            "username": f"[{ch_type}]",
+            "is_default": bool(ch.get("is_default")),
+            "is_builtin": False,
+        })
+
     plugins = [
         {"id": m.id, "name": m.name, "scope": m.scope,
          "bot": registry.get_bot_choice(m.id), "error": bool(m.error)}
@@ -577,20 +600,29 @@ async def get_bots_routing(user=Depends(_auth)):
 
 @app.put("/api/bots/routing")
 async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
-    """设置某个插件推送到哪个 Bot（bot_id 空=跟随默认，"default"=内置 Bot）。
-    影响通知推送与 scope=bot/both 插件的 handler 挂载，已加载则重载重挂。"""
+    """设置某个插件推送到哪个渠道（bot_id 空=跟随默认，支持逗号分隔多渠道）。"""
     plugin_id = str(body.get("plugin_id") or "").strip()
     bot_id = str(body.get("bot_id") or "").strip()
     if not plugin_id:
         raise HTTPException(status_code=400, detail="缺少 plugin_id")
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
-    # 校验 bot_id 真实存在；空值表示跟随当前默认 Bot。
+    # 校验每个渠道 ID：Telegram bot 或 NOTIFICATION_CHANNELS 中的渠道都合法
     if bot_id:
         accounts = _get_accounts()
-        valid = {b["id"] for b in await accounts.list_bots()}
-        if bot_id not in valid:
-            raise HTTPException(status_code=400, detail="指定的 Bot 不存在")
+        valid_bots = {b["id"] for b in await accounts.list_bots()}
+        cfg_data = config.load()
+        valid_channels = {
+            str(ch.get("id") or "").strip()
+            for ch in (cfg_data.get("NOTIFICATION_CHANNELS") or [])
+            if isinstance(ch, dict) and ch.get("id")
+        }
+        valid = valid_bots | valid_channels
+        # 支持逗号分隔的多渠道
+        ids = [i.strip() for i in bot_id.split(",") if i.strip()]
+        invalid = [i for i in ids if i not in valid]
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"渠道不存在：{', '.join(invalid)}")
     registry.set_bot_choice(plugin_id, bot_id)
     runtime = _get_runtime()
     if runtime.is_loaded(plugin_id):

@@ -24,8 +24,8 @@ const configSaving = ref(false)
 const configRenderMode = ref('schema')   // schema | vue
 const configHasFrontend = ref(false)
 const configBots = ref([])
-const configBotChoice = ref('')
-const configBotConfirmed = ref('')
+const configBotChoice = ref([])       // 多选，存渠道 id 数组
+const configBotConfirmed = ref([])
 const configBotLoading = ref(false)
 const configBotSaving = ref(false)
 const configBotReady = ref(false)
@@ -157,18 +157,19 @@ async function loadConfigBot(pluginId) {
   configBotLoading.value = true
   configBotReady.value = false
   configBots.value = []
-  configBotChoice.value = ''
-  configBotConfirmed.value = ''
+  configBotChoice.value = []
+  configBotConfirmed.value = []
   try {
     const data = await api.getBotsRouting()
     if (requestId !== configBotRequestId) return
-    const selected = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
+    const selectedStr = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
     configBots.value = data.bots || []
+    const selected = selectedStr ? selectedStr.split(',').map(s => s.trim()).filter(Boolean) : []
     configBotChoice.value = selected
-    configBotConfirmed.value = selected
+    configBotConfirmed.value = [...selected]
     configBotReady.value = true
   } catch (e) {
-    if (requestId === configBotRequestId) toast.error('读取通知 Bot 失败：' + e.message)
+    if (requestId === configBotRequestId) toast.error('读取通知渠道失败：' + e.message)
   } finally {
     if (requestId === configBotRequestId) configBotLoading.value = false
   }
@@ -176,23 +177,34 @@ async function loadConfigBot(pluginId) {
 
 async function saveConfigBot() {
   if (!configTarget.value || configBotSaving.value) return
-  const previous = configBotConfirmed.value
+  const previous = [...configBotConfirmed.value]
   configBotSaving.value = true
   try {
-    const data = await api.setBotRouting(configTarget.value.id, configBotChoice.value || '')
-    configBotChoice.value = data.bot || ''
-    configBotConfirmed.value = configBotChoice.value
-    toast.success(`「${configTarget.value.name}」通知 Bot 已更新`)
+    const botIdStr = configBotChoice.value.join(',')
+    const data = await api.setBotRouting(configTarget.value.id, botIdStr)
+    const saved = data.bot ? data.bot.split(',').map(s => s.trim()).filter(Boolean) : []
+    configBotChoice.value = saved
+    configBotConfirmed.value = [...saved]
+    api.clearCache()
+    eventBus.emit(EVENTS.BOT_ROUTING_CHANGED, { pluginId: configTarget.value.id, botId: data.bot || '' })
+    toast.success(`「${configTarget.value.name}」通知渠道已更新`)
   } catch (e) {
     configBotChoice.value = previous
-    toast.error('保存通知 Bot 失败：' + e.message)
+    toast.error('保存通知渠道失败：' + e.message)
   } finally {
     configBotSaving.value = false
   }
 }
 
 function configDefaultBotName() {
-  return configBots.value.find((bot) => bot.is_default)?.name || '默认 Bot'
+  return configBots.value.find((bot) => bot.is_default)?.name || '主要通知渠道'
+}
+
+function toggleConfigBot(id) {
+  const idx = configBotChoice.value.indexOf(id)
+  if (idx >= 0) configBotChoice.value.splice(idx, 1)
+  else configBotChoice.value.push(id)
+  saveConfigBot()
 }
 
 // 复制到剪贴板：优先 navigator.clipboard（需安全上下文），
@@ -1176,16 +1188,32 @@ onUnmounted(() => {
 
         <div class="config-routing-box">
           <div>
-            <div class="config-routing-title">通知 Bot</div>
-            <div class="hint muted small">这个插件的通知、Bot 发送和消息监听都会使用这里选择的 Bot，切换后立即生效。</div>
+            <div class="config-routing-title">通知渠道</div>
+            <div class="hint muted small">选择这个插件的通知发到哪些渠道，可多选，切换后立即生效。</div>
           </div>
-          <select class="select config-bot-select" v-model="configBotChoice" @change="saveConfigBot"
-                  :disabled="!configBotReady || configBotLoading || configBotSaving">
-            <option value="">{{ configBotLoading ? '正在读取…' : `默认（${configDefaultBotName()}）` }}</option>
-            <option v-for="bot in configBots.filter(item => !item.is_default)" :key="bot.id" :value="bot.id">
-              {{ bot.name || bot.id }}{{ bot.username ? ` (@${bot.username})` : '' }}{{ bot.online ? '' : '（离线）' }}
-            </option>
-          </select>
+          <div v-if="configBotLoading" class="muted small">正在读取…</div>
+          <div v-else-if="!configBotReady" class="muted small">加载失败</div>
+          <div v-else class="config-bot-checks">
+            <!-- 默认选项 -->
+            <label class="config-bot-item">
+              <input type="checkbox"
+                     :checked="configBotChoice.length === 0"
+                     @change="configBotChoice = []; saveConfigBot()"
+                     :disabled="configBotSaving" />
+              <span>默认（{{ configDefaultBotName() }}）</span>
+            </label>
+            <!-- 所有可用渠道 -->
+            <label v-for="bot in configBots.filter(b => !b.is_default)" :key="bot.id" class="config-bot-item">
+              <input type="checkbox"
+                     :checked="configBotChoice.includes(bot.id)"
+                     @change="toggleConfigBot(bot.id)"
+                     :disabled="configBotSaving" />
+              <span>{{ bot.name || bot.id }}
+                <span class="muted small">{{ bot.username ? bot.username : '' }}</span>
+                <span v-if="!bot.online" class="muted small">（离线）</span>
+              </span>
+            </label>
+          </div>
         </div>
 
         <!-- Webhook（仅插件声明 "webhook": True 时显示） -->
@@ -1828,12 +1856,20 @@ onUnmounted(() => {
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 .hint { font-size: 12px; }
 .config-routing-box {
-  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  display: flex; flex-direction: column; gap: 10px;
   margin-top: 18px; padding: 14px; border: 1px solid var(--border);
   border-radius: var(--radius-sm); background: var(--bg-elevated);
 }
 .config-routing-title { margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.config-bot-select { width: min(280px, 42%); flex: 0 0 auto; }
+.config-bot-checks { display: flex; flex-direction: column; gap: 8px; }
+.config-bot-item {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text-primary); cursor: pointer;
+  padding: 6px 8px; border-radius: 6px;
+  transition: background 0.15s;
+}
+.config-bot-item:hover { background: var(--bg-hover); }
+.config-bot-item input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
 .repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .repo-row .input { flex: 1; }
 .acct-row { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
