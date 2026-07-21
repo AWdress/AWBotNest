@@ -439,8 +439,25 @@ function deleteChannel(index) {
   toast.success('已删除')
 }
 
-function toggleChannel(index) {
+async function toggleChannel(index) {
   s.value.NOTIFICATION_CHANNELS[index].enabled = !s.value.NOTIFICATION_CHANNELS[index].enabled
+  const ch = s.value.NOTIFICATION_CHANNELS[index]
+
+  // 渠道被禁用时，清理所有指向该渠道的推送路由
+  if (!ch.enabled) {
+    const channelId = ch.id
+    routing.value.plugins.forEach(plugin => {
+      const ids = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
+      const filtered = ids.filter(id => id !== channelId)
+      if (filtered.length !== ids.length) {
+        plugin.bot = filtered.join(',')
+        api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
+      }
+    })
+  }
+
+  // 立即保存
+  await save()
 }
 
 function getChannelIcon(type) {
