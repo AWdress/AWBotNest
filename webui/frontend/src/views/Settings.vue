@@ -246,6 +246,28 @@ const channelTypes = [
   { value: 'bark', label: 'Bark', icon: 'bark' }
 ]
 
+// 添加渠道下拉菜单
+const addMenuOpen = ref(false)
+
+function toggleAddMenu() {
+  addMenuOpen.value = !addMenuOpen.value
+}
+
+function selectChannelType(type) {
+  addMenuOpen.value = false
+  channelModalMode.value = 'add'
+  channelEditIndex.value = -1
+  channelForm.value = {
+    id: `ch_${Date.now()}`,
+    name: '',
+    type: type,
+    enabled: true,
+    is_default: false,
+    config: {}
+  }
+  channelModalOpen.value = true
+}
+
 function openAddChannel() {
   channelModalMode.value = 'add'
   channelEditIndex.value = -1
@@ -567,32 +589,22 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 通知渠道 -->
-      <div v-show="tab === 'bots'" class="card" style="margin-top:20px">
+      <div v-show="tab === 'bots'" class="card">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
-          配置消息发送渠道参数。启用后插件的 ctx.notify 会同时推送到这些渠道。
+          设置消息发送渠道参数
         </div>
 
         <!-- 通知渠道卡片网格 -->
         <div class="channel-grid-mp">
           <div v-for="(ch, idx) in s.NOTIFICATION_CHANNELS" :key="ch.id" class="channel-card-mp">
-            <!-- 状态指示灯+名称+默认标识 -->
-            <div class="channel-left-mp">
-              <span class="status-dot-mp" :class="{ on: ch.enabled }"></span>
-              <div class="channel-name-mp">
-                {{ ch.name }}
+            <!-- 顶部行：状态灯+名称+默认标识+删除按钮 -->
+            <div class="channel-top-row">
+              <div class="channel-left-info">
+                <span class="status-dot-mp" :class="{ on: ch.enabled }"></span>
+                <span class="channel-name-text">{{ ch.name }}</span>
                 <span v-if="ch.is_default" class="badge-default-mp">默认</span>
               </div>
-            </div>
-
-            <!-- 拖动和删除按钮 -->
-            <div class="channel-actions-mp">
-              <button class="drag-btn-mp" title="拖动排序">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="9" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="19" r="1"/>
-                  <circle cx="15" cy="5" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="19" r="1"/>
-                </svg>
-              </button>
               <button class="delete-btn-mp" @click="deleteChannel(idx)" title="删除">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M18 6 6 18M6 6l12 12"/>
@@ -600,36 +612,59 @@ onBeforeRouteLeave(async () => {
               </button>
             </div>
 
-            <!-- 图标和类型 -->
-            <div class="channel-icon-large-mp" @click="openEditChannel(idx)">
-              <!-- Telegram 图标 -->
-              <svg v-if="ch.type === 'telegram'" viewBox="0 0 24 24" fill="currentColor" class="icon-telegram">
-                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
-              </svg>
-              <!-- 企业微信图标 -->
-              <svg v-else-if="ch.type === 'wechat'" viewBox="0 0 24 24" fill="currentColor" class="icon-wechat">
-                <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.045c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/>
-              </svg>
-              <!-- Bark 图标 -->
-              <svg v-else-if="ch.type === 'bark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-bark">
-                <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
-                <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
-              </svg>
-            </div>
-
-            <div class="channel-type-label-mp" @click="openEditChannel(idx)">
-              {{ getChannelTypeName(ch.type) }}
+            <!-- 底部行：类型标签+图标 -->
+            <div class="channel-bottom-row" @click="openEditChannel(idx)">
+              <div class="channel-type-label">{{ getChannelTypeName(ch.type) }}</div>
+              <div class="channel-icon-mp">
+                <!-- Telegram 图标 -->
+                <svg v-if="ch.type === 'telegram'" viewBox="0 0 24 24" fill="currentColor" class="icon-telegram">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                </svg>
+                <!-- 企业微信图标 -->
+                <svg v-else-if="ch.type === 'wechat'" viewBox="0 0 24 24" fill="currentColor" class="icon-wechat">
+                  <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.045c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/>
+                </svg>
+                <!-- Bark 图标 -->
+                <svg v-else-if="ch.type === 'bark'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-bark">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+              </div>
             </div>
           </div>
         </div>
 
-        <!-- 底部按钮 -->
-        <div class="channel-footer">
-          <button class="btn-add-mp" @click="openAddChannel">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 5v14m-7-7h14"/>
-            </svg>
-          </button>
+        <!-- 添加按钮（带下拉菜单） -->
+        <div class="channel-footer" style="margin-top:16px">
+          <div class="add-channel-dropdown">
+            <button class="btn-add-mp" @click="toggleAddMenu">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 5v14m-7-7h14"/>
+              </svg>
+            </button>
+            <!-- 下拉菜单 -->
+            <div v-if="addMenuOpen" class="add-menu-dropdown">
+              <button @click="selectChannelType('telegram')">
+                <svg viewBox="0 0 24 24" fill="currentColor" class="icon-telegram">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 0 0-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z"/>
+                </svg>
+                Telegram
+              </button>
+              <button @click="selectChannelType('wechat')">
+                <svg viewBox="0 0 24 24" fill="currentColor" class="icon-wechat">
+                  <path d="M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.045c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z"/>
+                </svg>
+                企业微信
+              </button>
+              <button @click="selectChannelType('bark')">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="icon-bark">
+                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
+                  <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+                </svg>
+                Bark
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1064,15 +1099,12 @@ onBeforeRouteLeave(async () => {
 }
 
 .channel-card-mp {
-  position: relative;
   padding: 14px 16px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   transition: all 0.15s;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
+  cursor: pointer;
 }
 
 .channel-card-mp:hover {
@@ -1080,11 +1112,20 @@ onBeforeRouteLeave(async () => {
   background: var(--bg-hover);
 }
 
-/* 顶部：状态灯+名称+默认标识+操作按钮 */
-.channel-left-mp {
+/* 顶部行：状态灯+名称+默认标识 | 删除按钮 */
+.channel-top-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.channel-left-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
 }
 
 .status-dot-mp {
@@ -1100,14 +1141,13 @@ onBeforeRouteLeave(async () => {
   box-shadow: 0 0 8px var(--accent-2);
 }
 
-.channel-name-mp {
+.channel-name-text {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .badge-default-mp {
@@ -1118,15 +1158,9 @@ onBeforeRouteLeave(async () => {
   color: var(--accent);
   background: var(--accent-dim);
   border-radius: 4px;
+  flex-shrink: 0;
 }
 
-.channel-actions-mp {
-  display: flex;
-  gap: 4px;
-  margin-left: auto;
-}
-
-.drag-btn-mp,
 .delete-btn-mp {
   width: 28px;
   height: 28px;
@@ -1139,41 +1173,45 @@ onBeforeRouteLeave(async () => {
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+  flex-shrink: 0;
 }
 
-.drag-btn-mp svg,
 .delete-btn-mp svg {
   width: 16px;
   height: 16px;
 }
 
-.drag-btn-mp:hover,
 .delete-btn-mp:hover {
   background: var(--bg-hover);
   color: var(--text-primary);
 }
 
-/* 中间：大图标+类型 */
-.channel-icon-large-mp {
-  width: 80px;
-  height: 80px;
-  border-radius: 14px;
+/* 底部行：类型标签（左） | 图标（右） */
+.channel-bottom-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.channel-type-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.channel-icon-mp {
+  width: 64px;
+  height: 64px;
+  border-radius: 12px;
   background: var(--bg-card);
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto;
-  cursor: pointer;
-  transition: all 0.15s;
+  flex-shrink: 0;
 }
 
-.channel-icon-large-mp:hover {
-  transform: scale(1.05);
-}
-
-.channel-icon-large-mp svg {
-  width: 48px;
-  height: 48px;
+.channel-icon-mp svg {
+  width: 40px;
+  height: 40px;
 }
 
 .icon-telegram {
@@ -1188,17 +1226,14 @@ onBeforeRouteLeave(async () => {
   color: var(--accent);
 }
 
-.channel-type-label-mp {
-  text-align: center;
-  font-size: 13px;
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
+/* 添加按钮和下拉菜单 */
 .channel-footer {
   display: flex;
   gap: 10px;
-  margin-top: 12px;
+}
+
+.add-channel-dropdown {
+  position: relative;
 }
 
 .btn-add-mp {
@@ -1224,6 +1259,45 @@ onBeforeRouteLeave(async () => {
   border-color: var(--accent);
   background: var(--accent-dim);
   color: var(--accent);
+}
+
+.add-menu-dropdown {
+  position: absolute;
+  bottom: 56px;
+  left: 0;
+  min-width: 180px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  padding: 6px;
+  z-index: 100;
+}
+
+.add-menu-dropdown button {
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.15s;
+}
+
+.add-menu-dropdown button:hover {
+  background: var(--bg-hover);
+}
+
+.add-menu-dropdown svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 
 /* 通知渠道配置弹窗 */
