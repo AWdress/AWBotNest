@@ -426,7 +426,6 @@ const searchQuery = ref('')
 const searchInput = ref(null)
 const searchFilter = ref('all')
 const searchAuthorFilter = ref('')
-const searchTagFilter = ref('')
 const searchRepoFilter = ref('')
 const searchSort = ref('hot')  // hot, name, author, repo, latest
 const searchActiveIndex = ref(0)
@@ -469,7 +468,6 @@ const searchResults = computed(() => {
     if (searchFilter.value === 'updates' && !p.updateAvailable) return false
     if (searchFilter.value === 'available' && p.installed) return false
     if (searchAuthorFilter.value && p.author !== searchAuthorFilter.value) return false
-    if (searchTagFilter.value && !p.tags.includes(searchTagFilter.value)) return false
     if (searchRepoFilter.value && p.repoUrl !== searchRepoFilter.value) return false
     if (!words.length) return true
     const text = [p.name, p.id, p.description, p.author, p.repo].join(' ').toLowerCase()
@@ -509,17 +507,6 @@ const allAuthors = computed(() => {
   return [...authors].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 })
 
-// 获取所有标签列表
-const allTags = computed(() => {
-  const tags = new Set()
-  searchablePlugins.value.forEach(p => {
-    if (p.tags && Array.isArray(p.tags)) {
-      p.tags.forEach(tag => tags.add(tag))
-    }
-  })
-  return [...tags].sort((a, b) => a.localeCompare(b, 'zh-CN'))
-})
-
 // 获取所有仓库列表
 const allRepos = computed(() => {
   const repos = new Map()  // repoUrl -> shortName
@@ -533,13 +520,12 @@ const allRepos = computed(() => {
     .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
 })
 
-watch([searchQuery, searchFilter, searchAuthorFilter, searchTagFilter, searchRepoFilter, searchSort], () => { searchActiveIndex.value = 0 })
+watch([searchQuery, searchFilter, searchAuthorFilter, searchRepoFilter, searchSort], () => { searchActiveIndex.value = 0 })
 
 function openPluginSearch() {
   searchQuery.value = ''
   searchFilter.value = 'all'
   searchAuthorFilter.value = ''
-  searchTagFilter.value = ''
   searchRepoFilter.value = ''
   searchSort.value = 'hot'
   searchActiveIndex.value = 0
@@ -1031,10 +1017,6 @@ onUnmounted(() => {
             <select v-if="allAuthors.length > 0" v-model="searchAuthorFilter" class="search-select">
               <option value="">作者</option>
               <option v-for="author in allAuthors" :key="author" :value="author">{{ author }}</option>
-            </select>
-            <select v-if="allTags.length > 0" v-model="searchTagFilter" class="search-select">
-              <option value="">标签</option>
-              <option v-for="tag in allTags" :key="tag" :value="tag">{{ tag }}</option>
             </select>
             <select v-if="allRepos.length > 0" v-model="searchRepoFilter" class="search-select">
               <option value="">仓库</option>
