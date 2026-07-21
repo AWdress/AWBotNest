@@ -397,6 +397,18 @@ async function saveCred() {
 
 onMounted(() => { load(); loadUsername() })
 
+// 点击外部关闭添加渠道下拉菜单
+function handleClickOutside(e) {
+  if (addMenuOpen.value) {
+    const dropdown = document.querySelector('.add-channel-dropdown')
+    if (dropdown && !dropdown.contains(e.target)) {
+      addMenuOpen.value = false
+    }
+  }
+}
+onMounted(() => document.addEventListener('click', handleClickOutside))
+onUnmounted(() => document.removeEventListener('click', handleClickOutside))
+
 // 未保存改动保护：刷新/关页 + 站内切换路由时提醒
 function beforeUnload(e) { if (dirty.value) { e.preventDefault(); e.returnValue = '' } }
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
@@ -471,120 +483,6 @@ onBeforeRouteLeave(async () => {
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
           <div class="field"><label>API HASH</label>
             <input class="input" v-model="s.API_HASH" /></div>
-        </div>
-      </div>
-
-      <!-- 通知（通知 Bot 卡片 + 推送路由 + 平台 Webhook） -->
-      <div v-show="tab === 'bots'" class="card">
-        <div class="card-title">通知</div>
-        <div class="hint muted">
-          平台的插件通知（ctx.notify）与 bot 类插件都通过 Bot 发送。可配置多个 Bot，
-          再在下方指定「每个插件推送到哪个 Bot」。Token 从 @BotFather 获取；Bot 改动保存后立即生效。
-        </div>
-
-        <!-- 通知 Bot 卡片网格 -->
-        <div class="field">
-          <label>通知 Bot</label>
-          <div class="bot-grid">
-            <!-- 内置 Bot -->
-            <div class="bot-card">
-              <div class="bot-card-head">
-                <span class="bot-ava">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-                </span>
-                <div class="bot-id">
-                  <div class="bot-name-row">
-                    <input class="input bot-name-input" v-model="s.BOT_NAME" placeholder="Bot 名称" />
-                    <span v-if="s.DEFAULT_BOT_ID === 'default'" class="badge badge-default">默认</span>
-                    <button v-else class="set-default-btn" type="button" @click="setDefaultBot('default')">设为默认</button>
-                  </div>
-                  <div class="bot-status">
-                    <span class="dot" :class="{ on: botStatus('default')?.online }"></span>
-                    <span class="muted">{{ botStatus('default')?.online ? '在线' : (botStatus('default') ? '离线' : '未连接') }}</span>
-                    <span v-if="botStatus('default')?.username" class="muted mono">@{{ botStatus('default').username }}</span>
-                  </div>
-                </div>
-              </div>
-              <input class="input" v-model="s.BOT_TOKEN" placeholder="从 @BotFather 获取 Token" />
-              <input class="input bot-chat" v-model="s.DEFAULT_BOT_CHAT_ID" placeholder="通知 Chat ID（留空=发给管理员）" />
-            </div>
-
-            <!-- 额外 Bot -->
-            <div v-for="(b, i) in s.BOTS" :key="b.id || i" class="bot-card">
-              <button class="bot-del" type="button" title="删除此 Bot" @click="removeBot(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
-              <div class="bot-card-head">
-                <span class="bot-ava">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                       stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-                </span>
-                <div class="bot-id">
-                  <div class="bot-name-row">
-                    <input class="input bot-name-input" v-model="b.name" placeholder="名称（如 订单Bot）" />
-                    <span v-if="s.DEFAULT_BOT_ID === b.id" class="badge badge-default">默认</span>
-                    <button v-else class="set-default-btn" type="button" @click="setDefaultBot(b.id)">设为默认</button>
-                  </div>
-                  <div class="bot-status">
-                    <span class="dot" :class="{ on: botStatus(b.id)?.online }"></span>
-                    <span class="muted">{{ botStatus(b.id)?.online ? '在线' : (botStatus(b.id) ? '离线' : '未连接（需保存）') }}</span>
-                    <span v-if="botStatus(b.id)?.username" class="muted mono">@{{ botStatus(b.id).username }}</span>
-                  </div>
-                </div>
-              </div>
-              <input class="input" v-model="b.token" placeholder="Bot Token" />
-              <input class="input bot-chat" v-model="b.chat_id" placeholder="通知 Chat ID（留空=发给管理员）" />
-            </div>
-
-            <!-- 添加 Bot -->
-            <button class="bot-card bot-add" type="button" @click="addBot">
-              <span class="bot-add-plus">+</span>
-              <span>添加 Bot</span>
-            </button>
-          </div>
-          <div class="hint muted small" style="margin-top:2px">所有 Bot 都可以改名或设为默认，修改后点右上“保存设置”立即生效。</div>
-        </div>
-
-        <!-- 推送路由 -->
-        <div class="field" style="margin-top:10px">
-          <label>推送路由（哪个插件推到哪个 Bot）</label>
-          <div class="hint muted small" style="margin-bottom:8px">选择每个插件的通知发到哪个 Bot；选择立即生效（无需保存设置）。未单独选择时使用当前默认 Bot。</div>
-          <div v-if="routingLoading" class="muted small">加载中…</div>
-          <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
-          <template v-else>
-            <input class="input route-search" v-model="routeSearch" placeholder="搜索插件名称 / id…" />
-            <div v-if="filteredRoutePlugins.length === 0" class="muted small" style="margin-top:8px">没有匹配的插件。</div>
-            <div v-else class="route-table">
-              <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row">
-                <span class="route-name" :title="p.id">{{ p.name }}</span>
-                <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
-                  <option value="">默认（{{ configuredDefaultBotName() }}）</option>
-                  <option v-for="b in routing.bots.filter(x => x.id !== s.DEFAULT_BOT_ID)" :key="b.id" :value="b.id">
-                    {{ b.name }}{{ b.online ? '' : '（离线）' }}
-                  </option>
-                </select>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- 平台 Webhook -->
-        <div class="field" style="margin-top:10px">
-          <label>平台 Webhook</label>
-          <div class="hint muted small" style="margin-bottom:8px">
-            外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
-            平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
-          </div>
-          <div class="row gap">
-            <input class="input" style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
-            <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">
-              <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                   stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
-              </svg>随机
-            </button>
-          </div>
-          <div v-if="platformWebhookUrl" class="webhook-url mono">{{ platformWebhookUrl }}</div>
-          <button v-if="platformWebhookUrl" class="btn sm" style="align-self:flex-start" @click="copyPlatformWebhook">复制地址</button>
         </div>
       </div>
 
