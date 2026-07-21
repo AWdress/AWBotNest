@@ -426,6 +426,9 @@ const searchQuery = ref('')
 const searchInput = ref(null)
 const searchFilter = ref('all')
 const searchAuthorFilter = ref('')
+const searchTagFilter = ref('')
+const searchRepoFilter = ref('')
+const searchSort = ref('hot')  // hot, name, author, repo, latest
 const searchActiveIndex = ref(0)
 
 const searchablePlugins = computed(() => {
@@ -451,26 +454,50 @@ const searchablePlugins = computed(() => {
       updateAvailable: !!market && hasUpdate(market),
       official: isOfficial(market || local || { id }),
       repo: shortRepo(market?.repo_url || ''),
+      repoUrl: market?.repo_url || '',
+      tags: market?.tags || local?.tags || [],
       localPlugin: local,
       marketPlugin: market,
     }
-  }).sort((a, b) => {
-    const rank = (p) => p.updateAvailable ? 0 : p.installed ? 1 : 2
-    return rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN')
   })
 })
 
 const searchResults = computed(() => {
   const words = searchQuery.value.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  return searchablePlugins.value.filter((p) => {
+  let results = searchablePlugins.value.filter((p) => {
     if (searchFilter.value === 'installed' && !p.installed) return false
     if (searchFilter.value === 'updates' && !p.updateAvailable) return false
     if (searchFilter.value === 'available' && p.installed) return false
     if (searchAuthorFilter.value && p.author !== searchAuthorFilter.value) return false
+    if (searchTagFilter.value && !p.tags.includes(searchTagFilter.value)) return false
+    if (searchRepoFilter.value && p.repoUrl !== searchRepoFilter.value) return false
     if (!words.length) return true
     const text = [p.name, p.id, p.description, p.author, p.repo].join(' ').toLowerCase()
     return words.every((word) => text.includes(word))
   })
+
+  // 应用排序
+  if (searchSort.value === 'hot') {
+    // 热门排序：可更新 > 已安装 > 未安装，同级别按名称
+    results.sort((a, b) => {
+      const rank = (p) => p.updateAvailable ? 0 : p.installed ? 1 : 2
+      return rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN')
+    })
+  } else if (searchSort.value === 'name') {
+    results.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+  } else if (searchSort.value === 'author') {
+    results.sort((a, b) => (a.author || '').localeCompare(b.author || '', 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN'))
+  } else if (searchSort.value === 'repo') {
+    results.sort((a, b) => (a.repo || '').localeCompare(b.repo || '', 'zh-CN') || a.name.localeCompare(b.name, 'zh-CN'))
+  } else if (searchSort.value === 'latest') {
+    // 最新发布：假设version越高越新，降序排列
+    results.sort((a, b) => {
+      const versionCompare = (b.version || '0').localeCompare(a.version || '0', undefined, { numeric: true })
+      return versionCompare || a.name.localeCompare(b.name, 'zh-CN')
+    })
+  }
+
+  return results
 })
 
 // 获取所有作者列表（用于筛选下拉）
@@ -482,12 +509,39 @@ const allAuthors = computed(() => {
   return [...authors].sort((a, b) => a.localeCompare(b, 'zh-CN'))
 })
 
-watch([searchQuery, searchFilter, searchAuthorFilter], () => { searchActiveIndex.value = 0 })
+// 获取所有标签列表
+const allTags = computed(() => {
+  const tags = new Set()
+  searchablePlugins.value.forEach(p => {
+    if (p.tags && Array.isArray(p.tags)) {
+      p.tags.forEach(tag => tags.add(tag))
+    }
+  })
+  return [...tags].sort((a, b) => a.localeCompare(b, 'zh-CN'))
+})
+
+// 获取所有仓库列表
+const allRepos = computed(() => {
+  const repos = new Map()  // repoUrl -> shortName
+  searchablePlugins.value.forEach(p => {
+    if (p.repoUrl && p.repo) {
+      repos.set(p.repoUrl, p.repo)
+    }
+  })
+  return [...repos.entries()]
+    .map(([url, name]) => ({ url, name }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
+})
+
+watch([searchQuery, searchFilter, searchAuthorFilter, searchTagFilter, searchRepoFilter, searchSort], () => { searchActiveIndex.value = 0 })
 
 function openPluginSearch() {
   searchQuery.value = ''
   searchFilter.value = 'all'
   searchAuthorFilter.value = ''
+  searchTagFilter.value = ''
+  searchRepoFilter.value = ''
+  searchSort.value = 'hot'
   searchActiveIndex.value = 0
   searchOpen.value = true
   if (store.value.length === 0 && !storeBusy.value) loadStore(false)
@@ -960,12 +1014,33 @@ onUnmounted(() => {
           <button :class="{ active: searchFilter === 'available' }" @click="searchFilter='available'">可安装</button>
         </div>
 
-        <div v-if="allAuthors.length > 0" class="search-author-filter">
-          <label for="author-select" class="search-author-label">作者</label>
-          <select id="author-select" v-model="searchAuthorFilter" class="search-author-select">
-            <option value="">全部作者</option>
-            <option v-for="author in allAuthors" :key="author" :value="author">{{ author }}</option>
-          </select>
+        <div class="search-sort-section">
+          <div class="search-sort-label">排序</div>
+          <div class="search-sort-options">
+            <button :class="{ active: searchSort === 'hot' }" @click="searchSort='hot'">热门</button>
+            <button :class="{ active: searchSort === 'name' }" @click="searchSort='name'">插件名称</button>
+            <button :class="{ active: searchSort === 'author' }" @click="searchSort='author'">作者</button>
+            <button :class="{ active: searchSort === 'repo' }" @click="searchSort='repo'">插件仓库</button>
+            <button :class="{ active: searchSort === 'latest' }" @click="searchSort='latest'">最新发布</button>
+          </div>
+        </div>
+
+        <div class="search-filter-section">
+          <div class="search-filter-label">筛选</div>
+          <div class="search-filter-dropdowns">
+            <select v-if="allAuthors.length > 0" v-model="searchAuthorFilter" class="search-select">
+              <option value="">作者</option>
+              <option v-for="author in allAuthors" :key="author" :value="author">{{ author }}</option>
+            </select>
+            <select v-if="allTags.length > 0" v-model="searchTagFilter" class="search-select">
+              <option value="">标签</option>
+              <option v-for="tag in allTags" :key="tag" :value="tag">{{ tag }}</option>
+            </select>
+            <select v-if="allRepos.length > 0" v-model="searchRepoFilter" class="search-select">
+              <option value="">仓库</option>
+              <option v-for="repo in allRepos" :key="repo.url" :value="repo.url">{{ repo.name }}</option>
+            </select>
+          </div>
         </div>
 
         <div class="search-list">
@@ -1557,42 +1632,84 @@ onUnmounted(() => {
 }
 .search-filters::-webkit-scrollbar { display: none; }
 .search-filters button { flex: 0 0 auto; }
-.search-author-filter {
-  display: flex;
-  align-items: center;
-  gap: 10px;
+
+.search-sort-section {
   margin: 0 20px 12px;
-  padding: 10px 14px;
+  padding: 12px 14px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-light);
   border-radius: 10px;
 }
-.search-author-label {
+.search-sort-label {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-secondary);
-  flex: 0 0 auto;
+  margin-bottom: 8px;
 }
-.search-author-select {
-  flex: 1;
-  min-width: 0;
-  padding: 6px 10px;
+.search-sort-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.search-sort-options button {
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.search-sort-options button:hover {
+  background: var(--bg-hover);
+}
+.search-sort-options button.active {
+  background: var(--accent);
+  color: white;
+  font-weight: 600;
+}
+
+.search-filter-section {
+  margin: 0 20px 12px;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+}
+.search-filter-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.search-filter-dropdowns {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.search-select {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
   border: 1px solid var(--border);
   border-radius: 8px;
-  background: var(--bg-card);
+  background: var(--bg-card) url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23999" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>') no-repeat right 8px center / 16px;
   color: var(--text-primary);
   font-size: 13px;
   cursor: pointer;
+  appearance: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.search-author-select:hover {
+.search-select:hover {
   border-color: var(--accent-dim);
 }
-.search-author-select:focus {
+.search-select:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
+
 .search-list { flex: 1; min-height: 160px; overflow-y: auto; padding: 2px 10px 8px; }
 .search-item {
   display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 12px;
