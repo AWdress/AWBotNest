@@ -64,7 +64,8 @@ async function load(silent = false) {
           config: {
             token: s.value.BOT_TOKEN,
             chat_id: s.value.DEFAULT_BOT_CHAT_ID || ''
-          }
+          },
+          plugins: []  // 新增：初始化插件列表
         })
       }
 
@@ -81,7 +82,8 @@ async function load(silent = false) {
               config: {
                 token: b.token,
                 chat_id: b.chat_id || ''
-              }
+              },
+              plugins: []  // 新增：初始化插件列表
             })
           }
         })
@@ -347,8 +349,11 @@ function selectChannelType(type) {
     type: type,
     enabled: true,
     is_default: false,
-    config: {}
+    config: {},
+    plugins: []  // 新增：选择的插件列表
   }
+  // 确保加载了插件列表
+  if (routing.value.plugins.length === 0) loadRouting()
   channelModalOpen.value = true
 }
 
@@ -361,8 +366,11 @@ function openAddChannel() {
     type: 'telegram',
     enabled: true,
     is_default: false,
-    config: {}
+    config: {},
+    plugins: []  // 新增：选择的插件列表
   }
+  // 确保加载了插件列表
+  if (routing.value.plugins.length === 0) loadRouting()
   channelModalOpen.value = true
 }
 
@@ -371,10 +379,15 @@ function openEditChannel(index) {
   channelEditIndex.value = index
   const ch = s.value.NOTIFICATION_CHANNELS[index]
   channelForm.value = JSON.parse(JSON.stringify(ch))
-  // 确保 is_default 字段存在
+  // 确保字段存在
   if (channelForm.value.is_default === undefined) {
     channelForm.value.is_default = false
   }
+  if (!Array.isArray(channelForm.value.plugins)) {
+    channelForm.value.plugins = []
+  }
+  // 确保加载了插件列表
+  if (routing.value.plugins.length === 0) loadRouting()
   channelModalOpen.value = true
 }
 
@@ -398,12 +411,28 @@ function saveChannel() {
     s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = JSON.parse(JSON.stringify(channelForm.value))
   }
 
+  // 双向同步：更新推送路由
+  syncChannelToRouting(channelForm.value)
+
   channelModalOpen.value = false
   toast.success(channelModalMode.value === 'add' ? '已添加通知渠道' : '已更新通知渠道')
 }
 
 function deleteChannel(index) {
   if (!confirm(`确定删除通知渠道「${s.value.NOTIFICATION_CHANNELS[index].name}」？`)) return
+
+  const channelId = s.value.NOTIFICATION_CHANNELS[index].id
+
+  // 双向同步：从所有插件的路由中移除该渠道
+  routing.value.plugins.forEach(plugin => {
+    const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
+    const filteredChannels = currentChannels.filter(id => id !== channelId)
+    plugin.bot = filteredChannels.join(',')
+
+    // 立即保存到后端
+    api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
+  })
+
   s.value.NOTIFICATION_CHANNELS.splice(index, 1)
   toast.success('已删除')
 }
@@ -421,15 +450,140 @@ function getChannelTypeName(type) {
   return found ? found.label : type
 }
 
-// 获取所有Telegram渠道（用于推送路由选择）
+// 获取所有通知渠道（用于推送路由选择）
 function getTelegramChannels() {
-  return (s.value.NOTIFICATION_CHANNELS || []).filter(ch => ch.type === 'telegram')
+  // 返回所有启用的渠道，不限类型
+  return (s.value.NOTIFICATION_CHANNELS || [])
+}
+
+// 根据插件标签获取可用渠道（机器人/双账号插件只能选Telegram）
+function getAvailableChannels(plugin) {
+  const allChannels = s.value.NOTIFICATION_CHANNELS || []
+
+  // 检查插件是否有特殊标签
+  const tags = plugin.tags || []
+  const requiresTelegramBot = tags.includes('机器人') || tags.includes('双账号')
+
+  // 如果插件需要Bot功能，只返回Telegram渠道
+  if (requiresTelegramBot) {
+    return allChannels.filter(ch => ch.type === 'telegram')
+  }
+
+  // 其他插件可以使用所有渠道
+  return allChannels
 }
 
 // 获取默认渠道名称
 function getDefaultChannelName() {
   const defaultCh = (s.value.NOTIFICATION_CHANNELS || []).find(ch => ch.is_default)
   return defaultCh ? defaultCh.name : '未设置'
+}
+
+// 获取渠道可用的插件列表（根据渠道类型过滤）
+function getAvailablePluginsForChannel(channelType) {
+  const allPlugins = routing.value.plugins || []
+
+  // 如果是企业微信或Bark，排除需要Bot功能的插件
+  if (channelType === 'wecom' || channelType === 'bark') {
+    return allPlugins.filter(p => {
+      const tags = p.tags || []
+      return !tags.includes('机器人') && !tags.includes('双账号')
+    })
+  }
+
+  // Telegram支持所有插件
+  return allPlugins
+}
+
+// 检查是否选择了"全部"（所有可用插件都被选中）
+function isAllPluginsSelected(channel) {
+  if (!Array.isArray(channel.plugins)) return false
+  const available = getAvailablePluginsForChannel(channel.type)
+  if (available.length === 0) return false
+  return available.every(p => channel.plugins.includes(p.id))
+}
+
+// 切换"全部"选择
+function toggleAllPlugins(channel) {
+  const available = getAvailablePluginsForChannel(channel.type)
+  if (isAllPluginsSelected(channel)) {
+    // 取消全选
+    channel.plugins = []
+  } else {
+    // 全选
+    channel.plugins = available.map(p => p.id)
+  }
+}
+
+// 切换单个插件选择
+function togglePlugin(channel, pluginId) {
+  if (!Array.isArray(channel.plugins)) {
+    channel.plugins = []
+  }
+
+  const index = channel.plugins.indexOf(pluginId)
+  if (index > -1) {
+    channel.plugins.splice(index, 1)
+  } else {
+    channel.plugins.push(pluginId)
+  }
+}
+
+// 双向同步：渠道配置 → 推送路由
+function syncChannelToRouting(channel) {
+  const channelId = channel.id
+  const selectedPlugins = channel.plugins || []
+
+  // 遍历所有插件，更新它们的bot字段
+  routing.value.plugins.forEach(plugin => {
+    // 获取插件当前选择的渠道列表
+    const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
+
+    // 判断该插件是否应该被这个渠道接收
+    const shouldInclude = selectedPlugins.includes(plugin.id)
+
+    if (shouldInclude && !currentChannels.includes(channelId)) {
+      // 添加该渠道
+      currentChannels.push(channelId)
+    } else if (!shouldInclude && currentChannels.includes(channelId)) {
+      // 移除该渠道
+      const idx = currentChannels.indexOf(channelId)
+      currentChannels.splice(idx, 1)
+    }
+
+    // 更新插件的bot字段
+    plugin.bot = currentChannels.join(',')
+
+    // 立即保存到后端
+    api.setBotRouting(plugin.id, plugin.bot).catch(() => {
+      // 静默失败，不影响用户操作
+    })
+  })
+}
+
+// 双向同步：推送路由 → 渠道配置
+function syncRoutingToChannel(pluginId, channelIds) {
+  // channelIds 是插件选择的渠道ID数组
+  const selectedChannelIds = channelIds.split(',').map(id => id.trim()).filter(Boolean)
+
+  // 更新所有渠道的plugins字段
+  s.value.NOTIFICATION_CHANNELS.forEach(channel => {
+    if (!Array.isArray(channel.plugins)) {
+      channel.plugins = []
+    }
+
+    const shouldInclude = selectedChannelIds.includes(channel.id)
+    const currentlyIncluded = channel.plugins.includes(pluginId)
+
+    if (shouldInclude && !currentlyIncluded) {
+      // 添加该插件
+      channel.plugins.push(pluginId)
+    } else if (!shouldInclude && currentlyIncluded) {
+      // 移除该插件
+      const idx = channel.plugins.indexOf(pluginId)
+      channel.plugins.splice(idx, 1)
+    }
+  })
 }
 
 // ── 通知推送路由（哪个插件推到哪个 Bot） ──
@@ -448,6 +602,48 @@ async function saveRouting(p) {
     await api.setBotRouting(p.id, p.bot || '')
     toast.success(`「${p.name}」推送 Bot 已更新`)
   } catch (e) { toast.error('保存失败：' + e.message); loadRouting() }
+}
+
+// 检查插件是否选中了某个渠道
+function isChannelSelected(plugin, channelId) {
+  // p.bot 可能是单个ID字符串，或逗号分隔的多个ID
+  const selected = plugin.bot || ''
+  if (!selected) return false
+  const ids = selected.split(',').map(id => id.trim()).filter(Boolean)
+  return ids.includes(channelId)
+}
+
+// 切换插件的渠道选择（多选）
+async function togglePluginChannel(plugin, channelId) {
+  const selected = plugin.bot || ''
+  let ids = selected.split(',').map(id => id.trim()).filter(Boolean)
+
+  if (ids.includes(channelId)) {
+    // 取消选择
+    ids = ids.filter(id => id !== channelId)
+  } else {
+    // 添加选择
+    ids.push(channelId)
+  }
+
+  // 更新插件的bot字段
+  plugin.bot = ids.join(',')
+
+  // 双向同步：更新渠道配置
+  syncRoutingToChannel(plugin.id, plugin.bot)
+
+  // 保存到后端
+  try {
+    await api.setBotRouting(plugin.id, plugin.bot)
+    const channelNames = ids.map(id => {
+      const ch = (s.value.NOTIFICATION_CHANNELS || []).find(c => c.id === id)
+      return ch ? ch.name : id
+    }).join('、')
+    toast.success(`「${plugin.name}」→ ${channelNames || '默认'}`)
+  } catch (e) {
+    toast.error('保存失败：' + e.message)
+    loadRouting()
+  }
 }
 
 // Bot 在线状态/用户名：取自 routing.bots（后端 list_bots，含 online/username）。
@@ -672,15 +868,25 @@ onBeforeRouteLeave(async () => {
         <template v-else>
           <input class="input route-search" v-model="routeSearch" placeholder="搜索插件名称 / id…" style="margin-bottom:12px" />
           <div v-if="filteredRoutePlugins.length === 0" class="muted small">没有匹配的插件。</div>
-          <div v-else class="route-table">
-            <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row">
-              <span class="route-name" :title="p.id">{{ p.name }}</span>
-              <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
-                <option value="">默认（{{ getDefaultChannelName() }}）</option>
-                <option v-for="ch in getTelegramChannels()" :key="ch.id" :value="ch.id">
-                  {{ ch.name }}{{ ch.enabled ? '' : '（已禁用）' }}
-                </option>
-              </select>
+          <div v-else class="route-table-multi">
+            <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row-multi">
+              <div class="route-plugin-info">
+                <span class="route-name" :title="p.id">{{ p.name }}</span>
+                <span v-if="(p.tags || []).includes('机器人') || (p.tags || []).includes('双账号')" class="route-tag">需要Bot</span>
+              </div>
+              <div class="route-channels">
+                <label v-for="ch in getAvailableChannels(p)" :key="ch.id" class="channel-checkbox">
+                  <input
+                    type="checkbox"
+                    :checked="isChannelSelected(p, ch.id)"
+                    @change="togglePluginChannel(p, ch.id)"
+                  />
+                  <span class="channel-label">
+                    {{ ch.name }} <span class="channel-type-badge">{{ getChannelTypeName(ch.type) }}</span>
+                  </span>
+                </label>
+                <span v-if="getAvailableChannels(p).length === 0" class="muted small">无可用渠道</span>
+              </div>
             </div>
           </div>
         </template>
@@ -879,15 +1085,15 @@ onBeforeRouteLeave(async () => {
           <div class="hint muted small">默认渠道用于接收平台通知，只能有一个默认渠道</div>
         </div>
 
-        <!-- 类型选择 -->
-        <div class="field">
+        <!-- 类型选择（仅添加时显示） -->
+        <div v-if="channelModalMode === 'add'" class="field">
           <label>类型</label>
-          <select class="select" v-model="channelForm.type" :disabled="channelModalMode === 'edit'">
+          <select class="select" v-model="channelForm.type" disabled>
             <option v-for="type in channelTypes" :key="type.value" :value="type.value">
               {{ type.label }}
             </option>
           </select>
-          <div class="hint muted small">通知渠道类型</div>
+          <div class="hint muted small">已选择的通知渠道类型</div>
         </div>
 
         <!-- 名称 -->
@@ -895,6 +1101,39 @@ onBeforeRouteLeave(async () => {
           <label>名称</label>
           <input class="input" v-model="channelForm.name" placeholder="如：通知1、订单通知" />
           <div class="hint muted small">通知渠道名称</div>
+        </div>
+
+        <!-- 插件选择 -->
+        <div class="field">
+          <label>通知插件</label>
+          <div class="hint muted small" style="margin-bottom:8px">选择该渠道接收哪些插件的通知</div>
+
+          <!-- 全选复选框 -->
+          <label class="plugin-checkbox-item">
+            <input
+              type="checkbox"
+              :checked="isAllPluginsSelected(channelForm)"
+              @change="toggleAllPlugins(channelForm)"
+            />
+            <span class="plugin-label-all">全部</span>
+          </label>
+
+          <!-- 插件列表 -->
+          <div class="plugins-grid">
+            <label
+              v-for="p in getAvailablePluginsForChannel(channelForm.type)"
+              :key="p.id"
+              class="plugin-checkbox-item"
+            >
+              <input
+                type="checkbox"
+                :checked="Array.isArray(channelForm.plugins) && channelForm.plugins.includes(p.id)"
+                @change="togglePlugin(channelForm, p.id)"
+              />
+              <span class="plugin-label">{{ p.name }}</span>
+              <span v-if="(p.tags || []).includes('机器人') || (p.tags || []).includes('双账号')" class="plugin-bot-tag">Bot</span>
+            </label>
+          </div>
         </div>
 
         <!-- Telegram 配置 -->
@@ -1016,7 +1255,7 @@ onBeforeRouteLeave(async () => {
 .tab:hover { color: var(--text-primary); }
 .tab.active { background: var(--bg-card); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 
-.panel { max-width: 760px; }
+.panel { max-width: 1200px; }
 .center { text-align: center; padding: 40px; }
 
 /* 未保存改动小圆点 */
@@ -1103,6 +1342,37 @@ onBeforeRouteLeave(async () => {
 .route-row { display: flex; align-items: center; gap: 10px; }
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .route-sel { max-width: 220px; flex: 0 0 auto; }
+
+/* 多选推送路由样式 */
+.route-table-multi { display: flex; flex-direction: column; gap: 12px; max-height: 500px; overflow-y: auto; }
+.route-row-multi {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+.route-plugin-info { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.route-tag {
+  font-size: 10px; padding: 2px 6px; border-radius: 4px;
+  background: var(--accent-dim); color: var(--accent);
+}
+.route-channels { display: flex; flex-wrap: wrap; gap: 8px; }
+.channel-checkbox {
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border: 1px solid var(--border-light); border-radius: var(--radius-sm);
+  background: var(--bg); cursor: pointer; transition: all 0.15s;
+  font-size: 13px;
+}
+.channel-checkbox:hover { background: var(--bg-elevated); border-color: var(--accent); }
+.channel-checkbox input[type="checkbox"] {
+  width: 16px; height: 16px; cursor: pointer;
+  accent-color: var(--accent);
+}
+.channel-label { display: flex; align-items: center; gap: 4px; color: var(--text-primary); }
+.channel-type-badge {
+  font-size: 10px; padding: 1px 5px; border-radius: 3px;
+  background: var(--bg-elevated); color: var(--text-secondary);
+}
+
 .small { font-size: 12px; }
 .maint-box { display: flex; flex-direction: column; gap: 12px; }
 .maint-item {
@@ -1131,13 +1401,13 @@ onBeforeRouteLeave(async () => {
 /* 通知渠道卡片（MP风格） */
 .channel-grid-mp {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
   margin-bottom: 12px;
 }
 
 .channel-card-mp {
-  padding: 14px 16px;
+  padding: 16px 18px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1301,8 +1571,8 @@ onBeforeRouteLeave(async () => {
 
 .add-menu-dropdown {
   position: absolute;
-  bottom: 56px;
-  left: 0;
+  top: 56px;
+  right: 0;
   min-width: 180px;
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -1412,6 +1682,60 @@ onBeforeRouteLeave(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* 插件选择样式 */
+.plugins-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 8px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.plugin-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+}
+
+.plugin-checkbox-item:hover {
+  background: var(--bg-elevated);
+}
+
+.plugin-checkbox-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.plugin-label {
+  flex: 1;
+  color: var(--text-primary);
+}
+
+.plugin-label-all {
+  flex: 1;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.plugin-bot-tag {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 
 .modal-footer {
