@@ -29,9 +29,11 @@ BUILTIN_BOT_ID = "default"
 
 
 def _load_bots_config() -> list[dict]:
-    """读取「内置 Bot + 额外 Bot」的统一列表：[{id, name, token}]。
-    内置 Bot 恒在首位（id=default，token=BOT_TOKEN）；额外 Bot 取自 config 的 BOTS。
-    token 为空的额外 Bot 会被跳过。"""
+    """读取「内置 Bot + 额外 Bot + 通知渠道 Bot」的统一列表：[{id, name, token}]。
+    内置 Bot 恒在首位（id=default，token=BOT_TOKEN）；
+    额外 Bot 取自 config 的 BOTS；
+    通知渠道 Bot 取自 NOTIFICATION_CHANNELS。
+    token 为空的 Bot 会被跳过。"""
     import config.config as _cfg
     _cfg.reload()
     bots: list[dict] = [{
@@ -39,6 +41,8 @@ def _load_bots_config() -> list[dict]:
         "name": str(getattr(_cfg, "BOT_NAME", "") or "").strip() or "主要通知渠道",
         "token": str(getattr(_cfg, "BOT_TOKEN", "") or ""),
     }]
+
+    # 添加旧的 BOTS 配置（向后兼容）
     for b in (getattr(_cfg, "BOTS", None) or []):
         if not isinstance(b, dict):
             continue
@@ -47,6 +51,37 @@ def _load_bots_config() -> list[dict]:
         if not bid or bid == BUILTIN_BOT_ID or not token:
             continue
         bots.append({"id": bid, "name": str(b.get("name") or bid), "token": token})
+
+    # 添加通知渠道的 Bot
+    channels = getattr(_cfg, "NOTIFICATION_CHANNELS", None) or []
+    for ch in channels:
+        if not isinstance(ch, dict):
+            continue
+        ch_id = str(ch.get("id") or "").strip()
+        ch_type = str(ch.get("type") or "").strip()
+
+        # 只处理 Telegram 类型的渠道
+        if ch_type != "telegram":
+            continue
+
+        config_data = ch.get("config", {})
+        if not isinstance(config_data, dict):
+            continue
+
+        token = str(config_data.get("token") or "").strip()
+        if not ch_id or ch_id == BUILTIN_BOT_ID or not token:
+            continue
+
+        # 检查是否已存在（避免重复）
+        if any(b["id"] == ch_id for b in bots):
+            continue
+
+        bots.append({
+            "id": ch_id,
+            "name": str(ch.get("name") or ch_id),
+            "token": token
+        })
+
     return bots
 
 
