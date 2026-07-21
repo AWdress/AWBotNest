@@ -65,14 +65,10 @@ export default defineConfig({
     },
     // 启用 CSS 代码分割
     cssCodeSplit: true,
-    // 压缩配置
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,   // 生产环境移除 console
-        drop_debugger: true,  // 移除 debugger
-        pure_funcs: ['console.log'], // 移除 console.log
-      },
+    // 压缩配置 — esbuild 内置无需额外依赖
+    minify: 'esbuild',
+    esbuild: {
+      drop: ['console', 'debugger'],  // 生产环境移除 console / debugger
     },
     // 设置分包大小警告阈值（1MB）
     chunkSizeWarningLimit: 1000,

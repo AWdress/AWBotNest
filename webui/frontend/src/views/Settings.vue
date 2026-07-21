@@ -411,13 +411,16 @@ async function saveChannel() {
     s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = JSON.parse(JSON.stringify(channelForm.value))
   }
 
-  // 双向同步：更新推送路由
-  syncChannelToRouting(channelForm.value)
+  // 双向同步：先把路由全部保存到后端，再 save()，避免顺序问题
+  await syncChannelToRouting(channelForm.value)
 
   channelModalOpen.value = false
 
-  // 立即保存到后端，不需要用户再点"保存设置"
+  // 保存设置到后端
   await save()
+
+  // 重新拉一次路由，确保推送路由 UI 和后端一致
+  loadRouting()
 }
 
 function deleteChannel(index) {
@@ -549,35 +552,30 @@ function togglePlugin(channel, pluginId) {
 }
 
 // 双向同步：渠道配置 → 推送路由
-function syncChannelToRouting(channel) {
+async function syncChannelToRouting(channel) {
   const channelId = channel.id
   const selectedPlugins = channel.plugins || []
+  const saves = []
 
-  // 遍历所有插件，更新它们的bot字段
   routing.value.plugins.forEach(plugin => {
-    // 获取插件当前选择的渠道列表
     const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
-
-    // 判断该插件是否应该被这个渠道接收
     const shouldInclude = selectedPlugins.includes(plugin.id)
 
     if (shouldInclude && !currentChannels.includes(channelId)) {
-      // 添加该渠道
       currentChannels.push(channelId)
     } else if (!shouldInclude && currentChannels.includes(channelId)) {
-      // 移除该渠道
-      const idx = currentChannels.indexOf(channelId)
-      currentChannels.splice(idx, 1)
+      currentChannels.splice(currentChannels.indexOf(channelId), 1)
+    } else {
+      return  // 无变化，跳过
     }
 
-    // 更新插件的bot字段
     plugin.bot = currentChannels.join(',')
-
-    // 立即保存到后端
-    api.setBotRouting(plugin.id, plugin.bot).catch(() => {
-      // 静默失败，不影响用户操作
-    })
+    // 收集所有保存请求，统一 await
+    saves.push(api.setBotRouting(plugin.id, plugin.bot))
   })
+
+  // 等所有路由都保存完再返回
+  if (saves.length) await Promise.all(saves.map(p => p.catch(() => {})))
 }
 
 // 双向同步：推送路由 → 渠道配置

@@ -158,4 +158,7 @@ export const api = {
   listBots: () => request('GET', '/api/bots'),
   getBotsRouting: () => request('GET', '/api/bots/routing'),
   setBotRouting: (plugin_id, bot_id) => request('PUT', '/api/bots/routing', { plugin_id, bot_id }),
+
+  // 工具方法
+  clearCache: () => {},   // 预留：当前无客户端缓存，调用无副作用
 }
