@@ -46,7 +46,7 @@ async function load(silent = false) {
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
     if (s.value.WEBHOOK_SECRET === undefined) s.value.WEBHOOK_SECRET = ''
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
-    if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '默认 Bot'
+    if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '主要通知渠道'
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
     // 初始化通知渠道配置（数组格式）
     s.value.NOTIFICATION_CHANNELS = Array.isArray(s.value.NOTIFICATION_CHANNELS) ? s.value.NOTIFICATION_CHANNELS : []
@@ -274,8 +274,8 @@ function removeBot(i) {
 function setDefaultBot(id) { s.value.DEFAULT_BOT_ID = id || 'default' }
 
 function configuredDefaultBotName() {
-  if (s.value?.DEFAULT_BOT_ID === 'default') return s.value.BOT_NAME || '默认 Bot'
-  return s.value?.BOTS?.find((bot) => bot.id === s.value.DEFAULT_BOT_ID)?.name || '默认 Bot'
+  if (s.value?.DEFAULT_BOT_ID === 'default') return s.value.BOT_NAME || '主要通知渠道'
+  return s.value?.BOTS?.find((bot) => bot.id === s.value.DEFAULT_BOT_ID)?.name || '主要通知渠道'
 }
 
 // ── 平台 Webhook（密钥 + 随机按钮 + 地址展示） ──
