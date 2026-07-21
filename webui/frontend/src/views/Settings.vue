@@ -421,6 +421,17 @@ function getChannelTypeName(type) {
   return found ? found.label : type
 }
 
+// 获取所有Telegram渠道（用于推送路由选择）
+function getTelegramChannels() {
+  return (s.value.NOTIFICATION_CHANNELS || []).filter(ch => ch.type === 'telegram')
+}
+
+// 获取默认渠道名称
+function getDefaultChannelName() {
+  const defaultCh = (s.value.NOTIFICATION_CHANNELS || []).find(ch => ch.is_default)
+  return defaultCh ? defaultCh.name : '未设置'
+}
+
 // ── 通知推送路由（哪个插件推到哪个 Bot） ──
 const routing = ref({ bots: [], plugins: [] })
 const routingLoading = ref(false)
@@ -648,6 +659,51 @@ onBeforeRouteLeave(async () => {
             </div>
           </div>
         </div>
+      </div>
+
+      <!-- 推送路由 -->
+      <div v-show="tab === 'bots'" class="card" style="margin-top:16px">
+        <div class="card-title">推送路由</div>
+        <div class="hint muted small" style="margin-bottom:12px">
+          选择每个插件的通知发到哪个渠道；选择立即生效（无需保存设置）。未单独选择时使用当前默认渠道。
+        </div>
+        <div v-if="routingLoading" class="muted small">加载中…</div>
+        <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
+        <template v-else>
+          <input class="input route-search" v-model="routeSearch" placeholder="搜索插件名称 / id…" style="margin-bottom:12px" />
+          <div v-if="filteredRoutePlugins.length === 0" class="muted small">没有匹配的插件。</div>
+          <div v-else class="route-table">
+            <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row">
+              <span class="route-name" :title="p.id">{{ p.name }}</span>
+              <select class="select route-sel" v-model="p.bot" @change="saveRouting(p)">
+                <option value="">默认（{{ getDefaultChannelName() }}）</option>
+                <option v-for="ch in getTelegramChannels()" :key="ch.id" :value="ch.id">
+                  {{ ch.name }}{{ ch.enabled ? '' : '（已禁用）' }}
+                </option>
+              </select>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 平台 Webhook -->
+      <div v-show="tab === 'bots'" class="card" style="margin-top:16px">
+        <div class="card-title">平台 Webhook</div>
+        <div class="hint muted small" style="margin-bottom:12px">
+          外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
+          平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
+        </div>
+        <div class="row gap">
+          <input class="input" style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
+          <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">
+            <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+            </svg>随机
+          </button>
+        </div>
+        <div v-if="platformWebhookUrl" class="webhook-url mono" style="margin-top:8px">{{ platformWebhookUrl }}</div>
+        <button v-if="platformWebhookUrl" class="btn sm" style="margin-top:8px" @click="copyPlatformWebhook">复制地址</button>
       </div>
 
       <!-- Web 控制台 -->
