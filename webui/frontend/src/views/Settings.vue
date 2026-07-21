@@ -778,7 +778,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 通知渠道 -->
-      <div v-show="tab === 'bots'" class="card" style="max-width: 1200px; margin-left: auto; margin-right: auto;">
+      <div v-show="tab === 'bots'" class="card">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
           设置消息发送渠道参数
@@ -1255,7 +1255,11 @@ onBeforeRouteLeave(async () => {
 .tab:hover { color: var(--text-primary); }
 .tab.active { background: var(--bg-card); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0,0,0,0.25); }
 
-.panel { max-width: 1200px; }
+.panel {
+  max-width: 1200px;
+  margin: 0 auto; /* 居中显示 */
+  width: 100%; /* 确保在小屏幕上也能正常显示 */
+}
 .center { text-align: center; padding: 40px; }
 
 /* 未保存改动小圆点 */
