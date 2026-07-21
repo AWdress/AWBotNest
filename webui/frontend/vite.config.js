@@ -35,6 +35,47 @@ export default defineConfig({
     emptyOutDir: true,
     assetsDir: 'assets',
     target: 'esnext',   // 模块联邦运行时用到顶层 await，需 esnext
+    // 性能优化配置
+    rollupOptions: {
+      output: {
+        // 手动分包：将大型库单独打包
+        manualChunks(id) {
+          // 将插件视图单独打包（Plugins.vue 文件较大）
+          if (id.includes('views/Plugins.vue')) {
+            return 'plugins-view'
+          }
+          // 其他视图保持默认行为
+        },
+        // 使用内容哈希的文件名（更好的缓存控制）
+        chunkFileNames: 'assets/js/[name]-[hash].js',
+        entryFileNames: 'assets/js/[name]-[hash].js',
+        assetFileNames: (assetInfo) => {
+          // 图片资源放到 assets/png 目录
+          if (/\.(png|jpe?g|svg|gif|webp)$/i.test(assetInfo.name)) {
+            return 'assets/png/[name]-[hash].[ext]'
+          }
+          // CSS 文件放到 assets/css 目录
+          if (/\.css$/i.test(assetInfo.name)) {
+            return 'assets/css/[name]-[hash].[ext]'
+          }
+          // 其他资源
+          return 'assets/[name]-[hash].[ext]'
+        },
+      },
+    },
+    // 启用 CSS 代码分割
+    cssCodeSplit: true,
+    // 压缩配置
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true,   // 生产环境移除 console
+        drop_debugger: true,  // 移除 debugger
+        pure_funcs: ['console.log'], // 移除 console.log
+      },
+    },
+    // 设置分包大小警告阈值（1MB）
+    chunkSizeWarningLimit: 1000,
   },
   server: {
     port: 5173,
