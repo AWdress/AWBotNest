@@ -669,6 +669,8 @@ async function togglePluginChannel(plugin, channelId) {
     await api.setBotRouting(plugin.id, plugin.bot)
     // 渠道配置已更新，立即保存
     await save()
+    // 通知插件配置弹窗刷新
+    eventBus.emit(EVENTS.BOT_ROUTING_CHANGED, { pluginId: plugin.id, botId: plugin.bot })
     const channelNames = ids.map(id => {
       const ch = (s.value.NOTIFICATION_CHANNELS || []).find(c => c.id === id)
       return ch ? ch.name : id
