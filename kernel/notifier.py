@@ -125,10 +125,28 @@ async def submit(
 
 
 def _plugin_bot_id(plugin_id: str) -> str:
-    """本插件在「系统设置 → 通知」路由到的 Bot id；未分配返回 ""（默认 Bot）。"""
+    """本插件在「系统设置 → 通知」路由到的 Bot id；未分配则回退到默认渠道。"""
     try:
         from kernel.registry import registry
-        return registry.get_bot_choice(plugin_id) or ""
+        bot_id = registry.get_bot_choice(plugin_id)
+        if bot_id:
+            return bot_id
+        # 未配置时，回退到默认渠道
+        return _get_default_channel_id()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _get_default_channel_id() -> str:
+    """获取标记为默认的通知渠道 ID；没有则返回空（使用内置默认 Bot）。"""
+    try:
+        import config.config as cfg
+        d = cfg.load()
+        channels = d.get("NOTIFICATION_CHANNELS", [])
+        for ch in channels:
+            if isinstance(ch, dict) and ch.get("is_default") and ch.get("enabled"):
+                return ch.get("id", "")
+        return ""
     except Exception:  # noqa: BLE001
         return ""
 
