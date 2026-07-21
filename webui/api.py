@@ -569,7 +569,8 @@ async def get_bots_routing(user=Depends(_auth)):
     bots = await accounts.list_bots()
 
     # 将所有启用的非 Telegram 通知渠道也加入列表（供前端多选展示）
-    cfg_data = config.load()
+    import config.config as _cfg_mod
+    cfg_data = _cfg_mod.load()
     for ch in (cfg_data.get("NOTIFICATION_CHANNELS") or []):
         if not isinstance(ch, dict):
             continue
@@ -611,7 +612,8 @@ async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
     if bot_id:
         accounts = _get_accounts()
         valid_bots = {b["id"] for b in await accounts.list_bots()}
-        cfg_data = config.load()
+        import config.config as _cfg_mod
+        cfg_data = _cfg_mod.load()
         valid_channels = {
             str(ch.get("id") or "").strip()
             for ch in (cfg_data.get("NOTIFICATION_CHANNELS") or [])
