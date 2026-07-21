@@ -1623,7 +1623,7 @@ onBeforeRouteLeave(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 9999;
+  z-index: 10000; /* 提升弹窗层级到最高 */
   padding: 20px;
 }
 
@@ -1637,6 +1637,7 @@ onBeforeRouteLeave(async () => {
   display: flex;
   flex-direction: column;
   box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+  z-index: 10001; /* 弹窗内容层级更高 */
 }
 
 .modal-header {
