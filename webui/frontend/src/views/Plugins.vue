@@ -6,6 +6,7 @@ import RemotePluginConfig from '../components/RemotePluginConfig.vue'
 import { confirm } from '../composables/confirm'
 import { toast } from '../composables/toast'
 import logo from '../assets/logo.png'
+import { eventBus, EVENTS } from '../utils/eventBus'
 
 const tab = ref('mine')   // mine | store
 
@@ -164,7 +165,13 @@ async function loadConfigBot(pluginId) {
     if (requestId !== configBotRequestId) return
     const selectedStr = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
     configBots.value = data.bots || []
-    const selected = selectedStr ? selectedStr.split(',').map(s => s.trim()).filter(Boolean) : []
+
+    // 过滤掉默认渠道 ID：默认渠道已经是 fallback，不需要显式选中
+    const defaultIds = new Set(data.bots.filter(b => b.is_default).map(b => b.id))
+    const selected = selectedStr
+      ? selectedStr.split(',').map(s => s.trim()).filter(s => s && !defaultIds.has(s))
+      : []
+
     configBotChoice.value = selected
     configBotConfirmed.value = [...selected]
     configBotReady.value = true
