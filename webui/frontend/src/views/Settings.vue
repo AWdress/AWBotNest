@@ -48,15 +48,8 @@ async function load(silent = false) {
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
     if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '默认 Bot'
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
-    // 初始化通知渠道配置
-    s.value.NOTIFICATION_CHANNELS = s.value.NOTIFICATION_CHANNELS || {
-      telegram: { enabled: true },
-      bark: { enabled: false, server: '', device_key: '' },
-      wechat: { enabled: false, corpid: '', corpsecret: '', agentid: '', proxy: '' }
-    }
-    if (!s.value.NOTIFICATION_CHANNELS.telegram) s.value.NOTIFICATION_CHANNELS.telegram = { enabled: true }
-    if (!s.value.NOTIFICATION_CHANNELS.bark) s.value.NOTIFICATION_CHANNELS.bark = { enabled: false, server: '', device_key: '' }
-    if (!s.value.NOTIFICATION_CHANNELS.wechat) s.value.NOTIFICATION_CHANNELS.wechat = { enabled: false, corpid: '', corpsecret: '', agentid: '', proxy: '' }
+    // 初始化通知渠道配置（数组格式）
+    s.value.NOTIFICATION_CHANNELS = Array.isArray(s.value.NOTIFICATION_CHANNELS) ? s.value.NOTIFICATION_CHANNELS : []
     s.value.LOG_CLEANER = s.value.LOG_CLEANER || { enabled: true, keep_lines: 100, hour: 3, minute: 0 }
     // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
     s.value.BOTS.forEach((b) => { if (b.chat_id === undefined) b.chat_id = '' })
@@ -233,6 +226,81 @@ async function copyPlatformWebhook() {
   if (!platformWebhookUrl.value) return
   if (await copyText(platformWebhookUrl.value)) toast.success('已复制平台 webhook 地址')
   else toast.error('复制失败，请手动选择复制')
+}
+
+// ── 通知渠道管理 ──
+const channelModalOpen = ref(false)
+const channelModalMode = ref('add')  // 'add' | 'edit'
+const channelEditIndex = ref(-1)
+const channelForm = ref({
+  id: '',
+  name: '',
+  type: 'telegram',  // telegram | wechat | bark
+  enabled: true,
+  config: {}
+})
+
+const channelTypes = [
+  { value: 'telegram', label: 'Telegram', icon: '📱' },
+  { value: 'wechat', label: '企业微信', icon: '💬' },
+  { value: 'bark', label: 'Bark', icon: '🔔' }
+]
+
+function openAddChannel() {
+  channelModalMode.value = 'add'
+  channelEditIndex.value = -1
+  channelForm.value = {
+    id: `ch_${Date.now()}`,
+    name: '',
+    type: 'telegram',
+    enabled: true,
+    config: {}
+  }
+  channelModalOpen.value = true
+}
+
+function openEditChannel(index) {
+  channelModalMode.value = 'edit'
+  channelEditIndex.value = index
+  const ch = s.value.NOTIFICATION_CHANNELS[index]
+  channelForm.value = JSON.parse(JSON.stringify(ch))
+  channelModalOpen.value = true
+}
+
+function saveChannel() {
+  if (!channelForm.value.name.trim()) {
+    toast.error('请输入名称')
+    return
+  }
+
+  if (channelModalMode.value === 'add') {
+    s.value.NOTIFICATION_CHANNELS.push(JSON.parse(JSON.stringify(channelForm.value)))
+  } else {
+    s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = JSON.parse(JSON.stringify(channelForm.value))
+  }
+
+  channelModalOpen.value = false
+  toast.success(channelModalMode.value === 'add' ? '已添加通知渠道' : '已更新通知渠道')
+}
+
+function deleteChannel(index) {
+  if (!confirm(`确定删除通知渠道「${s.value.NOTIFICATION_CHANNELS[index].name}」？`)) return
+  s.value.NOTIFICATION_CHANNELS.splice(index, 1)
+  toast.success('已删除')
+}
+
+function toggleChannel(index) {
+  s.value.NOTIFICATION_CHANNELS[index].enabled = !s.value.NOTIFICATION_CHANNELS[index].enabled
+}
+
+function getChannelIcon(type) {
+  const found = channelTypes.find(t => t.value === type)
+  return found ? found.icon : '📢'
+}
+
+function getChannelTypeName(type) {
+  const found = channelTypes.find(t => t.value === type)
+  return found ? found.label : type
 }
 
 // ── 通知推送路由（哪个插件推到哪个 Bot） ──
@@ -489,63 +557,51 @@ onBeforeRouteLeave(async () => {
         <div class="field" style="margin-top:20px">
           <label>通知渠道</label>
           <div class="hint muted small" style="margin-bottom:12px">
-            配置除 Telegram Bot 外的其他通知方式。启用后插件的 ctx.notify 会同时推送到这些渠道。
+            配置消息发送渠道参数。启用后插件的 ctx.notify 会同时推送到这些渠道。
           </div>
 
-          <!-- Bark -->
-          <div class="notification-channel-card">
-            <div class="channel-header">
-              <label class="checkbox-label" style="margin:0">
-                <input type="checkbox" v-model="s.NOTIFICATION_CHANNELS.bark.enabled" />
-                <span class="channel-name">Bark（iOS 推送）</span>
-              </label>
-            </div>
-            <div v-if="s.NOTIFICATION_CHANNELS.bark.enabled" class="channel-body">
-              <div class="field">
-                <label class="small-label">服务器地址</label>
-                <input class="input" v-model="s.NOTIFICATION_CHANNELS.bark.server"
-                       placeholder="https://api.day.app" />
+          <!-- 通知渠道卡片网格 -->
+          <div class="channel-grid">
+            <div v-for="(ch, idx) in s.NOTIFICATION_CHANNELS" :key="ch.id" class="channel-card">
+              <div class="channel-card-header">
+                <span class="channel-icon">{{ getChannelIcon(ch.type) }}</span>
+                <div class="channel-info">
+                  <div class="channel-card-name">{{ ch.name }}</div>
+                  <div class="channel-card-type">{{ getChannelTypeName(ch.type) }}</div>
+                </div>
+                <span class="channel-status" :class="{ enabled: ch.enabled }">
+                  {{ ch.enabled ? '已启用' : '已禁用' }}
+                </span>
               </div>
-              <div class="field">
-                <label class="small-label">设备密钥</label>
-                <input class="input" v-model="s.NOTIFICATION_CHANNELS.bark.device_key"
-                       placeholder="从 Bark App 中获取" />
+              <div class="channel-card-actions">
+                <button class="btn-icon" @click="toggleChannel(idx)" :title="ch.enabled ? '禁用' : '启用'">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path v-if="ch.enabled" d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                    <path v-else d="M12 2a10 10 0 1 0 0 20 10 10 0 1 0 0-20zm0 6v8m0 2h.01"/>
+                  </svg>
+                </button>
+                <button class="btn-icon" @click="openEditChannel(idx)" title="编辑">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+                    <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z"/>
+                  </svg>
+                </button>
+                <button class="btn-icon danger" @click="deleteChannel(idx)" title="删除">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
               </div>
             </div>
           </div>
 
-          <!-- 微信 -->
-          <div class="notification-channel-card">
-            <div class="channel-header">
-              <label class="checkbox-label" style="margin:0">
-                <input type="checkbox" v-model="s.NOTIFICATION_CHANNELS.wechat.enabled" />
-                <span class="channel-name">企业微信</span>
-              </label>
-            </div>
-            <div v-if="s.NOTIFICATION_CHANNELS.wechat.enabled" class="channel-body">
-              <div class="field">
-                <label class="small-label">企业 ID</label>
-                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.corpid"
-                       placeholder="企业微信后台获取" />
-              </div>
-              <div class="field">
-                <label class="small-label">应用 Secret</label>
-                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.corpsecret"
-                       placeholder="应用管理 - 自建应用" />
-              </div>
-              <div class="field">
-                <label class="small-label">应用 AgentId</label>
-                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.agentid"
-                       placeholder="应用的 AgentId" />
-              </div>
-              <div class="field">
-                <label class="small-label">API 地址（可选）</label>
-                <input class="input" v-model="s.NOTIFICATION_CHANNELS.wechat.proxy"
-                       placeholder="反向代理地址，如 https://qyapi.weixin.qq.com（留空使用官方地址）" />
-                <div class="hint muted small">如果无法直连企业微信 API，可填写反向代理地址</div>
-              </div>
-            </div>
-          </div>
+          <!-- 添加按钮 -->
+          <button class="btn-add-channel" @click="openAddChannel">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 5v14m-7-7h14"/>
+            </svg>
+            添加通知渠道
+          </button>
         </div>
       </div>
 
@@ -692,6 +748,147 @@ onBeforeRouteLeave(async () => {
       <div class="hint muted foot" v-if="tab === 'telegram'">提示：账号登录在「账号管理」页完成，账号列表会随登录自动写入。</div>
     </div>
   </div>
+
+  <!-- 通知渠道配置弹窗 -->
+  <div v-if="channelModalOpen" class="modal-mask" @click.self="channelModalOpen = false">
+    <div class="modal-dialog channel-modal">
+      <div class="modal-header">
+        <h3>{{ channelModalMode === 'add' ? '添加通知渠道' : '编辑通知渠道' }}</h3>
+        <button class="modal-close" @click="channelModalOpen = false">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6 6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <!-- 启用状态 -->
+        <div class="field">
+          <label class="checkbox-label">
+            <input type="checkbox" v-model="channelForm.enabled" />
+            <span>启用</span>
+          </label>
+        </div>
+
+        <!-- 类型选择 -->
+        <div class="field">
+          <label>类型</label>
+          <select class="select" v-model="channelForm.type" :disabled="channelModalMode === 'edit'">
+            <option v-for="type in channelTypes" :key="type.value" :value="type.value">
+              {{ type.icon }} {{ type.label }}
+            </option>
+          </select>
+          <div class="hint muted small">通知渠道类型</div>
+        </div>
+
+        <!-- 名称 -->
+        <div class="field">
+          <label>名称</label>
+          <input class="input" v-model="channelForm.name" placeholder="如：通知1、订单通知" />
+          <div class="hint muted small">通知渠道名称</div>
+        </div>
+
+        <!-- Telegram 配置 -->
+        <template v-if="channelForm.type === 'telegram'">
+          <div class="field">
+            <label>Bot Token</label>
+            <input class="input" v-model="channelForm.config.token"
+                   placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
+            <div class="hint muted small">Telegram机器人token，格式：123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11</div>
+          </div>
+          <div class="field">
+            <label>Chat ID（可选）</label>
+            <input class="input" v-model="channelForm.config.chat_id"
+                   placeholder="接收消息的用户、群组或频道 Chat ID" />
+            <div class="hint muted small">接收消息通知的用户、群组或频道Chat ID</div>
+          </div>
+          <div class="field">
+            <label>用户白名单（可选）</label>
+            <input class="input" v-model="channelForm.config.user_whitelist"
+                   placeholder="可使用Telegram机器人的用户ID列表，多个用,分隔" />
+            <div class="hint muted small">可使用Telegram机器人的用户ID清单，多个用户ID用,分隔，不填表示所有用户可用</div>
+          </div>
+          <div class="field">
+            <label>管理员白名单（可选）</label>
+            <input class="input" v-model="channelForm.config.admin_whitelist"
+                   placeholder="可管理菜单及命令的管理员用户ID列表，多个用,分隔" />
+            <div class="hint muted small">可使用管理菜单及命令的管理员用户ID列表，多个ID用,分隔</div>
+          </div>
+          <div class="field">
+            <label>代理API地址（可选）</label>
+            <input class="input" v-model="channelForm.config.api_proxy"
+                   placeholder="https://api.telegram.org" />
+            <div class="hint muted small">自定义代理API地址，格式：https://api.telegram.org</div>
+          </div>
+        </template>
+
+        <!-- 企业微信配置 -->
+        <template v-if="channelForm.type === 'wechat'">
+          <div class="field">
+            <label>企业ID</label>
+            <input class="input" v-model="channelForm.config.corpid"
+                   placeholder="企业微信后台企业信息中的企业ID" />
+            <div class="hint muted small">企业微信后台企业信息中的企业ID</div>
+          </div>
+          <div class="field">
+            <label>应用AgentId</label>
+            <input class="input" v-model="channelForm.config.agentid"
+                   placeholder="企业微信自建应用的AgentId" />
+            <div class="hint muted small">企业微信自建应用的AgentId</div>
+          </div>
+          <div class="field">
+            <label>应用Secret</label>
+            <input class="input" v-model="channelForm.config.secret"
+                   placeholder="企业微信自建应用的Secret" />
+            <div class="hint muted small">企业微信自建应用的Secret</div>
+          </div>
+          <div class="field">
+            <label>代理地址（可选）</label>
+            <input class="input" v-model="channelForm.config.proxy"
+                   placeholder="https://qyapi.weixin.qq.com" />
+            <div class="hint muted small">微信消息发送代理地址，2022年6月20日后创建的应用才需要，不填代理则无法发送消息</div>
+          </div>
+          <div class="field">
+            <label>Token（可选）</label>
+            <input class="input" v-model="channelForm.config.token"
+                   placeholder="微信企业自建应用->API接收消息配置中的Token" />
+            <div class="hint muted small">微信企业自建应用->API接收消息配置中的Token</div>
+          </div>
+          <div class="field">
+            <label>EncodingAESKey（可选）</label>
+            <input class="input" v-model="channelForm.config.aes_key"
+                   placeholder="微信企业自建应用->API接收消息配置中的EncodingAESKey" />
+            <div class="hint muted small">微信企业自建应用->API接收消息配置中的EncodingAESKey</div>
+          </div>
+          <div class="field">
+            <label>管理员白名单（可选）</label>
+            <input class="input" v-model="channelForm.config.admin_whitelist"
+                   placeholder="可使用管理菜单及命令的用户ID列表，多个用,分隔" />
+            <div class="hint muted small">可使用管理菜单及命令的用户ID列表，多个ID用,分隔</div>
+          </div>
+        </template>
+
+        <!-- Bark 配置 -->
+        <template v-if="channelForm.type === 'bark'">
+          <div class="field">
+            <label>服务器地址</label>
+            <input class="input" v-model="channelForm.config.server"
+                   placeholder="https://api.day.app" />
+            <div class="hint muted small">Bark 服务器地址，如 https://api.day.app</div>
+          </div>
+          <div class="field">
+            <label>设备密钥</label>
+            <input class="input" v-model="channelForm.config.device_key"
+                   placeholder="从 Bark App 中获取" />
+            <div class="hint muted small">从 Bark App 中获取的设备密钥</div>
+          </div>
+        </template>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" @click="channelModalOpen = false">取消</button>
+        <button class="btn primary" @click="saveChannel">确认</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <style scoped>
@@ -821,48 +1018,236 @@ onBeforeRouteLeave(async () => {
 }
 .mono { font-family: 'SFMono-Regular', Consolas, monospace; }
 
-/* 通知渠道卡片 */
-.notification-channel-card {
-  margin-top: 12px;
+/* 通知渠道卡片网格 */
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.channel-card {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
   overflow: hidden;
+  transition: all 0.15s;
 }
-.channel-header {
-  padding: 12px 14px;
+
+.channel-card:hover {
+  border-color: var(--accent-dim);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+.channel-card-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
   background: var(--bg-card);
-  border-bottom: 1px solid var(--border);
 }
-.channel-name {
+
+.channel-icon {
+  font-size: 32px;
+  width: 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.channel-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.channel-card-name {
   font-size: 14px;
   font-weight: 600;
   color: var(--text-primary);
-  margin-left: 8px;
-}
-.channel-body {
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.small-label {
-  font-size: 11px;
-  color: var(--text-muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  cursor: pointer;
-}
-.checkbox-label input[type="checkbox"] {
-  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-@media (max-width: 600px) { .grid2 { grid-template-columns: 1fr; } .bot-grid { grid-template-columns: 1fr; } }
+.channel-card-type {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.channel-status {
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.channel-status.enabled {
+  background: var(--accent-2-dim);
+  color: var(--accent-2);
+}
+
+.channel-card-actions {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+
+.btn-icon {
+  flex: 1;
+  padding: 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.btn-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.btn-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.btn-icon.danger:hover {
+  background: var(--danger-dim);
+  color: var(--danger);
+}
+
+.btn-add-channel {
+  width: 100%;
+  padding: 12px;
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.15s;
+}
+
+.btn-add-channel svg {
+  width: 18px;
+  height: 18px;
+}
+
+.btn-add-channel:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+
+/* 通知渠道配置弹窗 */
+.modal-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 20px;
+}
+
+.modal-dialog {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 12px;
+  max-width: 600px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-header h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.modal-close {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+}
+
+.modal-close svg {
+  width: 20px;
+  height: 20px;
+}
+
+.modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.modal-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 16px 20px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 600px) {
+  .grid2 { grid-template-columns: 1fr; }
+  .bot-grid { grid-template-columns: 1fr; }
+  .channel-grid { grid-template-columns: 1fr; }
+}
 
 /* 手机适配 */
 @media (max-width: 768px) {
