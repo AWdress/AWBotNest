@@ -183,9 +183,9 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
                 continue
             # 先全部下载到内存，全部成功后再落盘——避免文件夹插件中途失败留半截文件
             staged = []
-            for f in files:
+            contents = await github_import.fetch_files(files)
+            for f, content in zip(files, contents):
                 target = _safe_target(f["target"])
-                content = await github_import.fetch_file(f["download_url"])
                 staged.append((target, content))
             for target, content in staged:
                 dest = PLUGINS_DIR / target
@@ -207,42 +207,51 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     _refresh_registry()
     # 自动重载「更新成功且当前正在运行」的插件，让新代码立即生效。
     # 未加载的插件只更新文件、不启用（保持 §7.5：启用=执行远程代码须手动）。
-    reloaded = await _reload_running(result["downloaded"])
+    reloaded, reload_errors = await _reload_running(result["downloaded"])
     if reloaded:
         result["reloaded"] = reloaded
+    if reload_errors:
+        result["reload_errors"] = reload_errors
     result["ok"] = bool(result["downloaded"])
     return result
 
 
-async def _reload_running(plugin_ids: list[str]) -> list[str]:
+async def _reload_running(plugin_ids: list[str]) -> tuple[list[str], list[str]]:
     """对传入插件中「当前已加载」者执行热重载，使更新后的新代码生效。
-    返回实际重载成功的插件 id 列表。运行时不可用或某插件未加载则跳过。"""
+    返回成功列表和失败说明。运行时不可用或某插件未加载则跳过。"""
     reloaded: list[str] = []
+    errors: list[str] = []
     try:
         from kernel import state as _state
         runtime = _state.runtime
     except Exception:  # noqa: BLE001
         runtime = None
     if runtime is None:
-        return reloaded
+        return reloaded, errors
     for pid in plugin_ids:
         try:
             if not runtime.is_loaded(pid):
                 continue  # 未运行的只更新文件，不自动启用
-            await runtime.reload(pid)
+            meta = await runtime.reload(pid)
+            if not runtime.is_loaded(pid) or getattr(meta, "error", None):
+                detail = getattr(meta, "error", None) or "插件没有重新进入运行状态"
+                errors.append(f"{pid}: 文件已更新，但重新加载失败（{detail}）")
+                continue
             reloaded.append(pid)
             from kernel.registry import registry as _reg
             logger.info("插件 [%s] 更新后已自动重载", _reg.display_name(pid))
         except Exception as e:  # noqa: BLE001
             from kernel.registry import registry as _reg
             logger.warning("插件 [%s] 更新后自动重载失败: %r", _reg.display_name(pid), e)
-    return reloaded
+            errors.append(f"{pid}: 文件已更新，但重新加载失败（{e}）")
+    return reloaded, errors
 
 
 def _refresh_registry() -> None:
     """重新扫描注册表，让新下载的插件元数据生效（仍不启用）。"""
     try:
         from kernel.registry import registry
+        registry.invalidate_scan_cache()
         registry.scan()
     except Exception as e:  # noqa: BLE001
         logger.warning("刷新注册表失败: %r", e)
@@ -287,6 +296,7 @@ async def sync_once() -> dict[str, Any]:
         updated = dl.get("downloaded", [])
         reloaded = dl.get("reloaded", [])
         errors.extend(dl.get("errors", []))
+        errors.extend(dl.get("reload_errors", []))
 
     if updated:
         logger.info("插件仓库轮询：更新已安装插件 %d 个 %s%s", len(updated), updated,

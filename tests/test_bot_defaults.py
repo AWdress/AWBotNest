@@ -78,6 +78,10 @@ class BotDefaultTests(unittest.TestCase):
                 self.assertEqual(registry.scan()[0].version, "1.0.1")
                 self.assertEqual(parse.call_count, 2)
 
+                registry.invalidate_scan_cache()
+                registry.scan()
+                self.assertEqual(parse.call_count, 3)
+
 
 class FakeBot:
     def __init__(self, connected: bool = True) -> None:

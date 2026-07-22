@@ -29,8 +29,11 @@ webui/github_import.py
 """
 from __future__ import annotations
 
+import asyncio
 import re
+import time
 from typing import Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -43,10 +46,19 @@ def _proxy() -> Optional[str]:
     return proxy_url()
 RAW_HOST = "raw.githubusercontent.com"
 MANIFEST_NAMES = ("manifest.json", "manifest.v2.json")
+_TREE_CACHE_TTL = 30.0
+_TREE_CACHE: dict[tuple[str, str, str], tuple[float, list[dict]]] = {}
+_BRANCH_CACHE_TTL = 600.0
+_BRANCH_CACHE: dict[tuple[str, str], tuple[float, str]] = {}
 
 
 def _headers() -> dict:
     return {"Accept": "application/vnd.github+json", "User-Agent": "AWBotNest"}
+
+
+def _raise_if_rate_limited(response) -> None:
+    if response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0":
+        raise RuntimeError("GitHub 请求次数暂时已用完，请稍后再试")
 
 
 def _bust(url: str) -> str:
@@ -96,9 +108,17 @@ def parse_source(src: str) -> dict:
 
 
 async def _default_branch(client: httpx.AsyncClient, owner: str, repo: str) -> str:
+    cache_key = (owner, repo)
+    cached = _BRANCH_CACHE.get(cache_key)
+    now = time.monotonic()
+    if cached and now - cached[0] < _BRANCH_CACHE_TTL:
+        return cached[1]
     r = await client.get(f"{GITHUB_API}/repos/{owner}/{repo}", headers=_headers())
+    _raise_if_rate_limited(r)
     r.raise_for_status()
-    return r.json().get("default_branch", "main")
+    branch = r.json().get("default_branch", "main")
+    _BRANCH_CACHE[cache_key] = (now, branch)
+    return branch
 
 
 def _raw_url(owner: str, repo: str, branch: str, path: str) -> str:
@@ -152,6 +172,7 @@ async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
     for d in dirs:
         api_url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{d}".rstrip("/")
         r = await client.get(api_url, headers=_headers(), params={"ref": branch})
+        _raise_if_rate_limited(r)
         if r.status_code != 200:
             continue
         items = r.json()
@@ -216,30 +237,66 @@ async def list_plugins(src: str) -> dict:
 
 
 async def _list_dir_files(client, owner, repo, branch, dir_path) -> list[dict]:
-    """递归列出某目录下所有文件（用于下载文件夹插件），返回 [{path, download_url}]"""
+    """用一次 Git Trees 请求列出目录文件，避免逐层请求耗尽 GitHub 限额。"""
+    cache_key = (str(owner), str(repo), str(branch))
+    now = time.monotonic()
+    cached = _TREE_CACHE.get(cache_key)
+    if cached and now - cached[0] < _TREE_CACHE_TTL:
+        tree = cached[1]
+    else:
+        ref = quote(str(branch), safe="")
+        api_url = f"{GITHUB_API}/repos/{owner}/{repo}/git/trees/{ref}"
+        r = await client.get(
+            api_url,
+            headers={**_headers(), **_NOCACHE},
+            params={"recursive": "1"},
+        )
+        _raise_if_rate_limited(r)
+        r.raise_for_status()
+        payload = r.json()
+        if payload.get("truncated"):
+            raise RuntimeError("GitHub 返回的仓库文件列表不完整，请稍后重试")
+        tree = payload.get("tree") or []
+        _TREE_CACHE[cache_key] = (now, tree)
+
+    prefix = dir_path.strip("/") + "/"
     out: list[dict] = []
-    api_url = f"{GITHUB_API}/repos/{owner}/{repo}/contents/{dir_path.rstrip('/')}"
-    r = await client.get(api_url, headers=_headers(), params={"ref": branch})
-    if r.status_code != 200:
-        return out
-    for it in r.json():
-        if it.get("type") == "file":
-            out.append({"path": it["path"], "download_url": it["download_url"]})
-        elif it.get("type") == "dir":
-            out.extend(await _list_dir_files(client, owner, repo, branch, it["path"]))
+    for item in tree:
+        path = str(item.get("path") or "")
+        if item.get("type") == "blob" and path.startswith(prefix):
+            out.append({
+                "path": path,
+                "download_url": _raw_url(owner, repo, branch, path),
+            })
     return out
 
 
 async def fetch_file(download_url: str) -> bytes:
     """下载单个文件内容（不限大小）。"""
     async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
-        async with client.stream("GET", _bust(download_url),
-                                 headers={**_headers(), **_NOCACHE}) as r:
-            r.raise_for_status()
-            chunks = bytearray()
-            async for chunk in r.aiter_bytes():
-                chunks.extend(chunk)
-            return bytes(chunks)
+        return await _fetch_file(client, download_url)
+
+
+async def _fetch_file(client: httpx.AsyncClient, download_url: str) -> bytes:
+    async with client.stream(
+        "GET", _bust(download_url), headers={**_headers(), **_NOCACHE}
+    ) as r:
+        r.raise_for_status()
+        chunks = bytearray()
+        async for chunk in r.aiter_bytes():
+            chunks.extend(chunk)
+        return bytes(chunks)
+
+
+async def fetch_files(files: list[dict], concurrency: int = 6) -> list[bytes]:
+    """复用一个连接池并发下载文件，结果顺序与传入清单一致。"""
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=_proxy()) as client:
+        async def fetch(item: dict) -> bytes:
+            async with semaphore:
+                return await _fetch_file(client, item["download_url"])
+
+        return await asyncio.gather(*(fetch(item) for item in files))
 
 
 async def resolve_files(plugin: dict) -> list[dict]:
