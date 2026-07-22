@@ -33,6 +33,8 @@ const configBotReady = ref(false)
 let configBotRequestId = 0
 const notificationSyncSource = `plugins_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
+let storeIdleTask = null
+let pluginPageMounted = false
 
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
@@ -704,6 +706,7 @@ function openPluginHomepage(p) {
 }
 
 async function loadStore(refresh = false) {
+  if (storeBusy.value) return
   storeBusy.value = true; storeErr.value = ''
   try {
     const d = await api.pluginStore(refresh)
@@ -815,10 +818,26 @@ async function saveRepos() {
   }
 }
 
-function goStore() { tab.value = 'store'; if (store.value.length === 0) loadStore(true) }
+function goStore() { tab.value = 'store'; if (store.value.length === 0) loadStore(false) }
+
+function scheduleStoreLoad() {
+  if ('requestIdleCallback' in window) {
+    storeIdleTask = window.requestIdleCallback(() => loadStore(false), { timeout: 2000 })
+  } else {
+    storeIdleTask = window.setTimeout(() => loadStore(false), 800)
+  }
+}
+
+function cancelStoreLoad() {
+  if (storeIdleTask === null) return
+  if ('cancelIdleCallback' in window) window.cancelIdleCallback(storeIdleTask)
+  else clearTimeout(storeIdleTask)
+  storeIdleTask = null
+}
 
 onMounted(() => {
-  load(); loadStore(false)
+  pluginPageMounted = true
+  load().finally(() => { if (pluginPageMounted) scheduleStoreLoad() })
   document.addEventListener('click', closeMenu)
   window.addEventListener('keydown', onSearchHotkey)
   stopNotificationSync = subscribeNotificationSync((change) => {
@@ -827,7 +846,9 @@ onMounted(() => {
   })
 })
 onUnmounted(() => {
+  pluginPageMounted = false
   logsDisconnect()
+  cancelStoreLoad()
   stopNotificationSync?.()
   document.removeEventListener('click', closeMenu)
   window.removeEventListener('keydown', onSearchHotkey)
