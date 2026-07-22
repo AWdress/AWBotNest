@@ -398,14 +398,19 @@ class PluginRegistry:
             self._save_state()
 
     def purge_bot(self, bot_id: str) -> list[str]:
-        """某个 Bot 被删除时，把所有指向它的插件回退到默认 Bot。
-        返回受影响的插件 id 列表，供调用方决定是否重载重挂。"""
+        """从所有插件路由中移除指定渠道，保留同一路由中的其他渠道。"""
         affected: list[str] = []
         with self._lock:
-            for pid, bid in list(self._bot_choice.items()):
-                if bid == bot_id:
+            for pid, choice in list(self._bot_choice.items()):
+                channel_ids = [item.strip() for item in choice.split(",") if item.strip()]
+                remaining = [item for item in channel_ids if item != bot_id]
+                if len(remaining) == len(channel_ids):
+                    continue
+                if remaining:
+                    self._bot_choice[pid] = ",".join(remaining)
+                else:
                     self._bot_choice.pop(pid, None)
-                    affected.append(pid)
+                affected.append(pid)
             if affected:
                 self._save_state()
         return affected

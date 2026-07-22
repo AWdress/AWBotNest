@@ -108,61 +108,23 @@ async def submit(
     acc_tag = f"[{account_label}]" if account_label else ""
     logger.info("[通知][%s]%s %s%s", plugin_name, acc_tag, f"({category}) " if category else "", text)
 
-    # 投递：优先使用通知渠道配置，回退到旧的Bot配置（向后兼容）
-    bot_id = _plugin_bot_id(plugin_id)
+    channel_ids = _plugin_channel_ids(plugin_id)
+    delivered = False
+    for channel_id in channel_ids:
+        try:
+            if await _send_to_channel(accounts, channel_id, body, send_kwargs):
+                delivered = True
+        except Exception as e:  # noqa: BLE001
+            logger.warning("通知渠道 [%s] 发送失败: %r", channel_id or "默认", e)
 
-    # 尝试从通知渠道配置中获取
-    channel_config = _get_channel_config(bot_id)
-    if channel_config and channel_config.get("enabled"):
-        channel_type = str(channel_config.get("type", "")).strip()
-        config_data = channel_config.get("config", {})
+    if delivered:
+        return True
 
-        # 使用新的多渠道通知系统
-        from kernel.notification_channels import send_notification
-
-        if channel_type == "telegram":
-            # Telegram：使用已连接的Bot
-            bot = _get_bot(accounts, bot_id)
-            if bot and getattr(bot, "is_connected", False):
-                chat_id_str = str(config_data.get("chat_id", "")).strip()
-                if chat_id_str:
-                    target = _parse_chat_id(chat_id_str)
-                else:
-                    target = _owner_id() or None
-
-                if target:
-                    success = await send_notification(
-                        channel_type="telegram",
-                        config=config_data,
-                        message=body,
-                        bot=bot,
-                        target=target,
-                        **send_kwargs
-                    )
-                    if success:
-                        return True
-
-        elif channel_type in ["wechat", "bark"]:
-            # 企业微信和Bark：直接发送
-            success = await send_notification(
-                channel_type=channel_type,
-                config=config_data,
-                message=body
-            )
-            if success:
-                return True
-
-    # 回退到旧的Bot配置（向后兼容）
-    bot = _get_bot(accounts, bot_id)
-    if bot and getattr(bot, "is_connected", False):
-        target = _bot_chat_id(_resolved_bot_id(accounts, bot_id))
-        if target is None:
-            target = _owner_id() or None
-        if target:
-            return await bot.send_message(target, body, **send_kwargs)
-
-    # 所有Bot都不可用，直接报错
-    raise RuntimeError("无可用通知渠道投递通知（Bot 未连接或未配置 Chat ID）")
+    # 所有渠道都不可用时保留原有兜底：发到主用户账号收藏夹。
+    user = getattr(accounts, "primary_user_app", None)
+    if user and getattr(user, "is_connected", False):
+        return await user.send_message("me", body, **send_kwargs)
+    raise RuntimeError("无可用通知渠道，且没有在线用户账号可用于保底投递")
 
 
 def _plugin_bot_id(plugin_id: str) -> str:
@@ -176,6 +138,54 @@ def _plugin_bot_id(plugin_id: str) -> str:
         return _get_default_channel_id()
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _plugin_channel_ids(plugin_id: str) -> list[str]:
+    """返回插件选择的渠道列表；没有单独选择时使用默认渠道或旧默认 Bot。"""
+    raw = _plugin_bot_id(plugin_id)
+    ids = [item.strip() for item in raw.split(",") if item.strip()]
+    return ids or [""]
+
+
+async def _send_to_channel(accounts: Any, channel_id: str, body: str,
+                           send_kwargs: dict[str, Any]) -> bool:
+    """向单个渠道发送；配置中存在但已禁用的渠道不会走旧 Bot 回退。"""
+    channel_config = _get_channel_config(channel_id) if channel_id else None
+    if channel_config is not None:
+        if not channel_config.get("enabled"):
+            return False
+        channel_type = str(channel_config.get("type") or "").strip()
+        config_data = channel_config.get("config") or {}
+        from kernel.notification_channels import send_notification
+
+        if channel_type == "telegram":
+            bot = _get_bot(accounts, channel_id, fallback=False)
+            if not bot or not getattr(bot, "is_connected", False):
+                return False
+            target = _parse_chat_id(str(config_data.get("chat_id") or ""))
+            target = target or _owner_id() or None
+            if not target:
+                return False
+            return await send_notification(
+                channel_type="telegram", config=config_data, message=body,
+                bot=bot, target=target, **send_kwargs,
+            )
+        if channel_type in {"wechat", "bark"}:
+            return await send_notification(
+                channel_type=channel_type, config=config_data, message=body,
+            )
+        return False
+
+    # 没有新渠道配置时按旧 Bot 路由处理；空 id 表示当前默认 Bot。
+    bot = _get_bot(accounts, channel_id, fallback=not channel_id)
+    if not bot or not getattr(bot, "is_connected", False):
+        return False
+    resolved_id = _resolved_bot_id(accounts, channel_id)
+    target = _bot_chat_id(resolved_id) or _owner_id() or None
+    if not target:
+        return False
+    await bot.send_message(target, body, **send_kwargs)
+    return True
 
 
 def _get_default_channel_id() -> str:
@@ -219,8 +229,13 @@ def _parse_chat_id(chat_id: str) -> Any:
     return chat_id
 
 
-def _get_bot(accounts: Any, bot_id: str) -> Any:
+def _get_bot(accounts: Any, bot_id: str, fallback: bool = True) -> Any:
     """按 id 取 Bot client；兼容极旧的无多 Bot 能力的 accounts 对象。"""
+    bot_apps = getattr(accounts, "bot_apps", None)
+    if bot_id and isinstance(bot_apps, dict):
+        bot = bot_apps.get(bot_id)
+        if bot is not None or not fallback:
+            return bot
     get_bot = getattr(accounts, "get_bot", None)
     if callable(get_bot):
         return get_bot(bot_id)

@@ -4,7 +4,6 @@ kernel/notification_channels.py
 """
 from __future__ import annotations
 
-import json
 import time
 from typing import Any, Optional
 from core import logger
@@ -41,8 +40,6 @@ class TelegramChannel(NotificationChannel):
             return False
 
 
-import time
-
 # 企业微信 access_token 全局缓存（corpid+secret → {token, expires_at}）
 _wechat_token_cache: dict = {}
 
@@ -56,6 +53,7 @@ class WeChatWorkChannel(NotificationChannel):
         self.agentid = config.get("agentid", "")
         self.secret = config.get("secret", "")
         self.touser = config.get("touser", "@all")
+        self.base_url = str(config.get("proxy") or "https://qyapi.weixin.qq.com").rstrip("/")
 
     def _cache_key(self) -> str:
         return f"{self.corpid}:{self.secret}"
@@ -72,10 +70,12 @@ class WeChatWorkChannel(NotificationChannel):
             return cached["token"]
 
         try:
-            url = (f"https://qyapi.weixin.qq.com/cgi-bin/gettoken"
-                   f"?corpid={self.corpid}&corpsecret={self.secret}")
+            url = f"{self.base_url}/cgi-bin/gettoken"
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url)
+                resp = await client.get(url, params={
+                    "corpid": self.corpid,
+                    "corpsecret": self.secret,
+                })
                 data = resp.json()
                 if data.get("errcode") == 0:
                     token = data.get("access_token")
@@ -110,7 +110,7 @@ class WeChatWorkChannel(NotificationChannel):
                 return False
 
             # 发送消息
-            url = f"https://qyapi.weixin.qq.com/cgi-bin/message/send?access_token={token}"
+            url = f"{self.base_url}/cgi-bin/message/send?access_token={token}"
             payload = {
                 "touser": self.touser,
                 "msgtype": "text",
@@ -183,7 +183,7 @@ class BarkChannel(NotificationChannel):
 
 
 async def send_notification(channel_type: str, config: dict, message: str,
-                           bot: Any = None, target: Any = None) -> bool:
+                            bot: Any = None, target: Any = None, **kwargs) -> bool:
     """
     统一的通知发送接口
 
@@ -200,7 +200,7 @@ async def send_notification(channel_type: str, config: dict, message: str,
     try:
         if channel_type == "telegram":
             channel = TelegramChannel(config)
-            return await channel.send_via_bot(bot, target, message)
+            return await channel.send_via_bot(bot, target, message, **kwargs)
 
         elif channel_type == "wechat":
             channel = WeChatWorkChannel(config)
