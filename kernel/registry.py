@@ -10,6 +10,7 @@ kernel/registry.py
 from __future__ import annotations
 
 import ast
+import copy
 import json
 import threading
 from dataclasses import dataclass, field, asdict
@@ -77,6 +78,8 @@ class PluginRegistry:
         self._config_state: dict[str, dict[str, Any]] = {}
         self._account_scope: dict[str, list[str]] = {}  # 插件id -> [session名]，空/缺失=全部
         self._bot_choice: dict[str, str] = {}  # 插件id -> bot id；空/缺失=跟随默认，"default"=内置 Bot
+        self._scan_cache_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._scan_cache: list[PluginMeta] = []
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -276,6 +279,36 @@ class PluginRegistry:
     # ──────────────────────────────────────────────
     # 扫描
     # ──────────────────────────────────────────────
+    def _entry_signature(self) -> tuple[tuple[str, int, int], ...]:
+        """用入口文件路径、修改时间和大小判断插件元数据是否变化。"""
+        entries: list[Path] = [
+            path for path in self.plugins_dir.glob("*.py")
+            if not path.name.startswith("_")
+        ]
+        entries.extend(
+            init for directory in self.plugins_dir.iterdir()
+            if directory.is_dir() and not directory.name.startswith("_")
+            and directory.name != "__pycache__"
+            and (init := directory / "__init__.py").exists()
+        )
+        signature = []
+        for entry in sorted(entries):
+            try:
+                stat = entry.stat()
+                signature.append((str(entry), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                continue
+        return tuple(signature)
+
+    def _cached_metas(self) -> list[PluginMeta]:
+        """返回可安全修改的副本，并填入最新启用、账号和路由状态。"""
+        metas = copy.deepcopy(self._scan_cache)
+        for meta in metas:
+            meta.enabled = self._enabled_state.get(meta.id, meta.default_enabled)
+            meta.accounts = list(self._account_scope.get(meta.id, []))
+            meta.bot = self._bot_choice.get(meta.id, "") or ""
+        return metas
+
     def scan(self) -> list[PluginMeta]:
         """
         扫描 plugins/ 下的插件，支持两种形态：
@@ -284,6 +317,10 @@ class PluginRegistry:
         忽略 _ 开头的文件/目录（如 _TEMPLATE.py、_helpers）。
         """
         with self._lock:
+            signature = self._entry_signature()
+            if signature == self._scan_cache_signature:
+                return self._cached_metas()
+
             metas: list[PluginMeta] = []
             seen_ids: set[str] = set()
 
@@ -310,7 +347,9 @@ class PluginRegistry:
                     continue
                 metas.append(self.parse_meta(init, d.name))
 
-            return sorted(metas, key=lambda m: m.id)
+            self._scan_cache = sorted(metas, key=lambda m: m.id)
+            self._scan_cache_signature = signature
+            return self._cached_metas()
 
     def get_meta(self, plugin_id: str) -> Optional[PluginMeta]:
         """读取单个插件元数据（单文件或文件夹形态）"""
