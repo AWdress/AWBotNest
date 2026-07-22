@@ -309,6 +309,12 @@ class PluginRegistry:
             meta.bot = self._bot_choice.get(meta.id, "") or ""
         return metas
 
+    def invalidate_scan_cache(self) -> None:
+        """插件安装或更新后强制让下一次扫描重新解析元数据。"""
+        with self._lock:
+            self._scan_cache_signature = None
+            self._scan_cache = []
+
     def scan(self) -> list[PluginMeta]:
         """
         扫描 plugins/ 下的插件，支持两种形态：

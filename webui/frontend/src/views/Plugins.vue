@@ -735,9 +735,15 @@ async function download(p) {
       p.local_version = p.version   // 记录新版本，清除「有更新」提示
       await load()
       const reloaded = (res.reloaded || []).includes(p.id)
-      toast.success(isUpdate
-        ? `插件「${p.name}」已更新到 v${p.version}${reloaded ? '（运行中实例已热重载）' : ''}`
-        : `插件「${p.name}」安装完成`)
+      const reloadError = (res.reload_errors || []).find(item => item.startsWith(`${p.id}:`))
+      if (reloadError) {
+        storeErr.value = reloadError
+        toast.error(`插件「${p.name}」文件已更新，但重新加载失败，请检查插件日志`)
+      } else {
+        toast.success(isUpdate
+          ? `插件「${p.name}」已更新到 v${p.version}${reloaded ? '（运行中实例已热重载）' : ''}`
+          : `插件「${p.name}」安装完成`)
+      }
     }
   } catch (e) {
     storeErr.value = `${p.name}: ${e.message}`
