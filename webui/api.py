@@ -846,13 +846,6 @@ async def get_settings_api(user=Depends(_auth)):
         for field in _CHANNEL_SECRET_FIELDS.get(channel_type, set()):
             if channel_config.get(field):
                 channel_config[field] = _MASK
-        channel_id = str(channel.get("id") or "").strip()
-        channel["plugins"] = [
-            meta.id for meta in registry.scan()
-            if channel_id in {
-                item.strip() for item in registry.get_bot_choice(meta.id).split(",") if item.strip()
-            }
-        ]
     # DB 密码打码
     try:
         if out.get("DB_INFO", {}).get("password"):
@@ -872,7 +865,7 @@ async def get_settings_api(user=Depends(_auth)):
                 b["token"] = _MASK
     except Exception:  # noqa: BLE001
         pass
-    from schedulers.universal.log_cleaner import get_log_cleaner_settings
+    from libs.log_cleaner_settings import get_log_cleaner_settings
     out["LOG_CLEANER"] = get_log_cleaner_settings()
     return {"settings": out}
 
@@ -953,7 +946,8 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
     logger.info("平台设置已更新（config.json）")
 
     if "LOG_CLEANER" in incoming:
-        from schedulers.universal.log_cleaner import save_log_cleaner_settings, start_log_cleaner
+        from libs.log_cleaner_settings import save_log_cleaner_settings
+        from schedulers.universal.log_cleaner import start_log_cleaner
         save_log_cleaner_settings(incoming["LOG_CLEANER"])
         await start_log_cleaner()
         logger.info("日志清理设置已更新")
@@ -1390,8 +1384,10 @@ async def system_status(user=Depends(_auth)):
     # 调度任务
     sched_jobs = []
     try:
-        from schedulers import scheduler as _sched
-        for j in _sched.get_jobs():
+        # 状态接口只读取已经启动的调度器，不能为了展示数据加载整套任务模块。
+        sched_module = _sys.modules.get("schedulers")
+        active_scheduler = getattr(sched_module, "scheduler", None)
+        for j in active_scheduler.get_jobs() if active_scheduler else ():
             nxt = getattr(j, "next_run_time", None)
             # job id 形如 "<插件id>::<名称>"，据此归属到插件
             jid = str(j.id)

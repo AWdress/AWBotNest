@@ -60,6 +60,24 @@ class BotDefaultTests(unittest.TestCase):
             self.assertEqual(affected, ["demo"])
             self.assertEqual(registry.get_bot_choice("demo"), "phone")
 
+    def test_plugin_scan_cache_refreshes_state_and_file_changes(self) -> None:
+        source = "__plugin__ = {'name': '示例', 'id': 'demo', 'version': '%s', 'scope': 'user'}\n"
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = PluginRegistry(root / "plugins", root / "state.json")
+            entry = root / "plugins" / "demo.py"
+            entry.write_text(source % "1.0.0", encoding="utf-8")
+
+            with patch.object(registry, "parse_meta", wraps=registry.parse_meta) as parse:
+                self.assertEqual(registry.scan()[0].version, "1.0.0")
+                registry.set_enabled("demo", True)
+                self.assertTrue(registry.scan()[0].enabled)
+                self.assertEqual(parse.call_count, 1)
+
+                entry.write_text(source % "1.0.1", encoding="utf-8")
+                self.assertEqual(registry.scan()[0].version, "1.0.1")
+                self.assertEqual(parse.call_count, 2)
+
 
 class FakeBot:
     def __init__(self, connected: bool = True) -> None:
