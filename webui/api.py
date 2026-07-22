@@ -13,6 +13,7 @@ import hmac
 import os
 import sqlite3
 import tempfile
+import copy
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -36,7 +37,7 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.0.9"
+APP_VERSION = "1.1.0.10"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -567,11 +568,23 @@ async def get_bots_routing(user=Depends(_auth)):
     """推送路由总览：可选渠道列表 + 每个插件当前推送到哪个渠道（空=默认渠道）。"""
     accounts = _get_accounts()
     bots = await accounts.list_bots()
+    for bot in bots:
+        bot["type"] = "telegram"
 
     # 将所有启用的非 Telegram 通知渠道也加入列表（供前端多选展示）
     import config.config as _cfg_mod
     cfg_data = _cfg_mod.load()
-    for ch in (cfg_data.get("NOTIFICATION_CHANNELS") or []):
+    channels = cfg_data.get("NOTIFICATION_CHANNELS") or []
+    default_channel_id = next((
+        str(ch.get("id") or "").strip()
+        for ch in channels
+        if isinstance(ch, dict) and ch.get("enabled") and ch.get("is_default") and ch.get("id")
+    ), "")
+    if default_channel_id:
+        for bot in bots:
+            bot["is_default"] = bot.get("id") == default_channel_id
+
+    for ch in channels:
         if not isinstance(ch, dict):
             continue
         if ch.get("type") == "telegram":
@@ -587,8 +600,9 @@ async def get_bots_routing(user=Depends(_auth)):
             "name": ch.get("name") or ch_id,
             "online": True,
             "username": f"[{ch_type}]",
-            "is_default": bool(ch.get("is_default")),
+            "is_default": ch_id == default_channel_id,
             "is_builtin": False,
+            "type": str(ch.get("type") or ""),
         })
 
     plugins = [
@@ -606,7 +620,8 @@ async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
     bot_id = str(body.get("bot_id") or "").strip()
     if not plugin_id:
         raise HTTPException(status_code=400, detail="缺少 plugin_id")
-    if registry.get_meta(plugin_id) is None:
+    meta = registry.get_meta(plugin_id)
+    if meta is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     # 校验每个渠道 ID：Telegram bot 或 NOTIFICATION_CHANNELS 中的渠道都合法
     if bot_id:
@@ -615,16 +630,22 @@ async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
         import config.config as _cfg_mod
         cfg_data = _cfg_mod.load()
         valid_channels = {
-            str(ch.get("id") or "").strip()
+            str(ch.get("id") or "").strip(): str(ch.get("type") or "").strip()
             for ch in (cfg_data.get("NOTIFICATION_CHANNELS") or [])
-            if isinstance(ch, dict) and ch.get("id")
+            if isinstance(ch, dict) and ch.get("id") and ch.get("enabled")
         }
-        valid = valid_bots | valid_channels
+        channel_types = {bot_id: "telegram" for bot_id in valid_bots}
+        channel_types.update(valid_channels)
+        valid = set(channel_types)
         # 支持逗号分隔的多渠道
         ids = [i.strip() for i in bot_id.split(",") if i.strip()]
         invalid = [i for i in ids if i not in valid]
         if invalid:
             raise HTTPException(status_code=400, detail=f"渠道不存在：{', '.join(invalid)}")
+        if meta.scope in {"bot", "both"}:
+            unsupported = [i for i in ids if channel_types.get(i) != "telegram"]
+            if unsupported:
+                raise HTTPException(status_code=400, detail="机器人插件只能使用 Telegram 通知渠道")
     registry.set_bot_choice(plugin_id, bot_id)
     runtime = _get_runtime()
     if runtime.is_loaded(plugin_id):
@@ -730,6 +751,11 @@ async def login_submit_password(body: Dict[str, Any], user=Depends(_auth)):
 # 敏感字段：读取时打码，仅当前端传回非打码值才更新
 _SECRET_FIELDS = ("API_HASH", "BOT_TOKEN")
 _MASK = "********"
+_CHANNEL_SECRET_FIELDS = {
+    "telegram": {"token"},
+    "wechat": {"secret", "token", "aes_key"},
+    "bark": {"device_key"},
+}
 
 
 def _mask(val: str) -> str:
@@ -739,12 +765,68 @@ def _mask(val: str) -> str:
     return _MASK
 
 
+def _clean_notification_channels(value: Any, current: Any,
+                                  legacy_settings: Optional[dict[str, Any]] = None) -> list[dict[str, Any]]:
+    """清洗通知渠道，并把前端传回的打码密钥替换成原值。
+
+    插件与渠道的对应关系只保存在插件路由中，避免两份数据互相覆盖。
+    """
+    old_channels = {
+        str(item.get("id") or ""): item
+        for item in (current or []) if isinstance(item, dict)
+    }
+    cleaned: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    has_default = False
+    for item in value or []:
+        if not isinstance(item, dict):
+            continue
+        channel_id = str(item.get("id") or "").strip()
+        channel_type = str(item.get("type") or "").strip()
+        if (not channel_id or channel_id in seen_ids
+                or channel_type not in _CHANNEL_SECRET_FIELDS):
+            continue
+        if channel_id == "default" and channel_type != "telegram":
+            continue
+        seen_ids.add(channel_id)
+        raw_config = item.get("config") or {}
+        channel_config = dict(raw_config) if isinstance(raw_config, dict) else {}
+        old_config = old_channels.get(channel_id, {}).get("config") or {}
+        for field in _CHANNEL_SECRET_FIELDS[channel_type]:
+            value_now = channel_config.get(field, "")
+            if value_now == _MASK or (isinstance(value_now, str) and _MASK in value_now):
+                original = old_config.get(field, "")
+                # 第一次从旧 Bot 配置迁移时，新渠道尚无原值，需按相同 id 回填旧 Token。
+                if not original and field == "token" and channel_type == "telegram" and legacy_settings:
+                    if channel_id == "default":
+                        original = legacy_settings.get("BOT_TOKEN", "")
+                    else:
+                        original = next((
+                            bot.get("token", "")
+                            for bot in legacy_settings.get("BOTS") or []
+                            if isinstance(bot, dict) and str(bot.get("id") or "") == channel_id
+                        ), "")
+                channel_config[field] = original
+        enabled = bool(item.get("enabled"))
+        is_default = bool(item.get("is_default")) and enabled and not has_default
+        has_default = has_default or is_default
+        cleaned.append({
+            "id": channel_id,
+            "name": str(item.get("name") or channel_id).strip() or channel_id,
+            "type": channel_type,
+            "enabled": enabled,
+            "is_default": is_default,
+            "config": channel_config,
+        })
+    return cleaned
+
+
 @app.get("/api/settings")
 async def get_settings_api(user=Depends(_auth)):
     """读取平台设置（敏感字段打码）"""
     import config.config as cfg
     data = cfg.load()
-    out = dict(data)
+    out = copy.deepcopy(data)
     for f in _SECRET_FIELDS:
         out[f] = _mask(data.get(f, ""))
     # proxy 密码打码
@@ -753,6 +835,24 @@ async def get_settings_api(user=Depends(_auth)):
             out["proxy_set"]["proxy"]["password"] = _MASK
     except Exception:  # noqa: BLE001
         pass
+    # 通知渠道中的 Token、Secret 和设备密钥同样不得回显明文。
+    for channel in out.get("NOTIFICATION_CHANNELS") or []:
+        if not isinstance(channel, dict):
+            continue
+        channel_type = str(channel.get("type") or "")
+        channel_config = channel.get("config") or {}
+        if not isinstance(channel_config, dict):
+            continue
+        for field in _CHANNEL_SECRET_FIELDS.get(channel_type, set()):
+            if channel_config.get(field):
+                channel_config[field] = _MASK
+        channel_id = str(channel.get("id") or "").strip()
+        channel["plugins"] = [
+            meta.id for meta in registry.scan()
+            if channel_id in {
+                item.strip() for item in registry.get_bot_choice(meta.id).split(",") if item.strip()
+            }
+        ]
     # DB 密码打码
     try:
         if out.get("DB_INFO", {}).get("password"):
@@ -804,6 +904,10 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
                 v.setdefault("proxy", {})["password"] = current.get("proxy_set", {}).get("proxy", {}).get("password", "")
         if k == "DB_INFO" and isinstance(v, dict) and v.get("password") == _MASK:
             v["password"] = current.get("DB_INFO", {}).get("password", "")
+        if k == "NOTIFICATION_CHANNELS" and isinstance(v, list):
+            v = _clean_notification_channels(
+                v, current.get("NOTIFICATION_CHANNELS"), legacy_settings=current,
+            )
         # 插件仓库只接受公开地址，忽略旧客户端传来的 token 等额外字段。
         if k == "PLUGIN_REPOS" and isinstance(v, list):
             cleaned_repos = []
@@ -837,7 +941,7 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             v = cleaned_bots
         merged[k] = v
 
-    merged["BOT_NAME"] = str(merged.get("BOT_NAME") or "").strip() or "默认 Bot"
+    merged["BOT_NAME"] = str(merged.get("BOT_NAME") or "").strip() or "主要通知渠道"
     merged["DEFAULT_BOT_ID"] = cfg.normalize_default_bot_id(
         merged.get("DEFAULT_BOT_ID"), merged.get("BOTS")
     )
@@ -855,7 +959,7 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
         logger.info("日志清理设置已更新")
 
     bot_sync = None
-    bot_keys = {"BOT_TOKEN", "BOT_NAME", "DEFAULT_BOT_ID", "BOTS"}
+    bot_keys = {"BOT_TOKEN", "BOT_NAME", "DEFAULT_BOT_ID", "BOTS", "NOTIFICATION_CHANNELS"}
     bot_changed = any(current.get(key) != merged.get(key) for key in bot_keys)
     connection_base_changed = any(current.get(key) != merged.get(key) for key in ("API_ID", "API_HASH", "proxy_set"))
 
@@ -885,8 +989,29 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启平台后生效"}
             logger.warning("Bot 设置热更新失败，将在重启后生效: %r", e)
 
-    # 被删除的 Bot 若有插件路由指向它，回退默认 Bot；连接变化时统一重挂插件。
+    # 被删除或停用的通知渠道必须立即从插件路由中移除。
     routing_changed = False
+    if "NOTIFICATION_CHANNELS" in incoming:
+        old_channel_ids = {
+            str(channel.get("id") or "").strip()
+            for channel in current.get("NOTIFICATION_CHANNELS") or []
+            if isinstance(channel, dict) and channel.get("id")
+        }
+        new_channel_ids = {
+            str(channel.get("id") or "").strip()
+            for channel in merged.get("NOTIFICATION_CHANNELS") or []
+            if isinstance(channel, dict) and channel.get("enabled") and channel.get("id")
+        }
+        unavailable_ids = old_channel_ids - new_channel_ids
+        affected: set[str] = set()
+        for channel_id in unavailable_ids:
+            affected.update(registry.purge_bot(channel_id))
+        if affected:
+            routing_changed = True
+            logger.info("%d 个通知渠道已停用或删除，已同步更新 %d 个插件路由",
+                        len(unavailable_ids), len(affected))
+
+    # 兼容旧 Bot 配置：被删除的 Bot 若有插件路由指向它，同样移除该项。
     if "BOTS" in incoming:
         try:
             old_ids = {b.get("id") for b in (current.get("BOTS") or []) if isinstance(b, dict)}

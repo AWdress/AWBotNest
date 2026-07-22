@@ -57,6 +57,8 @@ def _load_bots_config() -> list[dict]:
     for ch in channels:
         if not isinstance(ch, dict):
             continue
+        if not ch.get("enabled"):
+            continue
         ch_id = str(ch.get("id") or "").strip()
         ch_type = str(ch.get("type") or "").strip()
 
@@ -107,6 +109,23 @@ def _bots_from_settings(settings: dict) -> list[dict]:
             "name": str(bot.get("name") or bot_id).strip() or bot_id,
             "token": token,
         })
+    existing_ids = {bot["id"] for bot in bots}
+    for channel in settings.get("NOTIFICATION_CHANNELS") or []:
+        if not isinstance(channel, dict) or not channel.get("enabled"):
+            continue
+        if str(channel.get("type") or "").strip() != "telegram":
+            continue
+        channel_id = str(channel.get("id") or "").strip()
+        channel_config = channel.get("config") or {}
+        token = str(channel_config.get("token") or "").strip() if isinstance(channel_config, dict) else ""
+        if not channel_id or not token or channel_id in existing_ids:
+            continue
+        bots.append({
+            "id": channel_id,
+            "name": str(channel.get("name") or channel_id).strip() or channel_id,
+            "token": token,
+        })
+        existing_ids.add(channel_id)
     return bots
 
 
@@ -156,8 +175,10 @@ class AccountManager:
 
     def resolve_bot_id(self, bot_id: str | None = None) -> str:
         """返回实际使用的 Bot id；未指定或不存在时使用当前默认 Bot。"""
-        if bot_id and bot_id in self.bot_apps:
-            return bot_id
+        for candidate in str(bot_id or "").split(","):
+            candidate = candidate.strip()
+            if candidate and candidate in self.bot_apps:
+                return candidate
         return self.default_bot_id
 
     def get_bot(self, bot_id: str | None = None) -> Optional[Client]:

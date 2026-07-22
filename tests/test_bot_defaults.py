@@ -25,6 +25,7 @@ class BotDefaultTests(unittest.TestCase):
 
         self.assertEqual(accounts.get_bot(), "alerts-client")
         self.assertEqual(accounts.get_bot("default"), "builtin-client")
+        self.assertEqual(accounts.get_bot("missing,alerts"), "alerts-client")
         self.assertEqual(accounts.get_bot("missing"), "alerts-client")
 
     def test_default_extra_bot_uses_its_own_chat_id(self) -> None:
@@ -47,6 +48,17 @@ class BotDefaultTests(unittest.TestCase):
 
             registry.set_bot_choice("demo", "")
             self.assertEqual(registry.get_bot_choice("demo"), "")
+
+    def test_removing_one_channel_keeps_other_selected_channels(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = PluginRegistry(root / "plugins", root / "state.json")
+            registry.set_bot_choice("demo", "work,phone")
+
+            affected = registry.purge_bot("work")
+
+            self.assertEqual(affected, ["demo"])
+            self.assertEqual(registry.get_bot_choice("demo"), "phone")
 
 
 class FakeBot:

@@ -4,7 +4,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
-import { eventBus, EVENTS } from '../utils/eventBus'
+import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 
 const tab = ref('login')   // login | telegram | bots | web | proxy | db | maint
 
@@ -29,6 +29,8 @@ const dirty = computed(() => !!s.value && JSON.stringify(s.value) !== savedSnap.
 // 保存后需重启提示
 const restartHint = ref(false)
 const restarting = ref(false)
+const notificationSyncSource = `settings_${Math.random().toString(36).slice(2)}`
+let stopNotificationSync = null
 // 用户又开始改动时，隐藏“需重启”横幅（新改动得重新保存）
 watch(dirty, (d) => { if (d) restartHint.value = false })
 
@@ -58,7 +60,7 @@ async function load(silent = false) {
       if (s.value.BOT_TOKEN) {
         s.value.NOTIFICATION_CHANNELS.push({
           id: 'default',
-          name: s.value.BOT_NAME || '默认Bot',
+          name: s.value.BOT_NAME || '主要通知渠道',
           type: 'telegram',
           enabled: true,
           is_default: s.value.DEFAULT_BOT_ID === 'default',
@@ -111,32 +113,29 @@ function syncChannelsToOldBots() {
   s.value.DEFAULT_BOT_CHAT_ID = ''
   s.value.DEFAULT_BOT_ID = ''
 
-  // 找到默认渠道
-  const defaultChannel = s.value.NOTIFICATION_CHANNELS.find(ch => ch.is_default && ch.type === 'telegram')
+  const telegramChannels = s.value.NOTIFICATION_CHANNELS
+    .filter(ch => ch.type === 'telegram' && ch.enabled && ch.config?.token)
+  const builtinChannel = telegramChannels.find(ch => ch.id === 'default')
+  const defaultChannel = telegramChannels.find(ch => ch.is_default) || telegramChannels[0]
 
-  // 遍历所有Telegram渠道
-  s.value.NOTIFICATION_CHANNELS.forEach((ch) => {
-    if (ch.type !== 'telegram') return // 只处理Telegram类型
-
-    // 如果是默认渠道或者第一个渠道，设为主Bot
-    if (ch === defaultChannel || (!s.value.BOT_TOKEN && ch.enabled)) {
-      s.value.BOT_TOKEN = ch.config?.token || ''
-      s.value.BOT_NAME = ch.name || '默认Bot'
-      s.value.DEFAULT_BOT_CHAT_ID = ch.config?.chat_id || ''
-      s.value.DEFAULT_BOT_ID = ch.id
-    } else if (ch.enabled && ch.config?.token) {
-      // 其他渠道添加到BOTS数组
-      s.value.BOTS.push({
-        id: ch.id,
-        name: ch.name,
-        token: ch.config.token,
-        chat_id: ch.config?.chat_id || ''
-      })
-    }
+  // 只有 id=default 的渠道映射到内置 Bot，其余渠道保留自己的 id。
+  if (builtinChannel) {
+    s.value.BOT_TOKEN = builtinChannel.config.token
+    s.value.BOT_NAME = builtinChannel.name || '主要通知渠道'
+    s.value.DEFAULT_BOT_CHAT_ID = builtinChannel.config?.chat_id || ''
+  }
+  telegramChannels.forEach((ch) => {
+    if (ch.id === 'default') return
+    s.value.BOTS.push({
+      id: ch.id,
+      name: ch.name,
+      token: ch.config.token,
+      chat_id: ch.config?.chat_id || ''
+    })
   })
-
-  // 确保DEFAULT_BOT_ID有值
-  if (!s.value.DEFAULT_BOT_ID && s.value.BOT_TOKEN) {
+  if (defaultChannel) {
+    s.value.DEFAULT_BOT_ID = defaultChannel.id
+  } else if (builtinChannel) {
     s.value.DEFAULT_BOT_ID = 'default'
   }
 }
@@ -161,8 +160,12 @@ async function save() {
         : (r.bot_sync ? '已保存，Bot 设置已立即生效。' : '已保存。'))
     }
     // Bot 列表可能变化 → 刷新推送路由的可选项
-    if (tab.value === 'bots') loadRouting()
-  } catch (e) { toast.error('保存失败：' + e.message) } finally { saving.value = false }
+    if (tab.value === 'bots') await loadRouting()
+    return true
+  } catch (e) {
+    toast.error('保存失败：' + e.message)
+    return false
+  } finally { saving.value = false }
 }
 
 async function doRestart() {
@@ -340,8 +343,9 @@ function toggleAddMenu() {
   addMenuOpen.value = !addMenuOpen.value
 }
 
-function selectChannelType(type) {
+async function selectChannelType(type) {
   addMenuOpen.value = false
+  await loadRouting()
   channelModalMode.value = 'add'
   channelEditIndex.value = -1
   channelForm.value = {
@@ -353,12 +357,11 @@ function selectChannelType(type) {
     config: {},
     plugins: []  // 新增：选择的插件列表
   }
-  // 确保加载了插件列表
-  if (routing.value.plugins.length === 0) loadRouting()
   channelModalOpen.value = true
 }
 
-function openAddChannel() {
+async function openAddChannel() {
+  await loadRouting()
   channelModalMode.value = 'add'
   channelEditIndex.value = -1
   channelForm.value = {
@@ -370,12 +373,17 @@ function openAddChannel() {
     config: {},
     plugins: []  // 新增：选择的插件列表
   }
-  // 确保加载了插件列表
-  if (routing.value.plugins.length === 0) loadRouting()
   channelModalOpen.value = true
 }
 
-function openEditChannel(index) {
+function routedPluginsForChannel(channelId) {
+  return (routing.value.plugins || [])
+    .filter(plugin => (plugin.bot || '').split(',').map(id => id.trim()).includes(channelId))
+    .map(plugin => plugin.id)
+}
+
+async function openEditChannel(index) {
+  await loadRouting()
   channelModalMode.value = 'edit'
   channelEditIndex.value = index
   const ch = s.value.NOTIFICATION_CHANNELS[index]
@@ -384,11 +392,8 @@ function openEditChannel(index) {
   if (channelForm.value.is_default === undefined) {
     channelForm.value.is_default = false
   }
-  if (!Array.isArray(channelForm.value.plugins)) {
-    channelForm.value.plugins = []
-  }
-  // 确保加载了插件列表
-  if (routing.value.plugins.length === 0) loadRouting()
+  // 插件路由是唯一数据源，不读取渠道配置里可能残留的旧副本。
+  channelForm.value.plugins = routedPluginsForChannel(ch.id)
   channelModalOpen.value = true
 }
 
@@ -398,6 +403,8 @@ async function saveChannel() {
     return
   }
 
+  const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
+
   // 如果设为默认，取消其他渠道的默认状态
   if (channelForm.value.is_default) {
     s.value.NOTIFICATION_CHANNELS.forEach((ch, idx) => {
@@ -406,67 +413,70 @@ async function saveChannel() {
     })
   }
 
+  const routeSelection = [...(channelForm.value.plugins || [])]
+  const channel = JSON.parse(JSON.stringify(channelForm.value))
+  delete channel.plugins
+  if (!channel.enabled) channel.is_default = false
+
   if (channelModalMode.value === 'add') {
-    s.value.NOTIFICATION_CHANNELS.push(JSON.parse(JSON.stringify(channelForm.value)))
+    s.value.NOTIFICATION_CHANNELS.push(channel)
   } else {
-    s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = JSON.parse(JSON.stringify(channelForm.value))
+    s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = channel
   }
 
-  // 双向同步：先把路由全部保存到后端，再 save()，避免顺序问题
-  await syncChannelToRouting(channelForm.value)
-
-  channelModalOpen.value = false
-
-  // 保存设置到后端
-  await save()
-
-  // 重新拉一次路由，确保推送路由 UI 和后端一致
-  loadRouting()
+  // 新渠道必须先落库，路由接口才能识别；保存失败则恢复页面状态。
+  if (!await save()) {
+    s.value.NOTIFICATION_CHANNELS = originalChannels
+    return
+  }
+  try {
+    if (channel.enabled) {
+      await syncChannelToRouting({ ...channel, plugins: routeSelection })
+    }
+    await loadRouting()
+    await load(true)
+    channelModalOpen.value = false
+    publishNotificationSync({ source: notificationSyncSource, type: 'channels', channelId: channel.id })
+  } catch (e) {
+    await loadRouting()
+    toast.error('渠道已保存，但插件路由更新失败：' + e.message)
+  }
 }
 
 async function deleteChannel(index) {
-  if (!confirm(`确定删除通知渠道「${s.value.NOTIFICATION_CHANNELS[index].name}」？`)) return
-
-  const channelId = s.value.NOTIFICATION_CHANNELS[index].id
-
-  // 双向同步：从所有插件的路由中移除该渠道
-  routing.value.plugins.forEach(plugin => {
-    const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
-    const filteredChannels = currentChannels.filter(id => id !== channelId)
-    if (currentChannels.length !== filteredChannels.length) {
-      plugin.bot = filteredChannels.join(',')
-      syncRoutingToChannel(plugin.id, plugin.bot)  // 反向同步到渠道配置
-      api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
-    }
+  const channelName = s.value.NOTIFICATION_CHANNELS[index].name
+  const ok = await confirm({
+    title: '删除通知渠道',
+    message: `确定删除通知渠道「${channelName}」？`,
+    confirmText: '删除',
+    danger: true,
   })
+  if (!ok) return
 
+  const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
   s.value.NOTIFICATION_CHANNELS.splice(index, 1)
-
-  // 立即保存到后端
-  await save()
-  toast.success('已删除')
+  if (await save()) {
+    await loadRouting()
+    publishNotificationSync({ source: notificationSyncSource, type: 'channels' })
+    toast.success('已删除，相关插件路由已同步更新')
+  } else {
+    s.value.NOTIFICATION_CHANNELS = originalChannels
+  }
 }
 
 async function toggleChannel(index) {
+  const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
   s.value.NOTIFICATION_CHANNELS[index].enabled = !s.value.NOTIFICATION_CHANNELS[index].enabled
   const ch = s.value.NOTIFICATION_CHANNELS[index]
 
-  // 渠道被禁用时，清理所有指向该渠道的推送路由
   if (!ch.enabled) {
-    const channelId = ch.id
-    routing.value.plugins.forEach(plugin => {
-      const ids = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
-      const filtered = ids.filter(id => id !== channelId)
-      if (filtered.length !== ids.length) {
-        plugin.bot = filtered.join(',')
-        syncRoutingToChannel(plugin.id, plugin.bot)  // 反向同步到渠道配置
-        api.setBotRouting(plugin.id, plugin.bot).catch(() => {})
-      }
-    })
+    ch.is_default = false
   }
 
-  // 立即保存
-  await save()
+  if (await save()) {
+    await loadRouting()
+    publishNotificationSync({ source: notificationSyncSource, type: 'channels', channelId: ch.id })
+  } else s.value.NOTIFICATION_CHANNELS = originalChannels
 }
 
 function getChannelIcon(type) {
@@ -478,19 +488,12 @@ function getChannelTypeName(type) {
   return found ? found.label : type
 }
 
-// 获取所有通知渠道（用于推送路由选择）
-function getTelegramChannels() {
-  // 返回所有启用的渠道，不限类型
-  return (s.value.NOTIFICATION_CHANNELS || [])
-}
-
 // 根据插件标签获取可用渠道（机器人/双账号插件只能选Telegram）
 function getAvailableChannels(plugin) {
-  const allChannels = s.value.NOTIFICATION_CHANNELS || []
+  const allChannels = (s.value.NOTIFICATION_CHANNELS || []).filter(ch => ch.enabled)
 
   // 检查插件是否有特殊标签
-  const tags = plugin.tags || []
-  const requiresTelegramBot = tags.includes('机器人') || tags.includes('双账号')
+  const requiresTelegramBot = plugin.scope === 'bot' || plugin.scope === 'both'
 
   // 如果插件需要Bot功能，只返回Telegram渠道
   if (requiresTelegramBot) {
@@ -512,11 +515,8 @@ function getAvailablePluginsForChannel(channelType) {
   const allPlugins = routing.value.plugins || []
 
   // 如果是企业微信或Bark，排除需要Bot功能的插件
-  if (channelType === 'wecom' || channelType === 'bark') {
-    return allPlugins.filter(p => {
-      const tags = p.tags || []
-      return !tags.includes('机器人') && !tags.includes('双账号')
-    })
+  if (channelType === 'wechat' || channelType === 'bark') {
+    return allPlugins.filter(p => p.scope !== 'bot' && p.scope !== 'both')
   }
 
   // Telegram支持所有插件
@@ -562,7 +562,6 @@ async function syncChannelToRouting(channel) {
   const channelId = channel.id
   const selectedPlugins = channel.plugins || []
   const saves = []
-  const affectedPlugins = []
 
   routing.value.plugins.forEach(plugin => {
     const currentChannels = (plugin.bot || '').split(',').map(id => id.trim()).filter(Boolean)
@@ -577,63 +576,24 @@ async function syncChannelToRouting(channel) {
     }
 
     plugin.bot = currentChannels.join(',')
-    affectedPlugins.push({ pluginId: plugin.id, botId: plugin.bot })
     // 收集所有保存请求，统一 await
     saves.push(api.setBotRouting(plugin.id, plugin.bot))
   })
 
   // 等所有路由都保存完再返回
-  if (saves.length) await Promise.all(saves.map(p => p.catch(() => {})))
-
-  // 通知插件配置弹窗刷新渠道选择
-  affectedPlugins.forEach(({ pluginId, botId }) => {
-    eventBus.emit(EVENTS.BOT_ROUTING_CHANGED, { pluginId, botId })
-  })
-}
-
-// 双向同步：推送路由 → 渠道配置
-
-// 双向同步：推送路由 → 渠道配置
-function syncRoutingToChannel(pluginId, channelIds) {
-  // channelIds 是插件选择的渠道ID数组
-  const selectedChannelIds = channelIds.split(',').map(id => id.trim()).filter(Boolean)
-
-  // 更新所有渠道的plugins字段
-  s.value.NOTIFICATION_CHANNELS.forEach(channel => {
-    if (!Array.isArray(channel.plugins)) {
-      channel.plugins = []
-    }
-
-    const shouldInclude = selectedChannelIds.includes(channel.id)
-    const currentlyIncluded = channel.plugins.includes(pluginId)
-
-    if (shouldInclude && !currentlyIncluded) {
-      // 添加该插件
-      channel.plugins.push(pluginId)
-    } else if (!shouldInclude && currentlyIncluded) {
-      // 移除该插件
-      const idx = channel.plugins.indexOf(pluginId)
-      channel.plugins.splice(idx, 1)
-    }
-  })
+  if (saves.length) await Promise.all(saves)
 }
 
 // ── 通知推送路由（哪个插件推到哪个 Bot） ──
 const routing = ref({ bots: [], plugins: [] })
 const routingLoading = ref(false)
+const routeSaving = ref({})
 
 async function loadRouting() {
   routingLoading.value = true
   try { routing.value = await api.getBotsRouting() }
   catch (e) { toast.error('加载推送路由失败：' + e.message) }
   finally { routingLoading.value = false }
-}
-
-async function saveRouting(p) {
-  try {
-    await api.setBotRouting(p.id, p.bot || '')
-    toast.success(`「${p.name}」推送 Bot 已更新`)
-  } catch (e) { toast.error('保存失败：' + e.message); loadRouting() }
 }
 
 // 检查插件是否选中了某个渠道
@@ -647,6 +607,8 @@ function isChannelSelected(plugin, channelId) {
 
 // 切换插件的渠道选择（多选）
 async function togglePluginChannel(plugin, channelId) {
+  if (routeSaving.value[plugin.id]) return
+  routeSaving.value[plugin.id] = true
   const selected = plugin.bot || ''
   let ids = selected.split(',').map(id => id.trim()).filter(Boolean)
 
@@ -661,16 +623,11 @@ async function togglePluginChannel(plugin, channelId) {
   // 更新插件的bot字段
   plugin.bot = ids.join(',')
 
-  // 双向同步：更新渠道配置
-  syncRoutingToChannel(plugin.id, plugin.bot)
-
   // 保存到后端
   try {
     await api.setBotRouting(plugin.id, plugin.bot)
-    // 渠道配置已更新，立即保存
-    await save()
-    // 通知插件配置弹窗刷新
-    eventBus.emit(EVENTS.BOT_ROUTING_CHANGED, { pluginId: plugin.id, botId: plugin.bot })
+    await loadRouting()
+    publishNotificationSync({ source: notificationSyncSource, type: 'routing', pluginId: plugin.id })
     const channelNames = ids.map(id => {
       const ch = (s.value.NOTIFICATION_CHANNELS || []).find(c => c.id === id)
       return ch ? ch.name : id
@@ -678,8 +635,8 @@ async function togglePluginChannel(plugin, channelId) {
     toast.success(`「${plugin.name}」→ ${channelNames || '默认'}`)
   } catch (e) {
     toast.error('保存失败：' + e.message)
-    loadRouting()
-  }
+    await loadRouting()
+  } finally { routeSaving.value[plugin.id] = false }
 }
 
 // Bot 在线状态/用户名：取自 routing.bots（后端 list_bots，含 online/username）。
@@ -722,7 +679,31 @@ async function saveCred() {
   } catch (e) { credErr.value = e.message } finally { credBusy.value = false }
 }
 
-onMounted(() => { load(); loadUsername() })
+async function refreshNotificationSync(change) {
+  if (change.source === notificationSyncSource) return
+  if (change.type === 'channels') {
+    if (!dirty.value) {
+      await load(true)
+    } else {
+      // 只合并外部更新的通知字段，不覆盖本页其他尚未保存的设置。
+      const data = await api.getSettings()
+      const latest = data.settings || {}
+      for (const key of ['NOTIFICATION_CHANNELS', 'BOT_TOKEN', 'BOT_NAME', 'BOTS', 'DEFAULT_BOT_ID', 'DEFAULT_BOT_CHAT_ID']) {
+        s.value[key] = latest[key]
+      }
+    }
+  }
+  await loadRouting()
+  if (channelModalOpen.value && channelModalMode.value === 'edit') {
+    channelForm.value.plugins = routedPluginsForChannel(channelForm.value.id)
+  }
+}
+
+onMounted(() => {
+  load(); loadUsername()
+  stopNotificationSync = subscribeNotificationSync(refreshNotificationSync)
+})
+onUnmounted(() => stopNotificationSync?.())
 
 // 点击外部关闭添加渠道下拉菜单
 function handleClickOutside(e) {
@@ -735,15 +716,6 @@ function handleClickOutside(e) {
 }
 onMounted(() => document.addEventListener('click', handleClickOutside))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside))
-
-// 监听插件通知渠道变更事件，反向同步到渠道配置
-async function handleRoutingChanged(data) {
-  syncRoutingToChannel(data.pluginId, data.botId)
-  // 渠道配置已更新，立即保存到后端
-  await save()
-}
-onMounted(() => eventBus.on(EVENTS.BOT_ROUTING_CHANGED, handleRoutingChanged))
-onUnmounted(() => eventBus.off(EVENTS.BOT_ROUTING_CHANGED, handleRoutingChanged))
 
 // 未保存改动保护：刷新/关页 + 站内切换路由时提醒
 function beforeUnload(e) { if (dirty.value) { e.preventDefault(); e.returnValue = '' } }
@@ -925,6 +897,7 @@ onBeforeRouteLeave(async () => {
                     type="checkbox"
                     :checked="isChannelSelected(p, ch.id)"
                     @change="togglePluginChannel(p, ch.id)"
+                    :disabled="routeSaving[p.id]"
                   />
                   <span class="channel-label">
                     {{ ch.name }} <span class="channel-type-badge">{{ getChannelTypeName(ch.type) }}</span>
@@ -1201,24 +1174,6 @@ onBeforeRouteLeave(async () => {
                    placeholder="接收消息的用户、群组或频道 Chat ID" />
             <div class="hint muted small">接收消息通知的用户、群组或频道Chat ID</div>
           </div>
-          <div class="field">
-            <label>用户白名单（可选）</label>
-            <input class="input" v-model="channelForm.config.user_whitelist"
-                   placeholder="可使用Telegram机器人的用户ID列表，多个用,分隔" />
-            <div class="hint muted small">可使用Telegram机器人的用户ID清单，多个用户ID用,分隔，不填表示所有用户可用</div>
-          </div>
-          <div class="field">
-            <label>管理员白名单（可选）</label>
-            <input class="input" v-model="channelForm.config.admin_whitelist"
-                   placeholder="可管理菜单及命令的管理员用户ID列表，多个用,分隔" />
-            <div class="hint muted small">可使用管理菜单及命令的管理员用户ID列表，多个ID用,分隔</div>
-          </div>
-          <div class="field">
-            <label>代理API地址（可选）</label>
-            <input class="input" v-model="channelForm.config.api_proxy"
-                   placeholder="https://api.telegram.org" />
-            <div class="hint muted small">自定义代理API地址，格式：https://api.telegram.org</div>
-          </div>
         </template>
 
         <!-- 企业微信配置 -->
@@ -1245,25 +1200,13 @@ onBeforeRouteLeave(async () => {
             <label>代理地址（可选）</label>
             <input class="input" v-model="channelForm.config.proxy"
                    placeholder="https://qyapi.weixin.qq.com" />
-            <div class="hint muted small">微信消息发送代理地址，2022年6月20日后创建的应用才需要，不填代理则无法发送消息</div>
+            <div class="hint muted small">不填时使用企业微信官方地址；使用转发服务时填写服务根地址。</div>
           </div>
           <div class="field">
-            <label>Token（可选）</label>
-            <input class="input" v-model="channelForm.config.token"
-                   placeholder="微信企业自建应用->API接收消息配置中的Token" />
-            <div class="hint muted small">微信企业自建应用->API接收消息配置中的Token</div>
-          </div>
-          <div class="field">
-            <label>EncodingAESKey（可选）</label>
-            <input class="input" v-model="channelForm.config.aes_key"
-                   placeholder="微信企业自建应用->API接收消息配置中的EncodingAESKey" />
-            <div class="hint muted small">微信企业自建应用->API接收消息配置中的EncodingAESKey</div>
-          </div>
-          <div class="field">
-            <label>管理员白名单（可选）</label>
-            <input class="input" v-model="channelForm.config.admin_whitelist"
-                   placeholder="可使用管理菜单及命令的用户ID列表，多个用,分隔" />
-            <div class="hint muted small">可使用管理菜单及命令的用户ID列表，多个ID用,分隔</div>
+            <label>接收成员（可选）</label>
+            <input class="input" v-model="channelForm.config.touser"
+                   placeholder="@all" />
+            <div class="hint muted small">默认发送给全部成员；指定多个成员时用竖线分隔。</div>
           </div>
         </template>
 
@@ -1284,8 +1227,8 @@ onBeforeRouteLeave(async () => {
         </template>
       </div>
       <div class="modal-footer">
-        <button class="btn" @click="channelModalOpen = false">取消</button>
-        <button class="btn primary" @click="saveChannel">确认</button>
+        <button class="btn" @click="channelModalOpen = false" :disabled="saving">取消</button>
+        <button class="btn primary" @click="saveChannel" :disabled="saving">{{ saving ? '保存中…' : '确认' }}</button>
       </div>
     </div>
   </div>

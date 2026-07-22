@@ -51,7 +51,7 @@ if sys.platform != "win32":
 _cfg_json = os.path.join(_base, "data", "config.json")
 if not os.path.exists(_cfg_json) or os.path.getsize(_cfg_json) == 0:
     _tpl = {
-        "API_ID": 0, "API_HASH": "", "BOT_TOKEN": "", "BOT_NAME": "默认 Bot",
+        "API_ID": 0, "API_HASH": "", "BOT_TOKEN": "", "BOT_NAME": "主要通知渠道",
         "DEFAULT_BOT_ID": "default", "BOTS": [], "ACCOUNTS": [],
         "WEB_UI_URL": "", "WEB_UI_PORT": 18001,
         "proxy_set": {"proxy_enable": False,

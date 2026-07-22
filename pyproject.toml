@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "AWBotNest"
-version = "1.1.0.8"
+version = "1.1.0.10"
 description = "Telegram 自动化工具（六边形架构重构版）"
 requires-python = ">=3.13"
 

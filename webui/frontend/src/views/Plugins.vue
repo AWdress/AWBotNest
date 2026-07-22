@@ -5,8 +5,8 @@ import ConfigForm from '../components/ConfigForm.vue'
 import RemotePluginConfig from '../components/RemotePluginConfig.vue'
 import { confirm } from '../composables/confirm'
 import { toast } from '../composables/toast'
+import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 import logo from '../assets/logo.png'
-import { eventBus, EVENTS } from '../utils/eventBus'
 
 const tab = ref('mine')   // mine | store
 
@@ -31,6 +31,8 @@ const configBotLoading = ref(false)
 const configBotSaving = ref(false)
 const configBotReady = ref(false)
 let configBotRequestId = 0
+const notificationSyncSource = `plugins_${Math.random().toString(36).slice(2)}`
+let stopNotificationSync = null
 
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
@@ -166,10 +168,12 @@ async function loadConfigBot(pluginId) {
     const selectedStr = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
     configBots.value = data.bots || []
 
-    // 过滤掉默认渠道 ID：默认渠道已经是 fallback，不需要显式选中
-    const defaultIds = new Set(data.bots.filter(b => b.is_default).map(b => b.id))
+    const requiresTelegram = configTarget.value?.scope === 'bot' || configTarget.value?.scope === 'both'
+    const allowedIds = new Set(configBots.value
+      .filter(bot => !requiresTelegram || bot.type === 'telegram')
+      .map(bot => bot.id))
     const selected = selectedStr
-      ? selectedStr.split(',').map(s => s.trim()).filter(s => s && !defaultIds.has(s))
+      ? selectedStr.split(',').map(s => s.trim()).filter(id => id && allowedIds.has(id))
       : []
 
     configBotChoice.value = selected
@@ -193,7 +197,7 @@ async function saveConfigBot() {
     configBotChoice.value = saved
     configBotConfirmed.value = [...saved]
     api.clearCache()
-    eventBus.emit(EVENTS.BOT_ROUTING_CHANGED, { pluginId: configTarget.value.id, botId: data.bot || '' })
+    publishNotificationSync({ source: notificationSyncSource, type: 'routing', pluginId: configTarget.value.id })
     toast.success(`「${configTarget.value.name}」通知渠道已更新`)
   } catch (e) {
     configBotChoice.value = previous
@@ -205,6 +209,11 @@ async function saveConfigBot() {
 
 function configDefaultBotName() {
   return configBots.value.find((bot) => bot.is_default)?.name || '主要通知渠道'
+}
+
+function configAvailableBots() {
+  const requiresTelegram = configTarget.value?.scope === 'bot' || configTarget.value?.scope === 'both'
+  return requiresTelegram ? configBots.value.filter(bot => bot.type === 'telegram') : configBots.value
 }
 
 function toggleConfigBot(id) {
@@ -812,18 +821,16 @@ onMounted(() => {
   load(); loadStore(false)
   document.addEventListener('click', closeMenu)
   window.addEventListener('keydown', onSearchHotkey)
-  // 监听路由变更事件，刷新当前打开插件的渠道选择
-  eventBus.on(EVENTS.BOT_ROUTING_CHANGED, (data) => {
-    if (configOpen.value && configTarget.value?.id === data.pluginId) {
-      loadConfigBot(data.pluginId)
-    }
+  stopNotificationSync = subscribeNotificationSync((change) => {
+    if (change.source === notificationSyncSource || !configOpen.value || configBotSaving.value) return
+    loadConfigBot(configTarget.value.id)
   })
 })
 onUnmounted(() => {
   logsDisconnect()
+  stopNotificationSync?.()
   document.removeEventListener('click', closeMenu)
   window.removeEventListener('keydown', onSearchHotkey)
-  eventBus.off(EVENTS.BOT_ROUTING_CHANGED, () => {})
 })
 </script>
 
@@ -1208,21 +1215,22 @@ onUnmounted(() => {
           <div v-if="configBotLoading" class="muted small">正在读取…</div>
           <div v-else-if="!configBotReady" class="muted small">加载失败</div>
           <div v-else class="config-bot-checks">
-            <!-- 默认选项 -->
+            <!-- 空路由表示始终跟随平台当前默认渠道。 -->
             <label class="config-bot-item">
               <input type="checkbox"
                      :checked="configBotChoice.length === 0"
                      @change="configBotChoice = []; saveConfigBot()"
                      :disabled="configBotSaving" />
-              <span>默认（{{ configDefaultBotName() }}）</span>
+              <span>跟随默认（{{ configDefaultBotName() }}）</span>
             </label>
             <!-- 所有可用渠道 -->
-            <label v-for="bot in configBots.filter(b => !b.is_default)" :key="bot.id" class="config-bot-item">
+            <label v-for="bot in configAvailableBots()" :key="bot.id" class="config-bot-item">
               <input type="checkbox"
                      :checked="configBotChoice.includes(bot.id)"
                      @change="toggleConfigBot(bot.id)"
                      :disabled="configBotSaving" />
               <span>{{ bot.name || bot.id }}
+                <span v-if="bot.is_default" class="muted small">（当前默认）</span>
                 <span class="muted small">{{ bot.username ? bot.username : '' }}</span>
                 <span v-if="!bot.online" class="muted small">（离线）</span>
               </span>
