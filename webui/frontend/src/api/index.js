@@ -33,6 +33,24 @@ async function request(method, url, body) {
   return res.json()
 }
 
+let statusRequest = null
+let statusCache = null
+let statusCacheAt = 0
+
+async function getStatus() {
+  const now = Date.now()
+  if (statusCache && now - statusCacheAt < 1000) return statusCache
+  if (statusRequest) return statusRequest
+  statusRequest = request('GET', '/api/status')
+    .then((data) => {
+      statusCache = data
+      statusCacheAt = Date.now()
+      return data
+    })
+    .finally(() => { statusRequest = null })
+  return statusRequest
+}
+
 export const api = {
   // 鉴权
   authStatus: () => request('GET', '/api/auth/status'),
@@ -85,7 +103,8 @@ export const api = {
   },
 
   // 系统状态
-  status: () => request('GET', '/api/status'),
+  // 页面外壳和状态页可能同时读取状态，短时间内共用同一个请求。
+  status: getStatus,
 
   // 运行日志
   recentLogs: () => request('GET', '/api/logs/recent'),

@@ -3,11 +3,13 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import './styles/tokens.css'
 
-import Plugins from './views/Plugins.vue'
-import Accounts from './views/Accounts.vue'
-import Logs from './views/Logs.vue'
 import Status from './views/Status.vue'
-import Settings from './views/Settings.vue'
+
+// 首屏只加载默认状态页，其余页面在用户打开时再下载。
+const Plugins = () => import('./views/Plugins.vue')
+const Accounts = () => import('./views/Accounts.vue')
+const Logs = () => import('./views/Logs.vue')
+const Settings = () => import('./views/Settings.vue')
 
 const router = createRouter({
   // 用 hash 模式，避免后端路由配置；FastAPI 只需托管 index.html

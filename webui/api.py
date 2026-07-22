@@ -37,7 +37,7 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.0.10"
+APP_VERSION = "1.1.0.11"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -1485,6 +1485,16 @@ async def logs_ws(ws: WebSocket):
 
 
 # 挂载静态资源（前端构建产物）
+class ImmutableStaticFiles(StaticFiles):
+    """构建资源带内容指纹，可以安全使用长期缓存。"""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
 @app.on_event("startup")
 async def _mount_static():
     # 记录事件循环并安装日志流 handler
@@ -1495,7 +1505,7 @@ async def _mount_static():
 
     assets = STATIC_DIR / "assets"
     if assets.exists():
-        app.mount("/assets", StaticFiles(directory=str(assets)), name="assets")
+        app.mount("/assets", ImmutableStaticFiles(directory=str(assets)), name="assets")
 
 
 async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):

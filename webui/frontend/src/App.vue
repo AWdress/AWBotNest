@@ -33,8 +33,7 @@ async function onAuthed() {
     const st = await api.authStatus()
     mustChangePwd.value = !!st.must_change_password
   } catch { /* ignore */ }
-  ping()
-  checkUpdate()
+  ping().then(checkUpdate)
 }
 function logout() { setToken(''); authed.value = false; mustChangePwd.value = false }
 
@@ -155,7 +154,10 @@ const icons = {
 
 onMounted(() => {
   // 恢复登录态（localStorage 令牌）后补种资源 Cookie，确保能加载 vue 模式插件前端
-  if (authed.value) { api.ensureResourceToken().catch(() => {}); ping(); checkUpdate() }
+  if (authed.value) {
+    api.ensureResourceToken().catch(() => {})
+    ping().then(checkUpdate)
+  }
   setInterval(() => { if (authed.value) ping() }, 10000)
   // 查更新独立低频：每 6 小时一次，避免打满 GitHub 限流
   setInterval(() => { if (authed.value) checkUpdate() }, 6 * 3600 * 1000)

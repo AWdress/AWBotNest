@@ -38,14 +38,6 @@ export default defineConfig({
     // 性能优化配置
     rollupOptions: {
       output: {
-        // 手动分包：将大型库单独打包
-        manualChunks(id) {
-          // 将插件视图单独打包（Plugins.vue 文件较大）
-          if (id.includes('views/Plugins.vue')) {
-            return 'plugins-view'
-          }
-          // 其他视图保持默认行为
-        },
         // 使用内容哈希的文件名（更好的缓存控制）
         chunkFileNames: 'assets/js/[name]-[hash].js',
         entryFileNames: 'assets/js/[name]-[hash].js',
