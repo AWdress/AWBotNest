@@ -403,7 +403,7 @@ async function saveChannel() {
     return
   }
 
-  const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
+  const originalSettings = JSON.parse(JSON.stringify(s.value))
 
   // 如果设为默认，取消其他渠道的默认状态
   if (channelForm.value.is_default) {
@@ -424,9 +424,11 @@ async function saveChannel() {
     s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = channel
   }
 
-  // 新渠道必须先落库，路由接口才能识别；保存失败则恢复页面状态。
+  // 先关闭弹窗，让用户不用等待 Bot 连接和路由同步；失败时恢复并重新打开。
+  channelModalOpen.value = false
   if (!await save()) {
-    s.value.NOTIFICATION_CHANNELS = originalChannels
+    s.value = originalSettings
+    channelModalOpen.value = true
     return
   }
   try {
@@ -434,8 +436,6 @@ async function saveChannel() {
       await syncChannelToRouting({ ...channel, plugins: routeSelection })
     }
     await loadRouting()
-    await load(true)
-    channelModalOpen.value = false
     publishNotificationSync({ source: notificationSyncSource, type: 'channels', channelId: channel.id })
   } catch (e) {
     await loadRouting()
