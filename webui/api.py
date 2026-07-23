@@ -37,7 +37,7 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.0.12"
+APP_VERSION = "1.1.0.13"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -946,14 +946,19 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
     logger.info("平台设置已更新（config.json）")
 
     if "LOG_CLEANER" in incoming:
-        from libs.log_cleaner_settings import save_log_cleaner_settings
-        from schedulers.universal.log_cleaner import start_log_cleaner
-        save_log_cleaner_settings(incoming["LOG_CLEANER"])
-        await start_log_cleaner()
-        logger.info("日志清理设置已更新")
+        from libs.log_cleaner_settings import get_log_cleaner_settings
+        log_cleaner_changed = incoming["LOG_CLEANER"] != get_log_cleaner_settings()
+        if log_cleaner_changed:
+            from libs.log_cleaner_settings import save_log_cleaner_settings
+            from schedulers.universal.log_cleaner import start_log_cleaner
+            save_log_cleaner_settings(incoming["LOG_CLEANER"])
+            await start_log_cleaner()
+            logger.info("日志清理设置已更新")
 
     bot_sync = None
-    bot_keys = {"BOT_TOKEN", "BOT_NAME", "DEFAULT_BOT_ID", "BOTS", "NOTIFICATION_CHANNELS"}
+    # 通知渠道中的 Bark/企业微信配置不影响 Telegram Bot 连接。
+    # Telegram 渠道已由前端同步进 BOT_TOKEN/BOTS 等兼容字段。
+    bot_keys = {"BOT_TOKEN", "BOT_NAME", "DEFAULT_BOT_ID", "BOTS"}
     bot_changed = any(current.get(key) != merged.get(key) for key in bot_keys)
     connection_base_changed = any(current.get(key) != merged.get(key) for key in ("API_ID", "API_HASH", "proxy_set"))
 
@@ -1035,7 +1040,8 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             logger.warning("刷新代理环境变量失败: %r", e)
 
     # 插件仓库相关设置变更 → 重排轮询任务（即时生效，无需重启）
-    if any(k in incoming for k in ("PLUGIN_REPO_ENABLE", "PLUGIN_REPOS", "PLUGIN_REPO_INTERVAL")):
+    repo_keys = {"PLUGIN_REPO_ENABLE", "PLUGIN_REPOS", "PLUGIN_REPO_INTERVAL"}
+    if any(current.get(k) != merged.get(k) for k in repo_keys):
         try:
             from webui import repo_sync
             repo_sync.reschedule()
