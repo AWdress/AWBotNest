@@ -26,6 +26,7 @@ from core import config, logger
 from webui import auth as _authmod
 from webui.auth import require_auth as _auth
 from webui.auth import require_password_changed as _auth_pwc
+from webui.auth import require_api_key as _api_key
 from webui.backup import (
     BackupError,
     MAX_ARCHIVE_BYTES,
@@ -37,7 +38,7 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.1.3"
+APP_VERSION = "1.1.2.0"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -781,7 +782,7 @@ async def login_submit_password(body: Dict[str, Any], user=Depends(_auth)):
 # 平台设置（config.json 读写）
 # ──────────────────────────────────────────────
 # 敏感字段：读取时打码，仅当前端传回非打码值才更新
-_SECRET_FIELDS = ("API_HASH", "BOT_TOKEN")
+_SECRET_FIELDS = ("API_HASH", "BOT_TOKEN", "WEBHOOK_SECRET", "API_KEY")
 _MASK = "********"
 _CHANNEL_SECRET_FIELDS = {
     "telegram": {"token"},
@@ -1486,6 +1487,429 @@ async def recent_logs(user=Depends(_auth)):
     """返回最近若干条历史日志"""
     from webui import log_stream
     return {"logs": log_stream.recent_logs()}
+
+
+# ──────────────────────────────────────────────
+# 开放平台 API（/api/v1）—— 使用 API Key 鉴权
+# ──────────────────────────────────────────────
+
+# 1. 插件管理
+@app.get("/api/v1/plugins")
+async def api_list_plugins(user=Depends(_api_key)):
+    """列出所有插件（包含元数据、状态、配置 schema）"""
+    runtime = _get_runtime()
+    plugins = []
+    for meta in registry.list():
+        enabled = runtime.is_enabled(meta.id)
+        plugins.append({
+            "id": meta.id,
+            "name": meta.name,
+            "version": meta.version,
+            "author": meta.author,
+            "description": meta.description,
+            "scope": meta.scope,
+            "enabled": enabled,
+            "has_config": bool(meta.config_schema),
+            "webhook": bool(meta.webhook),
+        })
+    return {"plugins": plugins}
+
+
+@app.get("/api/v1/plugins/{plugin_id}")
+async def api_get_plugin(plugin_id: str, user=Depends(_api_key)):
+    """获取插件详情（元数据+状态+配置 schema）"""
+    meta = registry.get_meta(plugin_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    enabled = runtime.is_enabled(plugin_id)
+
+    return {
+        "id": meta.id,
+        "name": meta.name,
+        "version": meta.version,
+        "author": meta.author,
+        "description": meta.description,
+        "changelog": meta.changelog,
+        "scope": meta.scope,
+        "default_enabled": meta.default_enabled,
+        "enabled": enabled,
+        "config_schema": meta.config_schema or {},
+        "webhook": bool(meta.webhook),
+        "render_mode": meta.render_mode,
+    }
+
+
+@app.get("/api/v1/plugins/{plugin_id}/source")
+async def api_get_plugin_source(plugin_id: str, user=Depends(_api_key)):
+    """读取插件源代码"""
+    meta = registry.get_meta(plugin_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+
+    source_path = PLUGINS_DIR / f"{plugin_id}.py"
+    if not source_path.exists():
+        # 尝试目录包形式
+        source_path = PLUGINS_DIR / plugin_id / "__init__.py"
+
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="插件源代码文件不存在")
+
+    try:
+        source = source_path.read_text(encoding="utf-8")
+        return {
+            "plugin_id": plugin_id,
+            "path": str(source_path.relative_to(Path.cwd())),
+            "source": source,
+            "is_package": not source_path.name.endswith(f"{plugin_id}.py"),
+        }
+    except Exception as e:
+        logger.exception("读取插件源代码失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"读取失败：{e}") from e
+
+
+@app.put("/api/v1/plugins/{plugin_id}/source")
+async def api_update_plugin_source(plugin_id: str, body: Dict[str, Any], user=Depends(_api_key)):
+    """更新插件源代码并自动重载"""
+    meta = registry.get_meta(plugin_id)
+    if meta is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+
+    source = body.get("source", "")
+    if not source:
+        raise HTTPException(status_code=400, detail="source 字段不能为空")
+
+    source_path = PLUGINS_DIR / f"{plugin_id}.py"
+    if not source_path.exists():
+        source_path = PLUGINS_DIR / plugin_id / "__init__.py"
+
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="插件源代码文件不存在")
+
+    try:
+        # 写入新代码
+        source_path.write_text(source, encoding="utf-8")
+
+        # 如果插件已启用，重载它
+        runtime = _get_runtime()
+        if runtime.is_enabled(plugin_id):
+            await runtime.reload_plugin(plugin_id)
+            logger.info("插件代码已更新并重载: %s", plugin_id)
+            return {"ok": True, "message": "插件代码已更新并重载", "reloaded": True}
+        else:
+            logger.info("插件代码已更新（未启用，未重载）: %s", plugin_id)
+            return {"ok": True, "message": "插件代码已更新（未启用）", "reloaded": False}
+    except Exception as e:
+        logger.exception("更新插件源代码失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"更新失败：{e}") from e
+
+
+@app.post("/api/v1/plugins/{plugin_id}/enable")
+async def api_enable_plugin(plugin_id: str, user=Depends(_api_key)):
+    """启用插件"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    try:
+        await runtime.enable_plugin(plugin_id)
+        logger.info("插件已启用: %s", plugin_id)
+        return {"ok": True, "message": "插件已启用"}
+    except Exception as e:
+        logger.exception("启用插件失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"启用失败：{e}") from e
+
+
+@app.post("/api/v1/plugins/{plugin_id}/disable")
+async def api_disable_plugin(plugin_id: str, user=Depends(_api_key)):
+    """停用插件"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    try:
+        await runtime.disable_plugin(plugin_id)
+        logger.info("插件已停用: %s", plugin_id)
+        return {"ok": True, "message": "插件已停用"}
+    except Exception as e:
+        logger.exception("停用插件失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"停用失败：{e}") from e
+
+
+@app.post("/api/v1/plugins/{plugin_id}/reload")
+async def api_reload_plugin(plugin_id: str, user=Depends(_api_key)):
+    """重载插件（仅当已启用时生效）"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    if not runtime.is_enabled(plugin_id):
+        raise HTTPException(status_code=400, detail="插件未启用，无法重载")
+    try:
+        await runtime.reload_plugin(plugin_id)
+        logger.info("插件已重载: %s", plugin_id)
+        return {"ok": True, "message": "插件已重载"}
+    except Exception as e:
+        logger.exception("重载插件失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"重载失败：{e}") from e
+
+
+# 2. 插件配置
+@app.get("/api/v1/plugins/{plugin_id}/config")
+async def api_get_plugin_config(plugin_id: str, user=Depends(_api_key)):
+    """读取插件配置"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    config_data = runtime.get_plugin_config(plugin_id)
+    return {"plugin_id": plugin_id, "config": config_data}
+
+
+@app.put("/api/v1/plugins/{plugin_id}/config")
+async def api_update_plugin_config(plugin_id: str, body: Dict[str, Any], user=Depends(_api_key)):
+    """修改插件配置（局部合并）"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    config_patch = body.get("config", {})
+    try:
+        runtime.save_plugin_config(plugin_id, config_patch)
+        logger.info("插件配置已更新: %s", plugin_id)
+        return {"ok": True, "message": "配置已更新"}
+    except Exception as e:
+        logger.exception("更新插件配置失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"更新失败：{e}") from e
+
+
+# 3. 插件 KV 存储
+@app.get("/api/v1/plugins/{plugin_id}/kv")
+async def api_list_plugin_kv(plugin_id: str, user=Depends(_api_key)):
+    """列出插件 kv 存储的所有键"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    plugin_ctx = runtime.get_plugin_context(plugin_id)
+    if plugin_ctx is None:
+        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+    try:
+        keys = list(plugin_ctx.kv.keys())
+        return {"plugin_id": plugin_id, "keys": keys}
+    except Exception as e:
+        logger.exception("读取插件 kv 键列表失败: %s", plugin_id)
+        raise HTTPException(status_code=500, detail=f"读取失败：{e}") from e
+
+
+@app.get("/api/v1/plugins/{plugin_id}/kv/{key}")
+async def api_get_plugin_kv(plugin_id: str, key: str, user=Depends(_api_key)):
+    """读取插件 kv 存储的某个键"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    plugin_ctx = runtime.get_plugin_context(plugin_id)
+    if plugin_ctx is None:
+        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+    try:
+        value = plugin_ctx.kv.get(key, None)
+        if value is None:
+            raise HTTPException(status_code=404, detail="键不存在")
+        return {"plugin_id": plugin_id, "key": key, "value": value}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("读取插件 kv 键失败: %s/%s", plugin_id, key)
+        raise HTTPException(status_code=500, detail=f"读取失败：{e}") from e
+
+
+@app.put("/api/v1/plugins/{plugin_id}/kv/{key}")
+async def api_set_plugin_kv(plugin_id: str, key: str, body: Dict[str, Any], user=Depends(_api_key)):
+    """写入插件 kv 存储的某个键"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    plugin_ctx = runtime.get_plugin_context(plugin_id)
+    if plugin_ctx is None:
+        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+
+    if "value" not in body:
+        raise HTTPException(status_code=400, detail="请求体必须包含 value 字段")
+
+    try:
+        plugin_ctx.kv.set(key, body["value"])
+        logger.info("插件 kv 键已设置: %s/%s", plugin_id, key)
+        return {"ok": True, "message": "键值已设置"}
+    except Exception as e:
+        logger.exception("设置插件 kv 键失败: %s/%s", plugin_id, key)
+        raise HTTPException(status_code=500, detail=f"设置失败：{e}") from e
+
+
+@app.delete("/api/v1/plugins/{plugin_id}/kv/{key}")
+async def api_delete_plugin_kv(plugin_id: str, key: str, user=Depends(_api_key)):
+    """删除插件 kv 存储的某个键"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    runtime = _get_runtime()
+    plugin_ctx = runtime.get_plugin_context(plugin_id)
+    if plugin_ctx is None:
+        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+
+    try:
+        plugin_ctx.kv.delete(key)
+        logger.info("插件 kv 键已删除: %s/%s", plugin_id, key)
+        return {"ok": True, "message": "键已删除"}
+    except Exception as e:
+        logger.exception("删除插件 kv 键失败: %s/%s", plugin_id, key)
+        raise HTTPException(status_code=500, detail=f"删除失败：{e}") from e
+
+
+# 4. 消息发送
+@app.post("/api/v1/messages/send")
+async def api_send_message(body: Dict[str, Any], user=Depends(_api_key)):
+    """通过 bot 或 user 发送消息"""
+    chat_id = body.get("chat_id")
+    text = body.get("text", "")
+    sender = body.get("sender", "bot")  # "bot" 或 "user"
+    parse_mode = body.get("parse_mode")  # "HTML" / "Markdown" / None
+
+    if not chat_id:
+        raise HTTPException(status_code=400, detail="chat_id 不能为空")
+    if not text:
+        raise HTTPException(status_code=400, detail="text 不能为空")
+
+    accounts = _get_accounts()
+
+    try:
+        if sender == "bot":
+            bot = accounts.bot_app
+            if not bot:
+                raise HTTPException(status_code=503, detail="Bot 未连接")
+            msg = await bot.send_message(chat_id, text, parse_mode=parse_mode)
+        elif sender == "user":
+            apps = accounts.connected_user_apps
+            if not apps:
+                raise HTTPException(status_code=503, detail="没有已连接的用户账号")
+            user_app = apps[0]
+            msg = await user_app.send_message(chat_id, text, parse_mode=parse_mode)
+        else:
+            raise HTTPException(status_code=400, detail="sender 必须是 'bot' 或 'user'")
+
+        return {
+            "ok": True,
+            "message_id": msg.id,
+            "chat_id": msg.chat.id if msg.chat else chat_id,
+            "date": msg.date.isoformat() if msg.date else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("发送消息失败: chat_id=%s", chat_id)
+        raise HTTPException(status_code=500, detail=f"发送失败：{e}") from e
+
+
+# 5. 会话信息（复用已有逻辑，添加 v1 版本）
+@app.get("/api/v1/chats/{chat_id}")
+async def api_get_chat_info(chat_id: str, session: str = "", user=Depends(_api_key)):
+    """通过 chat_id 获取群组/频道/私聊的信息（使用 API Key 鉴权）"""
+    accounts = _get_accounts()
+    apps = accounts.connected_user_apps
+    if session:
+        app_client = next((a for a in apps if getattr(a, "name", None) == session), None)
+    else:
+        app_client = apps[0] if apps else None
+    if app_client is None:
+        raise HTTPException(status_code=409, detail="没有可用的已连接用户账号")
+
+    try:
+        cid = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+    except ValueError:
+        cid = chat_id
+
+    try:
+        chat = await app_client.get_chat(cid)
+        return {
+            "id": chat.id,
+            "title": _chat_title_of(chat),
+            "type": _chat_type_of(chat),
+        }
+    except Exception as e:
+        logger.exception("获取 chat 信息失败: %s", chat_id)
+        raise HTTPException(status_code=404, detail=f"获取会话信息失败：{e}") from e
+
+
+# 6. 账号状态
+@app.get("/api/v1/accounts")
+async def api_list_accounts(user=Depends(_api_key)):
+    """列出所有账号及在线状态"""
+    accounts = _get_accounts()
+    result = []
+
+    # Bot 账号
+    if accounts.bot_app:
+        bot = accounts.bot_app
+        result.append({
+            "type": "bot",
+            "session": "default",
+            "name": getattr(bot, "name", "Bot"),
+            "connected": getattr(bot, "is_connected", False),
+        })
+
+    # 用户账号
+    for app in accounts.user_apps:
+        result.append({
+            "type": "user",
+            "session": getattr(app, "name", ""),
+            "name": getattr(app, "name", ""),
+            "connected": getattr(app, "is_connected", False),
+        })
+
+    return {"accounts": result}
+
+
+# 7. 日志查询
+@app.get("/api/v1/logs")
+async def api_get_logs(limit: int = 100, user=Depends(_api_key)):
+    """获取平台最近日志"""
+    from webui import log_stream
+    logs = log_stream.recent_logs()
+    if limit > 0:
+        logs = logs[-limit:]
+    return {"logs": logs}
+
+
+@app.get("/api/v1/logs/plugins/{plugin_id}")
+async def api_get_plugin_logs(plugin_id: str, limit: int = 100, user=Depends(_api_key)):
+    """获取插件专属日志"""
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+
+    from webui import log_stream
+    all_logs = log_stream.recent_logs()
+
+    # 过滤出包含插件 id 的日志
+    plugin_logs = [
+        log for log in all_logs
+        if f"[{plugin_id}]" in log.get("message", "")
+    ]
+
+    if limit > 0:
+        plugin_logs = plugin_logs[-limit:]
+
+    return {"plugin_id": plugin_id, "logs": plugin_logs}
+
+
+# 8. 平台状态
+@app.get("/api/v1/status")
+async def api_get_platform_status(user=Depends(_api_key)):
+    """获取平台运行状态"""
+    accounts = _get_accounts()
+    runtime = _get_runtime()
+
+    enabled_plugins = [meta.id for meta in registry.list() if runtime.is_enabled(meta.id)]
+
+    return {
+        "version": APP_VERSION,
+        "bot_connected": accounts.bot_app is not None and getattr(accounts.bot_app, "is_connected", False),
+        "user_accounts_count": len(accounts.connected_user_apps),
+        "total_plugins": len(registry.list()),
+        "enabled_plugins": len(enabled_plugins),
+        "enabled_plugin_ids": enabled_plugins,
+    }
 
 
 @app.websocket("/api/logs/ws")

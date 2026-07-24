@@ -192,3 +192,38 @@ async def require_resource_access(
     if not _verify_token(resource):
         raise HTTPException(status_code=403, detail="无权访问插件资源（请重新登录）")
     return {"auth": True}
+
+
+# ──────────────────────────────────────────────
+# API Key 鉴权：给开放平台 API 使用
+# ──────────────────────────────────────────────
+def get_api_key() -> str:
+    """从 data/config.json 读取 API_KEY（未设置返回空字符串）"""
+    from core import config
+    return getattr(config, "API_KEY", "") or ""
+
+
+async def require_api_key(
+    x_api_key: str = Header(default="", alias="X-API-Key"),
+    api_key: str = Header(default="", alias="Api-Key"),  # 备选大小写
+):
+    """FastAPI 依赖：校验 API Key（从请求头 X-API-Key 或 Api-Key 读取）。
+    DEV_NO_AUTH 时放行。未配置 API_KEY 时拒绝访问。"""
+    if DEV_NO_AUTH:
+        return {"dev": True}
+
+    configured_key = get_api_key()
+    if not configured_key:
+        raise HTTPException(
+            status_code=503,
+            detail="API Key 未配置，请在系统设置中生成 API_KEY"
+        )
+
+    provided_key = x_api_key or api_key
+    if not provided_key or not hmac.compare_digest(provided_key, configured_key):
+        raise HTTPException(
+            status_code=401,
+            detail="API Key 无效或缺失"
+        )
+
+    return {"api_key": True}
