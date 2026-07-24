@@ -84,7 +84,7 @@ const sections = computed(() => {
 const hasFields = computed(() => Object.keys(props.schema).length > 0)
 
 // 大字段（多行文本 / 可增删表格 / 多选 / 会话选择 / 说明 / 按钮）占整行，
-// 其余短字段在大画布里自动并排成多列（参考 MoviePilot 的栅格表单）
+// 其余短字段在大画布里自动并排成多列（栅格表单布局）
 // 开发者也可以通过 cols 字段自定义列数（1-12）
 const WIDE_TYPES = ['text', 'list', 'multiselect', 'chat', 'info', 'action']
 function isWide(spec) {

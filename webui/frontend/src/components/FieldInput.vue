@@ -160,7 +160,7 @@ const infoText = computed(() => {
 
 const showHead = computed(() => props.spec.type !== 'action')
 
-// 框型单控件（文本/密码/数字/下拉/多行）用 outlined 浮动 label（贴近 MoviePilot）；
+// 框型单控件（文本/密码/数字/下拉/多行）用 outlined 浮动 label；
 // 其余（开关/滑块/多选/会话/列表/说明/按钮）保持 label 在上或各自样式
 const BOX_TYPES = ['string', 'password', 'number', 'select', 'text']
 const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
@@ -283,7 +283,7 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 .field-label { font-size: 13px; color: var(--text-secondary); }
 .field-help { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
-/* outlined 浮动 label（框型字段）：label 骑在控件左上边框缺口上、控件透明填充（参考 MoviePilot） */
+/* outlined 浮动 label（框型字段）：label 骑在控件左上边框缺口上、控件透明填充 */
 .field.box { position: relative; }
 .field.box .field-head {
   position: absolute; top: -8px; left: 9px; z-index: 1;
@@ -311,7 +311,7 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 .slider { width: 100%; accent-color: var(--accent); }
 .slider-val { font-size: 13px; color: var(--accent); font-weight: 600; }
 
-/* ── info → 蓝色提示条（参考 MoviePilot 的 alert）── */
+/* ── info → 蓝色提示条 ── */
 .info-box {
   display: flex; gap: 10px; align-items: flex-start;
   font-size: 13px; color: var(--text-secondary); line-height: 1.5;

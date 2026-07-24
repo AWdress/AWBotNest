@@ -1885,7 +1885,7 @@ onUnmounted(() => {
   z-index: 200;
 }
 .modal { --modal-pad: var(--gap-lg); width: 540px; max-width: 90vw; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-float); }
-/* 配置弹窗（vue 模式 + schema 模式）：参考 MoviePilot 给一块大而响应式的画布，
+/* 配置弹窗（vue 模式 + schema 模式）：大而响应式的画布，
    vue 由插件自己布局，schema 由平台表单栅格铺开
    （用固定大宽度而非 fit-content：vue 插件多用 100%/栅格布局，fit-content 会坍缩） */
 .modal-wide { width: 1000px; max-width: 92vw; }
@@ -2260,7 +2260,7 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .search-foot > span:first-child { display: none; }
   .config-routing-box { align-items: stretch; flex-direction: column; gap: 10px; }
   .config-bot-select { width: 100%; }
-  /* 窄屏照 MoviePilot 直接铺满视口（fullscreen）。
+  /* 窄屏直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
   .modal.modal-wide {
     width: 100vw !important; max-width: 100vw !important;
