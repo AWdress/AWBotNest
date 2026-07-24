@@ -4,7 +4,10 @@ kernel/notification_channels.py
 """
 from __future__ import annotations
 
+import html
+import re
 import time
+from html.parser import HTMLParser
 from typing import Any, Optional
 from core import logger
 
@@ -12,6 +15,124 @@ try:
     import httpx
 except ImportError:
     httpx = None
+
+
+class _TelegramHtmlToMarkdown(HTMLParser):
+    """把 Telegram 常用 HTML 标签转换成企业微信/Bark 可识别的基础 Markdown。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.links: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        tag = tag.lower()
+        attrs_dict = dict(attrs)
+        if tag in {"b", "strong"}:
+            self.parts.append("**")
+        elif tag in {"i", "em"}:
+            self.parts.append("*")
+        elif tag in {"s", "strike", "del"}:
+            self.parts.append("~~")
+        elif tag == "code":
+            self.parts.append("`")
+        elif tag == "pre":
+            self.parts.append("\n```\n")
+        elif tag == "a":
+            self.parts.append("[")
+            self.links.append(str(attrs_dict.get("href") or ""))
+        elif tag == "li":
+            self.parts.append("\n- ")
+        elif tag in {"br", "p", "div"}:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        tag = tag.lower()
+        if tag in {"b", "strong"}:
+            self.parts.append("**")
+        elif tag in {"i", "em"}:
+            self.parts.append("*")
+        elif tag in {"s", "strike", "del"}:
+            self.parts.append("~~")
+        elif tag == "code":
+            self.parts.append("`")
+        elif tag == "pre":
+            self.parts.append("\n```\n")
+        elif tag == "a":
+            url = self.links.pop() if self.links else ""
+            self.parts.append(f"]({url})" if url else "]")
+        elif tag in {"p", "div", "li"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
+
+    def markdown(self) -> str:
+        return "".join(self.parts)
+
+
+_HTML_TAG_RE = re.compile(
+    r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|br|p|div|li|ul|ol|blockquote|tg-spoiler)(?:\s[^>]*)?>",
+    re.IGNORECASE,
+)
+
+
+def _clean_spacing(text: str) -> str:
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _truncate_utf8(text: str, max_bytes: int) -> str:
+    """按渠道的字节限制截断，避免中文正文过长导致整条消息被拒绝。"""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    suffix = "\n…内容过长，已截断"
+    budget = max(0, max_bytes - len(suffix.encode("utf-8")))
+    clipped = encoded[:budget]
+    while clipped:
+        try:
+            return clipped.decode("utf-8") + suffix
+        except UnicodeDecodeError:
+            clipped = clipped[:-1]
+    return suffix.strip()
+
+
+def _to_markdown(message: str) -> str:
+    """识别 Telegram HTML，并转换为通用基础 Markdown。"""
+    text = str(message or "")
+    if _HTML_TAG_RE.search(text):
+        parser = _TelegramHtmlToMarkdown()
+        parser.feed(text)
+        parser.close()
+        text = parser.markdown()
+    else:
+        text = html.unescape(text)
+    # Telegram MarkdownV2 常用转义在其他渠道会显示反斜杠，转换时去掉。
+    text = re.sub(r"\\([_\-*\[\]()~`>#+=|{}.!])", r"\1", text)
+    return _clean_spacing(text)
+
+
+def _markdown_to_plain(markdown: str) -> str:
+    """为不支持富文本的旧渠道生成仍包含链接地址的纯文本。"""
+    text = markdown
+    text = re.sub(r"!\[([^]]*)\]\(([^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"\[([^]]+)\]\(([^)]+)\)", r"\1 (\2)", text)
+    text = re.sub(r"```(?:\w+)?\n?", "", text)
+    text = re.sub(r"(?<!\w)(?:\*\*|__|~~)(.+?)(?:\*\*|__|~~)(?!\w)", r"\1", text)
+    text = re.sub(r"(?<!\w)[*_](.+?)[*_](?!\w)", r"\1", text)
+    text = text.replace("`", "")
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", text)
+    text = re.sub(r"(?m)^\s*>\s?", "", text)
+    return _clean_spacing(text)
+
+
+def format_channel_message(message: str) -> tuple[str, str]:
+    """返回（基础 Markdown，纯文本），供非 Telegram 渠道选择。"""
+    markdown = _to_markdown(message)
+    return markdown, _markdown_to_plain(markdown)
 
 
 class NotificationChannel:
@@ -52,7 +173,7 @@ class WeChatWorkChannel(NotificationChannel):
         self.corpid = config.get("corpid", "")
         self.agentid = config.get("agentid", "")
         self.secret = config.get("secret", "")
-        self.touser = config.get("touser", "@all")
+        self.touser = str(config.get("touser") or "@all")
         self.base_url = str(config.get("proxy") or "https://qyapi.weixin.qq.com").rstrip("/")
 
     def _cache_key(self) -> str:
@@ -109,14 +230,18 @@ class WeChatWorkChannel(NotificationChannel):
             if not token:
                 return False
 
-            # 发送消息
+            markdown, plain = format_channel_message(message)
+            markdown = _truncate_utf8(markdown, 2000)
+            plain = _truncate_utf8(plain, 2000)
+
+            # 企业微信使用自身支持的 Markdown；若服务端不接受则退回纯文本。
             url = f"{self.base_url}/cgi-bin/message/send?access_token={token}"
             payload = {
                 "touser": self.touser,
-                "msgtype": "text",
+                "msgtype": "markdown",
                 "agentid": int(self.agentid),
-                "text": {
-                    "content": message
+                "markdown": {
+                    "content": markdown
                 },
                 "safe": 0
             }
@@ -128,9 +253,25 @@ class WeChatWorkChannel(NotificationChannel):
                 if data.get("errcode") == 0:
                     logger.info("企业微信通知发送成功")
                     return True
-                else:
-                    logger.error(f"企业微信通知发送失败: {data}")
-                    return False
+
+                fallback_payload = {
+                    "touser": self.touser,
+                    "msgtype": "text",
+                    "agentid": int(self.agentid),
+                    "text": {"content": plain},
+                    "safe": 0,
+                }
+                fallback_resp = await client.post(url, json=fallback_payload)
+                fallback_data = fallback_resp.json()
+                if fallback_data.get("errcode") == 0:
+                    logger.info("企业微信通知已用纯文本发送")
+                    return True
+
+                logger.error(
+                    "企业微信通知发送失败: markdown=%s, text=%s",
+                    data, fallback_data,
+                )
+                return False
 
         except Exception as e:
             logger.error(f"企业微信通知发送异常: {e}")
@@ -156,18 +297,21 @@ class BarkChannel(NotificationChannel):
             return False
 
         try:
-            # Bark API: https://api.day.app/{device_key}/{title}/{body}
-            # 将消息分割为标题和正文
-            lines = message.strip().split("\n", 1)
-            title = lines[0] if lines else "通知"
-            body = lines[1] if len(lines) > 1 else message
+            markdown, plain = format_channel_message(message)
+            markdown_lines = markdown.split("\n", 1)
+            plain_lines = plain.split("\n", 1)
+            title = plain_lines[0] if plain_lines and plain_lines[0] else "通知"
+            plain_body = plain_lines[1] if len(plain_lines) > 1 else title
+            markdown_body = markdown_lines[1] if len(markdown_lines) > 1 else markdown
 
-            # URL编码
-            from urllib.parse import quote
-            url = f"{self.server.rstrip('/')}/{self.device_key}/{quote(title)}/{quote(body)}"
+            # JSON 请求不会因正文里的链接、斜杠或特殊字符破坏 Bark 地址。
+            url = f"{self.server.rstrip('/')}/{self.device_key}"
+            payload = {"title": title, "body": plain_body}
+            if markdown_body != plain_body:
+                payload["markdown"] = markdown_body
 
             async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(url)
+                resp = await client.post(url, json=payload)
                 data = resp.json()
 
                 if data.get("code") == 200:

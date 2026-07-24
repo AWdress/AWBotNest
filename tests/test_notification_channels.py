@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from kernel import notifier
+from kernel import notification_channels
 from kernel.account_manager import _bots_from_settings
 from webui import api as web_api
 
@@ -11,6 +12,31 @@ class FakeClient:
     def __init__(self) -> None:
         self.is_connected = True
         self.send_message = AsyncMock(return_value=True)
+
+
+class FakeHttpResponse:
+    def __init__(self, data: dict):
+        self.data = data
+
+    def json(self) -> dict:
+        return self.data
+
+
+class FakeHttpClient:
+    def __init__(self, *responses: dict):
+        self.responses = list(responses)
+        self.posts = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def post(self, url, **kwargs):
+        self.posts.append((url, kwargs))
+        data = self.responses.pop(0) if self.responses else {"code": 200}
+        return FakeHttpResponse(data)
 
 
 class NotificationDeliveryTests(unittest.IsolatedAsyncioTestCase):
@@ -67,6 +93,72 @@ class NotificationDeliveryTests(unittest.IsolatedAsyncioTestCase):
 
         send.assert_not_awaited()
         user.send_message.assert_awaited_once()
+
+    def test_telegram_html_is_converted_for_other_channels(self) -> None:
+        markdown, plain = notification_channels.format_channel_message(
+            '<b>更新成功</b>\n<a href="https://example.com/a/b">查看详情</a> &amp; 完成'
+        )
+
+        self.assertIn("**更新成功**", markdown)
+        self.assertIn("[查看详情](https://example.com/a/b)", markdown)
+        self.assertIn("更新成功", plain)
+        self.assertIn("查看详情 (https://example.com/a/b)", plain)
+        self.assertNotIn("<b>", plain)
+
+    async def test_wechat_uses_converted_markdown(self) -> None:
+        channel = notification_channels.WeChatWorkChannel({
+            "corpid": "corp", "agentid": "1", "secret": "secret", "touser": "",
+        })
+        client = FakeHttpClient({"errcode": 0})
+
+        with (
+            patch.object(channel, "_get_access_token", AsyncMock(return_value="token")),
+            patch.object(notification_channels.httpx, "AsyncClient", return_value=client),
+        ):
+            result = await channel.send('<b>更新成功</b>\n<a href="https://example.com">详情</a>')
+
+        self.assertTrue(result)
+        payload = client.posts[0][1]["json"]
+        self.assertEqual(payload["msgtype"], "markdown")
+        self.assertEqual(payload["touser"], "@all")
+        self.assertIn("**更新成功**", payload["markdown"]["content"])
+        self.assertNotIn("<b>", payload["markdown"]["content"])
+
+    async def test_wechat_falls_back_to_plain_text(self) -> None:
+        channel = notification_channels.WeChatWorkChannel({
+            "corpid": "corp", "agentid": "1", "secret": "secret",
+        })
+        client = FakeHttpClient({"errcode": 40008}, {"errcode": 0})
+
+        with (
+            patch.object(channel, "_get_access_token", AsyncMock(return_value="token")),
+            patch.object(notification_channels.httpx, "AsyncClient", return_value=client),
+        ):
+            result = await channel.send('<b>更新成功</b>\n<a href="https://example.com">详情</a>')
+
+        self.assertTrue(result)
+        self.assertEqual(len(client.posts), 2)
+        fallback = client.posts[1][1]["json"]
+        self.assertEqual(fallback["msgtype"], "text")
+        self.assertIn("详情 (https://example.com)", fallback["text"]["content"])
+        self.assertNotIn("<b>", fallback["text"]["content"])
+
+    async def test_bark_uses_json_and_preserves_links(self) -> None:
+        channel = notification_channels.BarkChannel({
+            "server": "https://api.day.app", "device_key": "device-key",
+        })
+        client = FakeHttpClient({"code": 200})
+
+        with patch.object(notification_channels.httpx, "AsyncClient", return_value=client):
+            result = await channel.send(
+                '【通知】示例插件\n<b>更新成功</b>\n<a href="https://example.com/a/b">查看详情</a>'
+            )
+
+        self.assertTrue(result)
+        url, request = client.posts[0]
+        self.assertEqual(url, "https://api.day.app/device-key")
+        self.assertIn("https://example.com/a/b", request["json"]["markdown"])
+        self.assertIn("https://example.com/a/b", request["json"]["body"])
 
 
 class NotificationConfigTests(unittest.TestCase):
