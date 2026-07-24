@@ -418,7 +418,7 @@ GET /api/v1/status
 **响应示例**：
 ```json
 {
-  "version": "1.1.2.0",
+  "version": "1.1.2.1",
   "bot_connected": true,
   "user_accounts_count": 1,
   "total_plugins": 10,
@@ -511,6 +511,10 @@ curl -X POST \
 - **第三方集成**：将 AWBotNest 与其他系统集成，实现消息互通、数据同步等
 
 ## 更新日志
+
+### v1.1.2.1 (2026-07-24)
+
+- 优化插件开发文档，新增字段类型速查表和推荐排版规范
 
 ### v1.1.2.0 (2026-07-24)
 
