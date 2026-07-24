@@ -199,8 +199,8 @@ async def require_resource_access(
 # ──────────────────────────────────────────────
 def get_api_key() -> str:
     """从 data/config.json 读取 API_KEY（未设置返回空字符串）"""
-    from core import config
-    return getattr(config, "API_KEY", "") or ""
+    import config.config as cfg
+    return str(getattr(cfg, "API_KEY", "") or "").strip()
 
 
 async def require_api_key(

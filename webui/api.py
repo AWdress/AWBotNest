@@ -1500,7 +1500,8 @@ async def api_list_plugins(user=Depends(_api_key)):
     runtime = _get_runtime()
     plugins = []
     for meta in registry.list():
-        enabled = runtime.is_enabled(meta.id)
+        enabled = registry.is_enabled(meta.id)
+        loaded = runtime.is_loaded(meta.id)
         plugins.append({
             "id": meta.id,
             "name": meta.name,
@@ -1509,6 +1510,7 @@ async def api_list_plugins(user=Depends(_api_key)):
             "description": meta.description,
             "scope": meta.scope,
             "enabled": enabled,
+            "loaded": loaded,
             "has_config": bool(meta.config_schema),
             "webhook": bool(meta.webhook),
         })
@@ -1522,7 +1524,8 @@ async def api_get_plugin(plugin_id: str, user=Depends(_api_key)):
     if meta is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
-    enabled = runtime.is_enabled(plugin_id)
+    enabled = registry.is_enabled(plugin_id)
+    loaded = runtime.is_loaded(plugin_id)
 
     return {
         "id": meta.id,
@@ -1534,6 +1537,7 @@ async def api_get_plugin(plugin_id: str, user=Depends(_api_key)):
         "scope": meta.scope,
         "default_enabled": meta.default_enabled,
         "enabled": enabled,
+        "loaded": loaded,
         "config_schema": meta.config_schema or {},
         "webhook": bool(meta.webhook),
         "render_mode": meta.render_mode,
@@ -1590,15 +1594,15 @@ async def api_update_plugin_source(plugin_id: str, body: Dict[str, Any], user=De
         # 写入新代码
         source_path.write_text(source, encoding="utf-8")
 
-        # 如果插件已启用，重载它
+        # 如果插件已加载，重载它
         runtime = _get_runtime()
-        if runtime.is_enabled(plugin_id):
-            await runtime.reload_plugin(plugin_id)
+        if runtime.is_loaded(plugin_id):
+            await runtime.reload(plugin_id)
             logger.info("插件代码已更新并重载: %s", plugin_id)
             return {"ok": True, "message": "插件代码已更新并重载", "reloaded": True}
         else:
-            logger.info("插件代码已更新（未启用，未重载）: %s", plugin_id)
-            return {"ok": True, "message": "插件代码已更新（未启用）", "reloaded": False}
+            logger.info("插件代码已更新（未加载，未重载）: %s", plugin_id)
+            return {"ok": True, "message": "插件代码已更新（未加载）", "reloaded": False}
     except Exception as e:
         logger.exception("更新插件源代码失败: %s", plugin_id)
         raise HTTPException(status_code=500, detail=f"更新失败：{e}") from e
@@ -1611,7 +1615,7 @@ async def api_enable_plugin(plugin_id: str, user=Depends(_api_key)):
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
     try:
-        await runtime.enable_plugin(plugin_id)
+        await runtime.enable(plugin_id)
         logger.info("插件已启用: %s", plugin_id)
         return {"ok": True, "message": "插件已启用"}
     except Exception as e:
@@ -1626,7 +1630,7 @@ async def api_disable_plugin(plugin_id: str, user=Depends(_api_key)):
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
     try:
-        await runtime.disable_plugin(plugin_id)
+        await runtime.disable(plugin_id)
         logger.info("插件已停用: %s", plugin_id)
         return {"ok": True, "message": "插件已停用"}
     except Exception as e:
@@ -1636,14 +1640,14 @@ async def api_disable_plugin(plugin_id: str, user=Depends(_api_key)):
 
 @app.post("/api/v1/plugins/{plugin_id}/reload")
 async def api_reload_plugin(plugin_id: str, user=Depends(_api_key)):
-    """重载插件（仅当已启用时生效）"""
+    """重载插件（仅当已加载时生效）"""
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
-    if not runtime.is_enabled(plugin_id):
-        raise HTTPException(status_code=400, detail="插件未启用，无法重载")
+    if not runtime.is_loaded(plugin_id):
+        raise HTTPException(status_code=400, detail="插件未加载，无法重载")
     try:
-        await runtime.reload_plugin(plugin_id)
+        await runtime.reload(plugin_id)
         logger.info("插件已重载: %s", plugin_id)
         return {"ok": True, "message": "插件已重载"}
     except Exception as e:
@@ -1657,22 +1661,26 @@ async def api_get_plugin_config(plugin_id: str, user=Depends(_api_key)):
     """读取插件配置"""
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
-    runtime = _get_runtime()
-    config_data = runtime.get_plugin_config(plugin_id)
+    config_data = registry.get_config(plugin_id)
     return {"plugin_id": plugin_id, "config": config_data}
 
 
 @app.put("/api/v1/plugins/{plugin_id}/config")
 async def api_update_plugin_config(plugin_id: str, body: Dict[str, Any], user=Depends(_api_key)):
-    """修改插件配置（局部合并）"""
+    """修改插件配置（完整替换）并重载"""
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
-    runtime = _get_runtime()
-    config_patch = body.get("config", {})
+    config_values = body.get("config", {})
     try:
-        runtime.save_plugin_config(plugin_id, config_patch)
-        logger.info("插件配置已更新: %s", plugin_id)
-        return {"ok": True, "message": "配置已更新"}
+        registry.set_config(plugin_id, config_values)
+        runtime = _get_runtime()
+        if runtime.is_loaded(plugin_id):
+            await runtime.reload(plugin_id)
+            logger.info("插件配置已更新并重载: %s", plugin_id)
+            return {"ok": True, "message": "配置已更新并重载", "reloaded": True}
+        else:
+            logger.info("插件配置已更新（未加载）: %s", plugin_id)
+            return {"ok": True, "message": "配置已更新（插件未加载）", "reloaded": False}
     except Exception as e:
         logger.exception("更新插件配置失败: %s", plugin_id)
         raise HTTPException(status_code=500, detail=f"更新失败：{e}") from e
@@ -1685,11 +1693,11 @@ async def api_list_plugin_kv(plugin_id: str, user=Depends(_api_key)):
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
-    plugin_ctx = runtime.get_plugin_context(plugin_id)
-    if plugin_ctx is None:
-        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+    loaded = runtime._loaded.get(plugin_id)
+    if loaded is None:
+        raise HTTPException(status_code=503, detail="插件未加载，无法访问 kv 存储")
     try:
-        keys = list(plugin_ctx.kv.keys())
+        keys = list(loaded.ctx.kv.keys())
         return {"plugin_id": plugin_id, "keys": keys}
     except Exception as e:
         logger.exception("读取插件 kv 键列表失败: %s", plugin_id)
@@ -1702,11 +1710,11 @@ async def api_get_plugin_kv(plugin_id: str, key: str, user=Depends(_api_key)):
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
-    plugin_ctx = runtime.get_plugin_context(plugin_id)
-    if plugin_ctx is None:
-        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+    loaded = runtime._loaded.get(plugin_id)
+    if loaded is None:
+        raise HTTPException(status_code=503, detail="插件未加载，无法访问 kv 存储")
     try:
-        value = plugin_ctx.kv.get(key, None)
+        value = loaded.ctx.kv.get(key, None)
         if value is None:
             raise HTTPException(status_code=404, detail="键不存在")
         return {"plugin_id": plugin_id, "key": key, "value": value}
@@ -1723,15 +1731,15 @@ async def api_set_plugin_kv(plugin_id: str, key: str, body: Dict[str, Any], user
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
-    plugin_ctx = runtime.get_plugin_context(plugin_id)
-    if plugin_ctx is None:
-        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+    loaded = runtime._loaded.get(plugin_id)
+    if loaded is None:
+        raise HTTPException(status_code=503, detail="插件未加载，无法访问 kv 存储")
 
     if "value" not in body:
         raise HTTPException(status_code=400, detail="请求体必须包含 value 字段")
 
     try:
-        plugin_ctx.kv.set(key, body["value"])
+        loaded.ctx.kv.set(key, body["value"])
         logger.info("插件 kv 键已设置: %s/%s", plugin_id, key)
         return {"ok": True, "message": "键值已设置"}
     except Exception as e:
@@ -1745,12 +1753,12 @@ async def api_delete_plugin_kv(plugin_id: str, key: str, user=Depends(_api_key))
     if registry.get_meta(plugin_id) is None:
         raise HTTPException(status_code=404, detail="插件不存在")
     runtime = _get_runtime()
-    plugin_ctx = runtime.get_plugin_context(plugin_id)
-    if plugin_ctx is None:
-        raise HTTPException(status_code=503, detail="插件未启用或上下文不可用")
+    loaded = runtime._loaded.get(plugin_id)
+    if loaded is None:
+        raise HTTPException(status_code=503, detail="插件未加载，无法访问 kv 存储")
 
     try:
-        plugin_ctx.kv.delete(key)
+        loaded.ctx.kv.delete(key)
         logger.info("插件 kv 键已删除: %s/%s", plugin_id, key)
         return {"ok": True, "message": "键已删除"}
     except Exception as e:
@@ -1900,7 +1908,7 @@ async def api_get_platform_status(user=Depends(_api_key)):
     accounts = _get_accounts()
     runtime = _get_runtime()
 
-    enabled_plugins = [meta.id for meta in registry.list() if runtime.is_enabled(meta.id)]
+    enabled_plugins = [meta.id for meta in registry.list() if registry.is_enabled(meta.id)]
 
     return {
         "version": APP_VERSION,
