@@ -130,6 +130,38 @@ await ctx.bot.send_photo(chat_id, "url_or_path")
 
 > **多 Bot**：平台可配置多个 Bot，并在「系统设置 → 通知」为每个插件指定用哪个 Bot（默认=默认 Bot）。这对插件是**透明**的——`ctx.bot`、`ctx.notify`、`scope=bot` 的 handler 会自动走平台为本插件分配的 Bot，插件代码无需改动、也不要自己选 Bot。
 
+### 获取会话信息（群组名称）
+
+插件配置中存储的是群组 ID（如 `-100123456789`），要在界面上显示群组名称而非数字 ID 时，可以调用平台 API `/api/chats/{chat_id}`：
+
+```python
+import httpx
+
+async def get_chat_name(chat_id):
+    """通过 chat_id 获取群组/频道/私聊的名称"""
+    async with httpx.AsyncClient() as client:
+        # 平台 API，管理员登录态下可访问
+        resp = await client.get(
+            f"http://localhost:18001/api/chats/{chat_id}",
+            headers={"Authorization": f"Bearer {获取管理员令牌}"}
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["title"]  # 群组名称
+        return str(chat_id)  # 获取失败时回退显示 ID
+```
+
+**适用场景**：
+- Vue 模式插件需要在配置界面显示已保存的群组 ID 对应的名称
+- 定时任务通知中需要显示友好的群组名而非数字 ID
+- 验证用户输入的 chat_id 是否有效
+
+**注意事项**：
+- 此接口是**可选增强**，不影响核心功能
+- 需要管理员登录态（Vue 模式下通过 `host.callApi` 调用时自动携带令牌）
+- 查询失败时应有回退方案（如直接显示 ID）
+- 可以缓存结果避免重复查询
+
 ### 通知平台管理员
 
 监控、定时、告警类插件需向平台管理员推送时，调用 `ctx.notify` 提交给平台。平台负责分类、附加插件名与级别标签、统一格式与投递，插件无需关心收件人与格式。
