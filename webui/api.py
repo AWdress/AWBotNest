@@ -1513,11 +1513,13 @@ async def recent_logs(user=Depends(_auth)):
 @app.get("/api/v1/plugins")
 async def api_list_plugins(user=Depends(_api_key)):
     """列出所有插件（包含元数据、状态、配置 schema）"""
-    runtime = _get_runtime()
+    from kernel import state as kernel_state
+
     plugins = []
-    for meta in registry.list():
+    for meta in registry.scan():
         enabled = registry.is_enabled(meta.id)
-        loaded = runtime.is_loaded(meta.id)
+        # 平台未就绪时，loaded 状态无法获取
+        loaded = kernel_state.runtime.is_loaded(meta.id) if kernel_state.runtime else False
         plugins.append({
             "id": meta.id,
             "name": meta.name,
@@ -1530,7 +1532,7 @@ async def api_list_plugins(user=Depends(_api_key)):
             "has_config": bool(meta.config_schema),
             "webhook": bool(meta.webhook),
         })
-    return {"plugins": plugins}
+    return {"plugins": plugins, "platform_ready": kernel_state.runtime is not None}
 
 
 @app.get("/api/v1/plugins/{plugin_id}")
@@ -1860,6 +1862,12 @@ async def api_get_chat_info(chat_id: str, session: str = "", user=Depends(_api_k
 @app.get("/api/v1/accounts")
 async def api_list_accounts(user=Depends(_api_key)):
     """列出所有账号及在线状态"""
+    from kernel import state as kernel_state
+
+    # 平台未就绪时返回空列表
+    if kernel_state.accounts is None:
+        return {"accounts": [], "platform_ready": False}
+
     accounts = _get_accounts()
     result = []
 
@@ -1882,7 +1890,7 @@ async def api_list_accounts(user=Depends(_api_key)):
             "connected": getattr(app, "is_connected", False),
         })
 
-    return {"accounts": result}
+    return {"accounts": result, "platform_ready": True}
 
 
 # 7. 日志查询
@@ -1921,18 +1929,31 @@ async def api_get_plugin_logs(plugin_id: str, limit: int = 100, user=Depends(_ap
 @app.get("/api/v1/status")
 async def api_get_platform_status(user=Depends(_api_key)):
     """获取平台运行状态"""
-    accounts = _get_accounts()
-    runtime = _get_runtime()
+    from kernel import state as kernel_state
 
-    enabled_plugins = [meta.id for meta in registry.list() if registry.is_enabled(meta.id)]
+    # 平台未完全启动时返回部分状态
+    if kernel_state.accounts is None:
+        return {
+            "version": APP_VERSION,
+            "bot_connected": False,
+            "user_accounts_count": 0,
+            "total_plugins": len(registry.scan()),
+            "enabled_plugins": 0,
+            "enabled_plugin_ids": [],
+            "platform_ready": False,
+        }
+
+    accounts = _get_accounts()
+    enabled_plugins = [meta.id for meta in registry.scan() if registry.is_enabled(meta.id)]
 
     return {
         "version": APP_VERSION,
         "bot_connected": accounts.bot_app is not None and getattr(accounts.bot_app, "is_connected", False),
         "user_accounts_count": len(accounts.connected_user_apps),
-        "total_plugins": len(registry.list()),
+        "total_plugins": len(registry.scan()),
         "enabled_plugins": len(enabled_plugins),
         "enabled_plugin_ids": enabled_plugins,
+        "platform_ready": True,
     }
 
 
