@@ -21,6 +21,7 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.background import BackgroundTask
+from pyrogram.errors import PeerIdInvalid
 
 from core import config, logger
 from webui import auth as _authmod
@@ -906,12 +907,15 @@ async def get_settings_api(user=Depends(_auth)):
     return {"settings": out}
 
 
-@app.put("/api/settings")
-async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
+# 安全考虑：禁用通过 API 修改系统设置
+# @app.put("/api/settings")
+async def put_settings_api_disabled(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """
-    保存平台设置到 config.json。打码值（未改动）保留原值。
+    [已禁用] 保存平台设置到 config.json。打码值（未改动）保留原值。
     敏感凭据变更需重启平台生效，返回 restart_required。
+    出于安全考虑，此端点已被禁用。请通过 Web UI 或直接编辑配置文件修改设置。
     """
+    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
     import config.config as cfg
     incoming = body.get("settings") or body
     if not isinstance(incoming, dict):
@@ -1088,10 +1092,13 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
     return {"status": "success", "restart_required": restart_required, "bot_sync": bot_sync}
 
 
-@app.post("/api/system/restart")
-async def restart_platform(user=Depends(_auth_pwc)):
-    """重启平台。容器(restart:always)下进程退出会被自动拉起；
-    裸跑需外部进程守护(systemd/supervisor)才能自动重启。"""
+# 安全考虑：禁用系统重启 API
+# @app.post("/api/system/restart")
+async def restart_platform_disabled(user=Depends(_auth_pwc)):
+    """[已禁用] 重启平台。容器(restart:always)下进程退出会被自动拉起；
+    裸跑需外部进程守护(systemd/supervisor)才能自动重启。
+    出于安全考虑，此端点已被禁用。请通过服务器直接重启服务。"""
+    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
     import asyncio as _aio
     import os as _os
 
@@ -1194,9 +1201,12 @@ async def clean_logs_now(user=Depends(_auth)):
         raise HTTPException(status_code=500, detail=f"清理失败: {e}") from e
 
 
-@app.post("/api/settings/test_proxy")
-async def test_proxy(body: Dict[str, Any], user=Depends(_auth)):
-    """用提交的 proxy_set 试连一次外网。返回 {ok, message}，不抛异常（失败也是 200）。"""
+# 安全考虑：禁用代理测试 API
+# @app.post("/api/settings/test_proxy")
+async def test_proxy_disabled(body: Dict[str, Any], user=Depends(_auth)):
+    """[已禁用] 用提交的 proxy_set 试连一次外网。返回 {ok, message}，不抛异常（失败也是 200）。
+    出于安全考虑，此端点已被禁用。请通过 Web UI 或配置文件测试代理。"""
+    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
     import config.config as cfg
     ps = (body or {}).get("proxy_set") or body or {}
     cur = cfg.load()
@@ -1226,9 +1236,12 @@ async def test_proxy(body: Dict[str, Any], user=Depends(_auth)):
         return {"ok": False, "message": f"代理连接失败：{e.__class__.__name__}: {e}"}
 
 
-@app.post("/api/settings/test_db")
-async def test_db(body: Dict[str, Any], user=Depends(_auth)):
-    """用提交的 DB_INFO 试连一次数据库。返回 {ok, message}，不抛异常（失败也是 200）。"""
+# 安全考虑：禁用数据库测试 API
+# @app.post("/api/settings/test_db")
+async def test_db_disabled(body: Dict[str, Any], user=Depends(_auth)):
+    """[已禁用] 用提交的 DB_INFO 试连一次数据库。返回 {ok, message}，不抛异常（失败也是 200）。
+    出于安全考虑，此端点已被禁用。请通过 Web UI 或配置文件测试数据库连接。"""
+    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
     import asyncio as _aio
     from urllib.parse import quote_plus
     import config.config as cfg
@@ -1579,9 +1592,15 @@ async def api_get_plugin_source(plugin_id: str, user=Depends(_api_key)):
 
     try:
         source = source_path.read_text(encoding="utf-8")
+        # 尝试相对路径，失败则使用绝对路径
+        try:
+            display_path = str(source_path.relative_to(Path.cwd()))
+        except ValueError:
+            display_path = str(source_path)
+
         return {
             "plugin_id": plugin_id,
-            "path": str(source_path.relative_to(Path.cwd())),
+            "path": display_path,
             "source": source,
             "is_package": not source_path.name.endswith(f"{plugin_id}.py"),
         }
@@ -1590,9 +1609,13 @@ async def api_get_plugin_source(plugin_id: str, user=Depends(_api_key)):
         raise HTTPException(status_code=500, detail=f"读取失败：{e}") from e
 
 
-@app.put("/api/v1/plugins/{plugin_id}/source")
-async def api_update_plugin_source(plugin_id: str, body: Dict[str, Any], user=Depends(_api_key)):
-    """更新插件源代码并自动重载"""
+# 安全考虑：禁用通过 API 修改插件源码
+# @app.put("/api/v1/plugins/{plugin_id}/source")
+async def api_update_plugin_source_disabled(plugin_id: str, body: Dict[str, Any], user=Depends(_api_key)):
+    """[已禁用] 更新插件源代码并自动重载
+    出于安全考虑，此端点已被禁用。修改插件源码相当于远程代码执行。
+    请通过 Web UI 或直接编辑插件文件修改代码。"""
+    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
     meta = registry.get_meta(plugin_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="插件不存在")
@@ -1788,6 +1811,8 @@ async def api_delete_plugin_kv(plugin_id: str, key: str, user=Depends(_api_key))
 @app.post("/api/v1/messages/send")
 async def api_send_message(body: Dict[str, Any], user=Depends(_api_key)):
     """通过 bot 或 user 发送消息"""
+    import asyncio
+
     chat_id = body.get("chat_id")
     text = body.get("text", "")
     sender = body.get("sender", "bot")  # "bot" 或 "user"
@@ -1805,13 +1830,21 @@ async def api_send_message(body: Dict[str, Any], user=Depends(_api_key)):
             bot = accounts.bot_app
             if not bot:
                 raise HTTPException(status_code=503, detail="Bot 未连接")
-            msg = await bot.send_message(chat_id, text, parse_mode=parse_mode)
+            # 添加 10 秒超时
+            msg = await asyncio.wait_for(
+                bot.send_message(chat_id, text, parse_mode=parse_mode),
+                timeout=10.0
+            )
         elif sender == "user":
             apps = accounts.connected_user_apps
             if not apps:
                 raise HTTPException(status_code=503, detail="没有已连接的用户账号")
             user_app = apps[0]
-            msg = await user_app.send_message(chat_id, text, parse_mode=parse_mode)
+            # 添加 10 秒超时
+            msg = await asyncio.wait_for(
+                user_app.send_message(chat_id, text, parse_mode=parse_mode),
+                timeout=10.0
+            )
         else:
             raise HTTPException(status_code=400, detail="sender 必须是 'bot' 或 'user'")
 
@@ -1821,6 +1854,17 @@ async def api_send_message(body: Dict[str, Any], user=Depends(_api_key)):
             "chat_id": msg.chat.id if msg.chat else chat_id,
             "date": msg.date.isoformat() if msg.date else None,
         }
+    except asyncio.TimeoutError:
+        logger.error("发送消息超时: chat_id=%s", chat_id)
+        raise HTTPException(status_code=504, detail=f"发送消息超时（可能是 chat_id 不存在或网络问题）")
+    except PeerIdInvalid:
+        # Pyrogram 无法解析 chat_id（不存在或无权访问）
+        logger.error("Chat ID 无效或不存在: chat_id=%s", chat_id)
+        raise HTTPException(status_code=404, detail=f"Chat ID 无效或不存在：{chat_id}")
+    except KeyError as e:
+        # Pyrogram resolve_peer 失败（chat_id 不存在）
+        logger.error("Chat ID 不存在或无法解析: chat_id=%s, error=%s", chat_id, e)
+        raise HTTPException(status_code=404, detail=f"Chat ID 不存在或无法解析：{chat_id}")
     except HTTPException:
         raise
     except Exception as e:
