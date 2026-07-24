@@ -6,14 +6,23 @@
   python scripts/update_version.py 1.2.3.4
 
 功能：
-  1. 更新 VERSION 文件
-  2. 更新 CHANGELOG.md（添加新版本占位符）
-  3. 更新 docs/API.md（添加新版本占位符）
-  4. webui/api.py 和 webui/frontend/package.json 会自动从 VERSION 文件读取
+  1. 更新 VERSION 文件（单一真值源）
+  2. 更新 pyproject.toml
+  3. 更新 webui/frontend/package.json（通过 sync-version.js）
+  4. 更新 CHANGELOG.md（添加新版本占位符）
+  5. 更新 docs/API.md（添加新版本占位符）
+
+注意：
+  - webui/api.py 会在运行时自动从 VERSION 文件读取版本号
+  - package.json 通过 npm install 时自动运行 sync-version.js 同步
 """
 import sys
+import io
 from pathlib import Path
 from datetime import datetime
+
+# 修复 Windows 控制台编码问题
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
 
 def update_version(new_version: str):
@@ -74,7 +83,19 @@ def update_version(new_version: str):
                 api_doc_file.write_text(content, encoding="utf-8")
                 print(f"✓ 已在 docs/API.md 中添加 v{new_version} 占位符")
 
-    # 4. 同步 package.json（运行前端同步脚本）
+    # 4. 更新 pyproject.toml
+    pyproject_file = root / "pyproject.toml"
+    if pyproject_file.exists():
+        content = pyproject_file.read_text(encoding="utf-8")
+        lines = content.split("\n")
+        for i, line in enumerate(lines):
+            if line.startswith("version = "):
+                lines[i] = f'version = "{new_version}"'
+                break
+        pyproject_file.write_text("\n".join(lines), encoding="utf-8")
+        print(f"✓ 已更新 pyproject.toml 版本号")
+
+    # 5. 同步 package.json（运行前端同步脚本）
     frontend_dir = root / "webui" / "frontend"
     sync_script = frontend_dir / "sync-version.js"
     if sync_script.exists():
