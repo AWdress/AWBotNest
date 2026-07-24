@@ -9,13 +9,16 @@ FROM node:22-slim AS frontend
 # 镜像内镜像仓库布局，使 vite 的 outDir=../static 落到 /webui/static
 WORKDIR /webui/frontend
 
+# 先拷 VERSION 文件（供 sync-version.js 读取）
+COPY VERSION /VERSION
+
 # 先拷依赖清单，利用层缓存。
 # 故意只拷 package.json、不拷 package-lock.json：lock 文件在 Windows 生成，
 # 其可选依赖树缺 Linux 平台的原生包（rollup/esbuild 的 *-linux-* 二进制），
 # 一旦带入，npm 在 Linux 上会漏装这些原生包，导致 vite 构建报
 # "Cannot find module @rollup/rollup-linux-x64-gnu"。
 # 不带 lock 让 npm install 按 Linux 平台重新解析，跨平台构建才稳。
-COPY webui/frontend/package.json ./
+COPY webui/frontend/package.json webui/frontend/sync-version.js ./
 RUN npm install
 
 # 拷前端源码并构建（vite.config outDir=../static → /webui/static）
