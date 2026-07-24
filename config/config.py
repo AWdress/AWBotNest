@@ -38,6 +38,9 @@ _DEFAULTS: dict[str, Any] = {
     # 平台级 webhook 密钥：外部服务 POST /api/v1/webhook?apikey=<此值> 即可把内容
     # 推给平台管理员（经默认 Bot，回退主账号收藏夹）。留空=关闭平台 webhook。
     "WEBHOOK_SECRET": "",
+    # 开放平台 API 密钥：第三方工具调用 /api/v1/* 接口时需携带此密钥验证身份。
+    # 留空=关闭开放平台 API。在系统设置中生成。
+    "API_KEY": "",
     # 通知渠道配置（支持多个通知渠道）
     # 每项：{"id": "<唯一id>", "name": "<名称>", "type": "telegram|wechat|bark", "enabled": bool, "config": {...}}
     "NOTIFICATION_CHANNELS": [],
