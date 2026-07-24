@@ -2,7 +2,7 @@
 kernel/browser.py
 平台级浏览器自动化能力，供插件通过 ctx.browser 使用（无需自己装浏览器）。
 
-引擎选择（参考 MoviePilot 的做法）：
+引擎选择：
 - 优先 CloakBrowser（停用 Chromium，过 Cloudflare/指纹检测），是 Playwright 的 drop-in 替代。
 - CloakBrowser 不可用（未装成/内核未下载）时自动回退平台内置的 Playwright Chromium。
 
@@ -102,7 +102,7 @@ def _ensure_cloakbrowser_sync() -> None:
             logger.warning("cloakbrowser 安装异常，浏览器将回退 Playwright：%r", e)
             return
 
-    # 2) 下载 CloakBrowser 内核（等价 MoviePilot 的 `python -m cloakbrowser install`）。
+    # 2) 下载 CloakBrowser 内核（等价 `python -m cloakbrowser install`）。
     #    HOME 已在 main.py 指向 data/browser_cache，内核落在卷内、可持久化。
     #    PYTHONPATH 必须带上 plugin_deps，否则子进程找不到刚 --target 装的 cloakbrowser。
     try:

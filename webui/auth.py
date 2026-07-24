@@ -156,7 +156,7 @@ async def require_password_changed(authorization: str = Header(default="")):
 # 资源 Cookie：给「静态资源类」请求鉴权
 #
 # 插件 Vue 模式的前端产物由浏览器 ESM 动态 import 加载，import 无法附带
-# Authorization 头，故沿用 MoviePilot 的思路——登录时下发一个资源 Cookie，
+# Authorization 头，故采用资源 Cookie 方案——登录时下发一个资源 Cookie，
 # 同源请求浏览器会自动带上，用它给 /api/plugins/<id>/fe/ 这类静态资源鉴权。
 # Cookie 值即登录令牌（改用户名/密码后自动失效），HttpOnly 使 JS 读不到。
 # ──────────────────────────────────────────────

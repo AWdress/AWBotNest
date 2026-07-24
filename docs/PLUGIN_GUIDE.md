@@ -338,6 +338,27 @@ async def setup(ctx):
 
 平台依据字段类型在前端自动生成配置表单，对应插件卡片的「配置」入口。
 
+### 常用字段类型速查
+
+| 类型 | 适用场景 | 示例 |
+|------|---------|-----|
+| `boolean` | 开关功能 | 启用自动回复、记录日志 |
+| `string` | 短文本输入 | 关键词、API地址、用户名 |
+| `password` | 敏感信息 | API密钥、Token、密码 |
+| `number` | 精确数值 | 端口号、重试次数、ID |
+| **`slider`** | **有范围的数值调节** | **延迟秒数、音量、透明度、百分比** |
+| `select` | 单选下拉 | 模式选择（编辑/回复）、日志级别 |
+| `multiselect` | 多选标签 | 通知类型、过滤标签、启用的功能 |
+| `text` | 多行长文本 | 消息模板、脚本、JSON配置 |
+| `list` | 可增删的列表 | 规则列表、白名单、定时任务 |
+| `chat` | 会话选择器 | 转发到的群组、通知频道 |
+| `info` | 只读说明 | 使用提示、当前状态显示 |
+| `action` | 操作按钮 | 测试连接、立即执行、清空缓存 |
+
+> **提示**：数值范围调节优先用 `slider` 而非 `number`——用户体验更直观，尤其是百分比、延迟、等级这类有明确上下限的参数。
+
+### 完整示例
+
 ```python
 "config_schema": {
     "enable_x":    {"type": "boolean", "default": True,  "label": "启用X功能", "section": "功能开关"},
@@ -399,13 +420,28 @@ async def setup(ctx):
 
 ### 表单布局控制
 
-配置弹窗采用 **12 列栅格系统**（桌面约 1000px 宽，窄屏自动全屏），插件开发者可以通过 `cols` 和 `order` 精确控制字段排版：
+配置弹窗采用 **12 列栅格系统**（桌面约 1000px 宽，窄屏自动全屏），插件开发者可以通过 `cols` 和 `order` 精确控制字段排版。
 
 **自动布局（默认）**：
 - 未指定 `cols` 时，大字段（`text`/`list`/`multiselect`/`chat`）自动占 12 列（整行）
 - 短字段（`string`/`password`/`number`/`boolean`/`select`/`slider`）自动占 6 列（半行，两两并排）
 
-**自定义布局**：
+**推荐排版规范**：
+```python
+"config_schema": {
+    # ✅ 推荐：所有开关并排在最上面（用 cols 控制），配合 order 确保优先显示
+    "enable_plugin": {"type": "boolean", "label": "启用插件", "cols": 3, "order": 1, "section": "功能开关"},
+    "auto_delete":   {"type": "boolean", "label": "自动删除", "cols": 3, "order": 2, "section": "功能开关"},
+    "send_notify":   {"type": "boolean", "label": "发送通知", "cols": 3, "order": 3, "section": "功能开关"},
+    "debug_mode":    {"type": "boolean", "label": "调试模式", "cols": 3, "order": 4, "section": "功能开关"},
+    
+    # 其他参数字段跟在后面（order 从 10 开始，给开关预留空间）
+    "api_key":       {"type": "password", "label": "API密钥", "order": 10, "section": "基本配置"},
+    "interval":      {"type": "slider", "label": "间隔(分钟)", "min": 1, "max": 60, "default": 10, "order": 11, "section": "基本配置"},
+}
+```
+
+**自定义布局示例**：
 ```python
 "config_schema": {
     # 三个字段并排成一行（每个占 4 列，即三分之一行）

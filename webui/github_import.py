@@ -9,7 +9,7 @@ webui/github_import.py
 
 列插件优先级（list_plugins）：
   A. 仓库根/子目录有 manifest.json（或 manifest.v2.json）→ 读清单，渲染插件市场
-     （名称/版本/作者/图标/描述/入口路径），MoviePilot 风格。
+     （名称/版本/作者/图标/描述/入口路径）。
   B. 无清单 → 回退目录扫描：列 plugins/ 或根目录下的 .py 单文件
      与 <id>/__init__.py 文件夹插件。
 
