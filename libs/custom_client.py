@@ -142,6 +142,10 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
             if peer_id_int and not self._is_peer_invalid(peer_id_int):
                 self._add_invalid_peer(peer_id_int)
             raise
+        except (AttributeError, KeyError):
+            # Pyrogram 内部 resolve_peer 失败时可能抛出 AttributeError 或 KeyError
+            # 将其转换为标准的 PeerIdInvalid 异常
+            raise PeerIdInvalid()
 
     async def get_messages(self, *args, **kwargs):
         """
