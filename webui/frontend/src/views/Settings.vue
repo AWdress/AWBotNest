@@ -6,16 +6,14 @@ import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 
-const tab = ref('login')   // login | telegram | bots | web | proxy | db | maint
+const tab = ref('login')   // login | notify | api | system | maint
 
 const TABS = [
-  { key: 'login',    label: '控制台登录' },
-  { key: 'telegram', label: 'Telegram 凭据' },
-  { key: 'bots',     label: '通知' },
-  { key: 'web',      label: 'Web 控制台' },
-  { key: 'proxy',    label: '运行代理' },
-  { key: 'db',       label: '数据库' },
-  { key: 'maint',    label: '维护' },
+  { key: 'login',  label: '安全认证' },
+  { key: 'notify', label: '通知推送' },
+  { key: 'api',    label: '开放接口' },
+  { key: 'system', label: '系统配置' },
+  { key: 'maint',  label: '维护' },
 ]
 
 const s = ref(null)
@@ -264,6 +262,28 @@ async function onRestoreFile(e) {
     toast.error('恢复失败：' + err.message)
   } finally {
     restoreBusy.value = false
+  }
+}
+
+// ── 日志清理 ──
+const cleaningLogs = ref(false)
+
+async function cleanLogsNow() {
+  const ok = await confirm({
+    title: '立即清理日志',
+    message: `将清理平台日志和所有插件日志，每个日志保留最近 ${s.value.LOG_CLEANER.keep_lines} 条。确认执行？`,
+    confirmText: '确认清理',
+  })
+  if (!ok) return
+
+  cleaningLogs.value = true
+  try {
+    await api.cleanLogs()
+    toast.success('日志已清理完成')
+  } catch (err) {
+    toast.error('清理日志失败：' + err.message)
+  } finally {
+    cleaningLogs.value = false
   }
 }
 
@@ -790,9 +810,9 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- Telegram 凭据 -->
-      <div v-show="tab === 'telegram'" class="card">
+      <div v-show="tab === 'login'" class="card" style="margin-top:16px">
         <div class="card-title">Telegram 凭据</div>
-        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知」页配置。敏感值显示为打码，不改就留着。</div>
+        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知推送」页配置。敏感值显示为打码，不改就留着。</div>
         <div class="grid2">
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
@@ -802,7 +822,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 通知渠道 -->
-      <div v-show="tab === 'bots'" class="card">
+      <div v-show="tab === 'notify'" class="card">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
           设置消息发送渠道参数
@@ -882,7 +902,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 推送路由 -->
-      <div v-show="tab === 'bots'" class="card" style="margin-top:16px">
+      <div v-show="tab === 'notify'" class="card" style="margin-top:16px">
         <div class="card-title">推送路由</div>
         <div class="hint muted small" style="margin-bottom:12px">
           选择每个插件的通知发到哪个渠道；选择立即生效（无需保存设置）。未单独选择时使用当前默认渠道。
@@ -918,8 +938,8 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 平台 Webhook -->
-      <div v-show="tab === 'bots'" class="card" style="margin-top:16px">
-        <div class="card-title">平台 Webhook</div>
+      <div v-show="tab === 'api'" class="card">
+        <div class="card-title">Webhook 入站</div>
         <div class="hint muted small" style="margin-bottom:12px">
           外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
           平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
@@ -938,8 +958,8 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 开放平台 API -->
-      <div v-show="tab === 'bots'" class="card">
-        <div class="card-title">开放平台 API</div>
+      <div v-show="tab === 'api'" class="card" style="margin-top:16px">
+        <div class="card-title">REST API</div>
         <div class="hint muted small" style="margin-bottom:12px">
           第三方工具（如 AI 助手、自动化脚本）可通过 API 远程管理平台和插件。
           请求时需携带此密钥验证身份。留空=关闭 API。改动随「保存设置」生效。
@@ -966,7 +986,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- Web 控制台 -->
-      <div v-show="tab === 'web'" class="card">
+      <div v-show="tab === 'system'" class="card">
         <div class="card-title">Web 控制台</div>
         <div class="grid2">
           <div class="field"><label>监听端口 (WEB_UI_PORT)</label>
@@ -978,7 +998,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 运行代理 -->
-      <div v-show="tab === 'proxy'" class="card">
+      <div v-show="tab === 'system'" class="card" style="margin-top:16px">
         <div class="card-title">运行代理</div>
         <div class="row between">
           <span>启用代理</span>
@@ -1018,7 +1038,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 数据库 -->
-      <div v-show="tab === 'db'" class="card">
+      <div v-show="tab === 'system'" class="card" style="margin-top:16px">
         <div class="card-title">数据库</div>
         <div class="grid2">
           <div class="field"><label>类型</label>
@@ -1079,6 +1099,12 @@ onBeforeRouteLeave(async () => {
                 <label>每个日志保留条数</label>
                 <input class="input" type="number" min="1" max="1000" v-model.number="s.LOG_CLEANER.keep_lines" />
               </div>
+            </div>
+            <div style="margin-top:12px">
+              <button class="btn sm" @click="cleanLogsNow" :disabled="cleaningLogs">
+                {{ cleaningLogs ? '清理中…' : '立即清理日志' }}
+              </button>
+              <span v-if="cleaningLogs" class="muted small" style="margin-left:8px">正在清理，请稍候…</span>
             </div>
           </div>
 
