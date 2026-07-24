@@ -16,6 +16,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
+try:
+    import httpx
+except ImportError:
+    httpx = None
+
 from core import logger
 from webui import github_import
 
@@ -361,6 +366,101 @@ async def sync_once() -> dict[str, Any]:
 
 
 # ──────────────────────────────────────────────
+# 自动发现插件仓库
+# ──────────────────────────────────────────────
+async def discover_and_add_repos() -> dict[str, Any]:
+    """
+    自动发现 GitHub 上的插件仓库：
+    1. fork 了官方仓库的项目
+    2. 名为 AWBotNest-Plugins 的所有仓库
+    检查是否有 manifest.json，有的话自动添加到插件仓库列表中。
+    """
+    import config.config as cfg
+
+    added: list[str] = []
+    errors: list[str] = []
+    candidates: set[str] = set()
+
+    if httpx is None:
+        errors.append("httpx 未安装，无法发现仓库")
+        return {"ok": False, "added": added, "errors": errors}
+
+    try:
+        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
+            from webui.github_import import _headers, _proxy
+
+            # 方式1：列出官方仓库的所有 forks
+            try:
+                url = f"https://api.github.com/repos/{OFFICIAL_REPO}/forks"
+                params = {"per_page": 100, "sort": "newest"}
+                resp = await client.get(url, headers=_headers(), params=params, timeout=30)
+                resp.raise_for_status()
+                forks = resp.json()
+                for fork in forks:
+                    if isinstance(fork, dict) and fork.get("full_name"):
+                        candidates.add(fork["full_name"])
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"获取 fork 列表失败: {e}")
+
+            # 方式2：搜索所有名为 AWBotNest-Plugins 的仓库
+            try:
+                search_url = "https://api.github.com/search/repositories"
+                search_params = {"q": "AWBotNest-Plugins in:name", "per_page": 100}
+                resp = await client.get(search_url, headers=_headers(), params=search_params, timeout=30)
+                resp.raise_for_status()
+                search_result = resp.json()
+                for repo in search_result.get("items", []):
+                    if isinstance(repo, dict) and repo.get("full_name"):
+                        candidates.add(repo["full_name"])
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"搜索仓库失败: {e}")
+
+            # 检查每个候选仓库是否有 manifest.json
+            existing_repos = {r.get("url", "").casefold() for r in (getattr(cfg, "PLUGIN_REPOS", None) or [])}
+
+            for full_name in candidates:
+                # 跳过官方仓库本身
+                if full_name.casefold() == OFFICIAL_REPO.casefold():
+                    continue
+
+                # 跳过已经添加的仓库
+                if full_name.casefold() in existing_repos:
+                    continue
+
+                # 检查是否有 manifest.json
+                try:
+                    owner, repo = full_name.split("/")
+                    # 尝试 main 和 master 分支
+                    for branch in ["main", "master"]:
+                        manifest_url = f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/manifest.json"
+                        try:
+                            manifest_resp = await client.get(manifest_url, timeout=10)
+                            if manifest_resp.status_code == 200:
+                                # 尝试解析 JSON 确保格式正确
+                                manifest_resp.json()
+
+                                # 添加到配置
+                                repos_list = list(getattr(cfg, "PLUGIN_REPOS", None) or [])
+                                repos_list.append({"url": full_name})
+                                cfg.PLUGIN_REPOS = repos_list
+                                cfg.save()
+
+                                added.append(full_name)
+                                existing_repos.add(full_name.casefold())
+                                logger.info("自动发现并添加插件仓库: %s", full_name)
+                                break  # 找到 manifest 就不再尝试其他分支
+                        except Exception:  # noqa: BLE001
+                            continue
+                except Exception:  # noqa: BLE001
+                    pass
+
+    except Exception as e:  # noqa: BLE001
+        errors.append(f"发现仓库失败: {e}")
+
+    return {"ok": True, "added": added, "errors": errors}
+
+
+# ──────────────────────────────────────────────
 # 定时任务注册 / 重排
 # ──────────────────────────────────────────────
 def reschedule() -> Optional[object]:
@@ -376,4 +476,16 @@ def reschedule() -> Optional[object]:
         sync_once, "interval", minutes=interval, id=JOB_ID, replace_existing=True,
     )
     logger.info("插件仓库轮询已注册：每 %d 分钟，%d 个仓库（含官方）", interval, len(repos))
+
+    # 注册每天0点自动发现插件仓库的任务
+    discover_job = scheduler.add_job(
+        discover_and_add_repos,
+        "cron",
+        hour=0,
+        minute=0,
+        id="插件仓库自动发现",
+        replace_existing=True,
+    )
+    logger.info("插件仓库自动发现已注册：每天 0:00 执行")
+
     return job
