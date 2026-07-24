@@ -275,6 +275,7 @@ async def sync_once() -> dict[str, Any]:
     errors: list[str] = list(listing.get("errors") or [])
 
     to_update = []
+    versions_changed = False
     for p in store:
         if not p.get("installed"):
             continue  # 只更新已安装的
@@ -282,14 +283,25 @@ async def sync_once() -> dict[str, Any]:
             continue  # 无版本信号不动
         pid = p["id"]
         prev = versions.get(pid)
+        remote_ver = str(p.get("version") or "")
+
         # 关键：只有「确实从仓库下载过」(versions 里有记录) 的插件才自动更新。
         # 本地上传 / 手动 GitHub 导入 / 与仓库撞 id 的本地插件没有版本记录，
         # 绝不自动覆盖——否则用户的本地改动会被官方仓库同名插件静默冲掉。
         if prev is None:
+            # 对于来自已配置仓库的插件，主动记录当前版本作为基线，下次就能检测更新。
+            # 这样预装的官方插件和第三方仓库插件都能进入自动更新流程。
+            if remote_ver and p.get("repo_url") in {r["url"] for r in _get_repos()}:
+                versions[pid] = remote_ver
+                versions_changed = True
             continue
-        remote_ver = str(p.get("version") or "")
+
         if remote_ver and prev != remote_ver:
             to_update.append(p)
+
+    if versions_changed:
+        state["versions"] = versions
+        _save_state(state)
 
     if to_update:
         dl = await download_plugins(to_update)
