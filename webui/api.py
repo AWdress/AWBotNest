@@ -38,7 +38,10 @@ from webui.backup import (
 from kernel.registry import registry
 
 app = FastAPI(title="AWBotNest Platform API")
-APP_VERSION = "1.1.2.1"
+
+# 从 VERSION 文件读取版本号（单一真值源）
+_VERSION_FILE = Path(__file__).parent.parent / "VERSION"
+APP_VERSION = _VERSION_FILE.read_text(encoding="utf-8").strip() if _VERSION_FILE.exists() else "unknown"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
