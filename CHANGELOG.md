@@ -4,6 +4,30 @@
 
 这里记录每个版本给用户带来的新功能、改进和问题修复。
 
+## v1.1.2.0
+
+这一版开放了平台 API，让其他系统、AI 工具、第三方平台可以通过接口调用平台功能。
+
+**新功能：**
+- 新增开放平台 API（`/api/v1/`），支持用 API Key 验证身份。
+- 在系统设置中可以生成 API_KEY，用于第三方工具调用平台接口。
+- 可以通过 API 管理插件：列出、查看详情、读取/修改源代码、启用/停用/重载。
+- 可以通过 API 修改插件配置、读写插件存储的数据（kv 键值对）。
+- 可以通过 API 发送消息到指定群组或用户（用 bot 或 user 账号发送）。
+- 可以通过 API 查询群组信息、账号状态、平台日志、插件日志。
+- 可以通过 API 查看平台运行状态（版本、连接状态、插件数量等）。
+- 适用场景：AI 辅助插件开发（如 Hermes、OpenClaw）、自动化运维、第三方系统集成。
+
+**接口列表：**
+- 插件管理：`GET/POST/PUT /api/v1/plugins/...`
+- 插件配置：`GET/PUT /api/v1/plugins/{id}/config`
+- 插件数据：`GET/PUT/DELETE /api/v1/plugins/{id}/kv/{key}`
+- 消息发送：`POST /api/v1/messages/send`
+- 会话查询：`GET /api/v1/chats/{chat_id}`
+- 账号状态：`GET /api/v1/accounts`
+- 日志查询：`GET /api/v1/logs`、`GET /api/v1/logs/plugins/{id}`
+- 平台状态：`GET /api/v1/status`
+
 ## v1.1.1.3
 
 这一版新增了通过群组 ID 直接获取群组名称的 API，方便插件开发。
