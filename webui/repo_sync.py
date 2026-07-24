@@ -62,6 +62,44 @@ def _local_exists(plugin_id: str) -> bool:
     return (PLUGINS_DIR / f"{plugin_id}.py").exists() or (PLUGINS_DIR / plugin_id / "__init__.py").exists()
 
 
+def _read_local_version(plugin_id: str) -> str:
+    """读取本地插件文件中的 __plugin__["version"] 字段。"""
+    try:
+        # 尝试单文件插件
+        single_file = PLUGINS_DIR / f"{plugin_id}.py"
+        if single_file.exists():
+            content = single_file.read_text(encoding="utf-8")
+            return _extract_version_from_content(content)
+
+        # 尝试文件夹插件
+        folder_init = PLUGINS_DIR / plugin_id / "__init__.py"
+        if folder_init.exists():
+            content = folder_init.read_text(encoding="utf-8")
+            return _extract_version_from_content(content)
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def _extract_version_from_content(content: str) -> str:
+    """从插件代码中提取版本号（解析 __plugin__ 字典）。"""
+    import ast
+    try:
+        tree = ast.parse(content)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == "__plugin__":
+                        if isinstance(node.value, ast.Dict):
+                            for key, value in zip(node.value.keys, node.value.values):
+                                if (isinstance(key, ast.Constant) and key.value == "version" and
+                                    isinstance(value, ast.Constant) and isinstance(value.value, str)):
+                                    return value.value
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
 def _get_repos() -> list[dict[str, Any]]:
     """读取公开仓库列表：官方仓库始终置顶，再接用户配置的仓库（去重）。"""
     import config.config as cfg
@@ -289,11 +327,16 @@ async def sync_once() -> dict[str, Any]:
         # 本地上传 / 手动 GitHub 导入 / 与仓库撞 id 的本地插件没有版本记录，
         # 绝不自动覆盖——否则用户的本地改动会被官方仓库同名插件静默冲掉。
         if prev is None:
-            # 对于来自已配置仓库的插件，主动记录当前版本作为基线，下次就能检测更新。
+            # 对于来自已配置仓库的插件，读取本地版本作为基线，下次就能检测更新。
             # 这样预装的官方插件和第三方仓库插件都能进入自动更新流程。
             if remote_ver and p.get("repo_url") in {r["url"] for r in _get_repos()}:
-                versions[pid] = remote_ver
-                versions_changed = True
+                local_ver = _read_local_version(pid)
+                if local_ver:
+                    versions[pid] = local_ver
+                    versions_changed = True
+                    # 如果本地版本低于远程版本，立即加入更新列表
+                    if local_ver != remote_ver:
+                        to_update.append(p)
             continue
 
         if remote_ver and prev != remote_ver:
