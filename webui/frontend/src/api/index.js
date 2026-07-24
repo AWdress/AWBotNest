@@ -172,6 +172,7 @@ export const api = {
   },
   testProxy: (proxy_set) => request('POST', '/api/settings/test_proxy', { proxy_set }),
   testDb: (DB_INFO) => request('POST', '/api/settings/test_db', { DB_INFO }),
+  cleanLogs: () => request('POST', '/api/system/clean_logs'),
 
   // 多 Bot / 通知推送路由
   listBots: () => request('GET', '/api/bots'),

@@ -1178,6 +1178,19 @@ async def restore_system_backup(file: UploadFile = File(...), user=Depends(_auth
     }
 
 
+@app.post("/api/system/clean_logs")
+async def clean_logs_now(user=Depends(_auth)):
+    """立即执行日志清理任务"""
+    try:
+        from schedulers.universal.log_cleaner import log_cleaner_action
+        await log_cleaner_action()
+        logger.info("用户手动触发日志清理完成")
+        return {"ok": True, "message": "日志清理完成"}
+    except Exception as e:
+        logger.exception("手动清理日志失败")
+        raise HTTPException(status_code=500, detail=f"清理失败: {e}") from e
+
+
 @app.post("/api/settings/test_proxy")
 async def test_proxy(body: Dict[str, Any], user=Depends(_auth)):
     """用提交的 proxy_set 试连一次外网。返回 {ok, message}，不抛异常（失败也是 200）。"""
