@@ -48,6 +48,7 @@ async function load(silent = false) {
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
     if (s.value.WEBHOOK_SECRET === undefined) s.value.WEBHOOK_SECRET = ''
+    if (s.value.API_KEY === undefined) s.value.API_KEY = ''
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
     if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '主要通知渠道'
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
@@ -289,6 +290,7 @@ function randomHex(bytesLen = 24) {
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 function genWebhookSecret() { s.value.WEBHOOK_SECRET = randomHex(24) }
+function genApiKey() { s.value.API_KEY = randomHex(32) }
 const platformWebhookUrl = computed(() => {
   if (!s.value?.WEBHOOK_SECRET) return ''
   return `${location.origin}/api/v1/webhook?apikey=${s.value.WEBHOOK_SECRET}`
@@ -315,6 +317,11 @@ async function copyText(text) {
 async function copyPlatformWebhook() {
   if (!platformWebhookUrl.value) return
   if (await copyText(platformWebhookUrl.value)) toast.success('已复制平台 webhook 地址')
+  else toast.error('复制失败，请手动选择复制')
+}
+async function copyApiKey() {
+  if (!s.value?.API_KEY) return
+  if (await copyText(s.value.API_KEY)) toast.success('已复制 API Key')
   else toast.error('复制失败，请手动选择复制')
 }
 
@@ -928,6 +935,34 @@ onBeforeRouteLeave(async () => {
         </div>
         <div v-if="platformWebhookUrl" class="webhook-url mono" style="margin-top:8px">{{ platformWebhookUrl }}</div>
         <button v-if="platformWebhookUrl" class="btn sm" style="margin-top:8px" @click="copyPlatformWebhook">复制地址</button>
+      </div>
+
+      <!-- 开放平台 API -->
+      <div v-show="tab === 'bots'" class="card">
+        <div class="card-title">开放平台 API</div>
+        <div class="hint muted small" style="margin-bottom:12px">
+          第三方工具（如 AI 助手、自动化脚本）可通过 API 远程管理平台和插件。
+          请求时需携带此密钥验证身份。留空=关闭 API。改动随「保存设置」生效。
+          <a href="https://github.com/AWdress/AWBotNest/blob/main/docs/API.md"
+             target="_blank"
+             style="color:#3b82f6;text-decoration:underline;margin-left:4px">
+            查看 API 文档
+          </a>
+        </div>
+        <div class="row gap">
+          <input class="input" style="flex:1" v-model="s.API_KEY" placeholder="点右侧随机生成，或自定义密钥" />
+          <button class="btn sm" @click="genApiKey" title="随机生成 API Key">
+            <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/>
+            </svg>随机
+          </button>
+        </div>
+        <button v-if="s.API_KEY" class="btn sm" style="margin-top:8px" @click="copyApiKey">复制密钥</button>
+        <div v-if="s.API_KEY" class="hint muted small" style="margin-top:12px">
+          <strong>使用示例</strong>（在请求头中携带）：<br>
+          <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:12px">X-API-Key: {{ s.API_KEY.substring(0, 16) }}...</code>
+        </div>
       </div>
 
       <!-- Web 控制台 -->
