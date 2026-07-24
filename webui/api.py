@@ -509,6 +509,38 @@ async def list_plugin_dialogs(plugin_id: str, session: str = "", user=Depends(_a
     return {"chats": chats}
 
 
+@app.get("/api/chats/{chat_id}")
+async def get_chat_info(chat_id: str, session: str = "", user=Depends(_auth)):
+    """通过 chat_id 获取群组/频道/私聊的信息（名称、类型）。
+    chat_id 可以是数字 ID 或 @username。
+    session 指定用哪个账号查询；不传则使用首个已连接用户账号。"""
+    accounts = _get_accounts()
+    apps = accounts.connected_user_apps
+    if session:
+        app_client = next((a for a in apps if getattr(a, "name", None) == session), None)
+    else:
+        app_client = apps[0] if apps else None
+    if app_client is None:
+        raise HTTPException(status_code=409, detail="没有可用的已连接用户账号")
+
+    # 解析 chat_id：如果是纯数字字符串（含负号），转为 int；否则当作 username
+    try:
+        cid = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+    except ValueError:
+        cid = chat_id
+
+    try:
+        chat = await app_client.get_chat(cid)
+        return {
+            "id": chat.id,
+            "title": _chat_title_of(chat),
+            "type": _chat_type_of(chat),
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.exception("获取 chat 信息失败: %s", chat_id)
+        raise HTTPException(status_code=404, detail=f"获取会话信息失败：{e}") from e
+
+
 # ──────────────────────────────────────────────
 # 插件动作（config_schema 的 action 按钮触发 ctx.action 注册的函数）
 # ──────────────────────────────────────────────
