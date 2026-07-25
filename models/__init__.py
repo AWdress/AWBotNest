@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import (
 # 自定义模块
 from config.config import DB_INFO
 from models.database import Base
-from models.ai_db_model import AiMessageModel
 
 
 

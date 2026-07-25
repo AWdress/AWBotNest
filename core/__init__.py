@@ -4,8 +4,8 @@ core/__init__.py
 
 使用方式：
     from core import Client, filters, Message, logger, config
-    from core.domain import LotteryEvent, TransferRecord
-    from core.services import TransferService, RedPacketService
+    from core.domain import BombGameState, TelegramUser
+    from core.services import RedpocketRecordService
 """
 
 from __future__ import annotations
@@ -57,21 +57,14 @@ MY_TGID = config.telegram.my_tgid
 # 领域实体（core/domain/）
 # ──────────────────────────────────────────────
 from core.domain import (
-    LotteryEvent, ParticipationResult, LotteryStatus,
-    RedPacketMessage, SnatchTarget, SnatchResult, SnatchStatus,
-    TransferRecord, TransferDirection, LeaderboardEntry,
     BombGameState, GamePhase,
     TelegramUser,
-    AiMessage, AiConversation, AiConfig,
 )
 
 # ──────────────────────────────────────────────
 # 业务服务（core/services/）
 # ──────────────────────────────────────────────
-from core.services import (
-    LotteryService, TrapService, RedPacketService,
-    TransferService, PrizeService, AiService,
-)
+from core.services import RedpocketRecordService
 
 # ──────────────────────────────────────────────
 # 便捷函数
@@ -98,15 +91,10 @@ __all__ = [
     "logger", "config", "get_settings",
     "manager", "API_ID", "API_HASH", "BOT_TOKEN", "MY_TGID",
     # 领域实体
-    "LotteryEvent", "ParticipationResult", "LotteryStatus",
-    "RedPacketMessage", "SnatchTarget", "SnatchResult", "SnatchStatus",
-    "TransferRecord", "TransferDirection", "LeaderboardEntry",
     "BombGameState", "GamePhase",
     "TelegramUser",
-    "AiMessage", "AiConversation", "AiConfig",
     # 服务
-    "LotteryService", "TrapService", "RedPacketService",
-    "TransferService", "PrizeService", "AiService",
+    "RedpocketRecordService",
     # 基础设施
     "get_container",
 ]
