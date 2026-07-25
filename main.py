@@ -121,25 +121,6 @@ async def _init_database() -> None:
     await create_all()
 
 
-async def _init_container() -> None:
-    """初始化 DI 容器（复用旧底座）"""
-    from infra.container import build_container
-    from infra.config import get_settings
-    from libs.state import state_manager as _state_manager
-    from models import async_session_maker as _session_maker
-    import infra.container as _infra_container
-
-    _container = build_container(
-        user_client=accounts.primary_user_app,
-        bot_client=accounts.bot_app,
-        state_manager=_state_manager,
-        session_maker=_session_maker,
-        settings=get_settings(),
-    )
-    _infra_container._container_instance = _container
-    logger.info("DI 容器初始化完成")
-
-
 async def start_platform() -> None:
     """平台主启动流程"""
     global accounts, runtime
@@ -153,9 +134,8 @@ async def start_platform() -> None:
     # 1) 启动账号
     await accounts.start_all()
 
-    # 2) 数据库 + DI 容器
+    # 2) 数据库
     await _init_database()
-    await _init_container()
 
     # 3) 调度器
     scheduler.start()

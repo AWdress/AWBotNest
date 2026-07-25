@@ -433,7 +433,7 @@ class AccountManager:
             logger.warning("Bot 暂不启动（可在网页控制台填好凭据后重启）: %s", e)
         await self.start_users()
 
-        # 同步到全局 manager，保持旧代码（services/adapters）可用
+        # 同步到全局 manager，保持旧代码（core.manager 单例）可用
         manager.user_apps = self.user_apps
         manager.bot_app = self.bot_app
 
@@ -536,7 +536,6 @@ class AccountManager:
                 raise RuntimeError(f"账号 [{session_name}] 上线失败: {e}")
             _unpause_account(session_name, self.workdir)
             manager.user_apps = self.user_apps
-            self._rebind_primary()
             logger.info("账号 [%s] 已上线", session_name)
             return True
 
@@ -718,7 +717,6 @@ class AccountManager:
             _persist_account(session_name, me.first_name or session_name, me.id)
         _unpause_account(session_name, self.workdir)
         manager.user_apps = self.user_apps
-        self._rebind_primary()
         logger.info("账号 [%s] 登录并启动成功", session_name)
         return {
             "ok": True,
@@ -726,17 +724,6 @@ class AccountManager:
             "name": me.first_name if me else session_name,
             "tgid": me.id if me else None,
         }
-
-    def _rebind_primary(self) -> None:
-        """主账号变化后重绑 DI 容器的 user_client"""
-        try:
-            from infra.container import rebind_user_client
-            primary = self.primary_user_app
-            if primary:
-                rebind_user_client(primary)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("重绑 DI 容器 user_client 失败: %r", e)
-
 
 # =============================================================================
 # 模块级辅助：账号持久化 / 暂停标记

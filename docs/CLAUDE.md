@@ -31,13 +31,13 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 │  kernel/  平台内核（稳定）：账号 / 插件热插拔 / ctx 能力面 │
 │  plugins/ 单文件插件（所有业务在这，用户上传）             │
 ├─────────────────────────────────────────────────────┤
-│  core/ infra/ adapters/ models/ libs/ schedulers/     │
-│  复用自旧项目的六边形架构「底座」（内核可用，插件不可直接用）│
+│  core/ infra/ models/ libs/ schedulers/               │
+│  复用自旧项目的「底座」（内核可用，插件不可直接用）        │
 └─────────────────────────────────────────────────────┘
 ```
 
 - **内核与插件分离铁律**：业务一律是插件，禁止往 `kernel/` 塞业务；插件只能通过 `ctx` 访问平台，禁止 `import pyrogram` / `from config` / `from core|kernel`。
-- **底座是六边形架构**（端口与适配器）：`core`（领域模型+端口协议+业务服务，不依赖任何框架）← `adapters`（端口的具体技术实现）；`infra` 提供配置/DI 容器/日志/调度。DI 容器在启动时把 adapters 装配进 services。这是从旧项目渐进式重构保留的底座，新内核通过 `app.py` 兼容垫片复用它。
+- **底座是旧项目复用层**：`core`（Pyrogram 客户端封装/类型转发 + 账号 Manager）、`infra`（配置/日志/调度封装）、`models`（数据库引擎与会话工厂）、`libs`（通用工具）、`schedulers`（通用定时任务）。业务一律在插件里用 `ctx` 实现，底座只提供基础能力，新内核通过 `app.py` 兼容垫片复用它。
 
 ---
 
@@ -47,7 +47,7 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | **平台入口**。启动顺序：配置文件自检(写 `data/config.json` 模板) → 挂 `data/plugin_deps` 到 sys.path → 导出代理环境变量 → 启动账号(AccountManager) → 初始化数据库 + DI 容器 → 启动调度器 → 恢复已启用插件(PluginRuntime) → 插件仓库轮询 → 启动 Web UI → idle 等待。用 `asyncio.wait(FIRST_EXCEPTION)` 让平台/WebUI 任一崩溃即退出。 |
+| `main.py` | **平台入口**。启动顺序：配置文件自检(写 `data/config.json` 模板) → 挂 `data/plugin_deps` 到 sys.path → 导出代理环境变量 → 启动账号(AccountManager) → 初始化数据库 → 启动调度器 → 恢复已启用插件(PluginRuntime) → 插件仓库轮询 → 启动 Web UI → idle 等待。用 `asyncio.wait(FIRST_EXCEPTION)` 让平台/WebUI 任一崩溃即退出。 |
 | `app.py` | **兼容垫片**。旧代码大量 `from app import ...`，此处把 `get_bot_app`/`get_user_app`/`get_user_apps`/`scheduler`/`logger` 等旧访问点重新导出、指向新内核（`kernel.state`），使旧业务代码零改动可用。 |
 | `pyproject.toml` / `requirements.txt` | 依赖声明（Python 3.13）。ruff/mypy/pytest 配置在 pyproject。 |
 | `Dockerfile` | 多阶段构建：stage1 Node 构建 Vue 前端 → `webui/static`；stage2 Python 运行时，装依赖(含 wkhtmltopdf、CJK 字体、ddddocr 系统库)、`playwright install-deps`（只装系统库，**不烤浏览器二进制**，内核运行时懒下载到卷）→ `python main.py`。 |
@@ -64,7 +64,7 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | `registry.py` | **插件注册表**(线程安全)。`parse_meta` 用 AST `literal_eval` **静态读取** `__plugin__` 字面量(不执行插件代码)，校验必填字段/scope/render_mode/id=文件名。支持单文件与文件夹两种形态。持久化到 `data/plugins_state.json`(enabled/config/account_scope/bot_choice)。 |
 | `plugin_runtime.py` | **插件运行时**(真热插拔)。加载：`importlib` 动态导入 → 校验 setup → `deps.ensure`(冲突拒绝) → 构建 ctx → `await setup`。卸载：注销 handler/任务 → teardown → 从 sys.modules 移除。为每插件分配**独立 group 基址**(1000 起，步长 1000)避免互相"吃消息"。单插件失败只标 `error`。`resync` 在账号上下线后重挂 handler。 |
 | `context.py` | **PlatformContext**(插件唯一能接触的 API 面)。暴露：账号(`ctx.bot`/`ctx.user`/`ctx.user_apps`按范围过滤)、处理器注册(`on_message`/`on_edited_message`/`on_callback` 自动登记句柄+group 平移)、HTTP 入站(`on_webhook`/`on_api`/`action`)、存储(`kv`/`data_dir`/`config`/`update_config`)、`notify`/`browser`/`download`/`schedule`/`log`。含 `WebhookRequest`。 |
-| `account_manager.py` | **账号生命周期**。管理用户账号(`user_apps`)与多 Bot(`bot_apps`，默认 id=`default`)。启动(清损坏 session→起 Bot→起用户账号)、上下线(`.paused` 标记)、删除、多步登录(发码→交码→两步密码→finalize 重绑 DI)。 |
+| `account_manager.py` | **账号生命周期**。管理用户账号(`user_apps`)与多 Bot(`bot_apps`，默认 id=`default`)。启动(清损坏 session→起 Bot→起用户账号)、上下线(`.paused` 标记)、删除、多步登录(发码→交码→两步密码→finalize)。 |
 | `deps.py` | **插件依赖管理**。单进程同一包只能一版本，以"已装环境"为准做冲突检测(满足跳过/缺失装/冲突拒绝启用)。`pip --target` 装到 `data/plugin_deps`(卷持久化)+加 sys.path 末尾。走 `PIP_INDEX_URL`(默认清华镜像)，requirement 经 packaging 解析后独立 argv 传 pip 防注入。 |
 | `browser.py` | **平台级浏览器能力**(供 `ctx.browser`)。引擎优先 CloakBrowser(过 Cloudflare/指纹)→回退 Playwright Chromium。**懒加载**：首次调用才下内核到 `data/browser_cache`。暴露 async `page_source`/`run`。 |
 | `notifier.py` | **通知中心**。插件不直接发通知，`ctx.notify` 提交给平台统一分类(级别标签+插件名+账号名)+格式化+投递(优先路由 Bot→管理员 `MY_TGID`→回退收藏夹)。含 200 条环形历史。 |
@@ -112,15 +112,12 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | `src/components/ConfirmDialog.vue` / `Toast.vue` | 全局确认弹窗 / 悬浮提示，配 `composables/confirm.js`、`toast.js` 命令式调用。 |
 | `src/styles/tokens.css` | 设计 token(深色控制台配色 CSS 变量)。 |
 
-### core/ — 框架无关业务内核（六边形架构底座）
+### core/ — Pyrogram 封装与账号管理（旧底座）
 
-| 子目录 | 职责 |
+| 文件 | 职责 |
 |------|------|
-| `domain/` | **领域模型**(纯 dataclass/pydantic，无外部依赖)。`lottery`(抽奖)、`red_packet`(红包+OCR)、`transfer`(转账/排行榜)、`game`(炸弹游戏)、`user`、`ydx`(骰子)、`ai`(AI 对话)。 |
-| `ports/` | **端口接口**(Protocol，只依赖 domain)。`messaging`(MessageSender/NotificationPort)、`storage`(各 Repository)、`ocr`、`leaderboard`、`ai`。 |
-| `services/` | **业务服务**(依赖 ports，注入端口)。`red_packet_service`(抢红包状态机)、`lottery_service`、`trap_service`(陷阱检测，被复用)、`transfer_service`、`ai_service`、`prize_service`、`ydx_service`、`redpocket_record_service`。 |
-| `__init__.py` | 核心层统一出口(聚合导出 Pyrogram 类型/Client/config/domain/services)。 |
-| `manager.py` | `Manager` 单例(旧)，管理多 user + bot 账号启动，重启时 `rebind_user_client` 重绑 DI。 |
+| `__init__.py` | 核心层统一出口(聚合导出 Pyrogram 类型/Client/config)。 |
+| `manager.py` | `Manager` 单例(旧)，管理多 user + bot 账号启动。 |
 | `telegram.py` | Pyrogram 轻量导出层(禁依赖 core 其他模块防循环)。 |
 
 ### infra/ — 基础设施
@@ -128,20 +125,8 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | 文件 | 职责 |
 |------|------|
 | `config.py` | pydantic-settings 统一配置(`AppSettings` 组合 Telegram/Database/Proxy/Ai)。多源优先级：环境变量 > `state.toml` > 旧 `config/config.py`。`get_settings()` lru_cache 单例。 |
-| `container.py` | **DI 容器**(dependency-injector)。声明 adapter 与 service 装配关系，外部 `build_container()` 注入 client/session/state。`rebind_user_client()` 热重绑。 |
 | `logging.py` | structlog 配置(JSON/彩色双模)，`logger` 向后兼容。 |
 | `scheduler.py` | APScheduler 封装(AsyncIOScheduler，Asia/Shanghai)。 |
-
-### adapters/ — 端口的具体实现
-
-| 文件 | 实现的端口 |
-|------|------|
-| `ai/openai_adapter.py` | `AiEnginePort`(OpenAI 兼容 SDK，走代理，多模态)。 |
-| `ocr/ddddocr_adapter.py` | `OcrPort`(ddddocr 双模型+PIL 二值化投票，线程池)。 |
-| `leaderboard/imgkit_adapter.py` | `LeaderboardGenerator`(imgkit 渲染 HTML→PNG 排行榜)。 |
-| `telegram/sender.py` | `MessageSender`+`NotificationPort`(PyrogramMessageSender/PyrogramNotifier)。 |
-| `storage/toml_state.py` | `StateRepository`(包装旧 `libs/state.py`)。 |
-| `storage/sqlalchemy/` | 各 Repository(`transfer_repo`/`ai_repo`/`redpocket_repo`/`ydx_repo`，委托旧 ORM)。 |
 
 ### models/ — 数据库模型（SQLAlchemy 异步 ORM）
 
@@ -149,12 +134,6 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 |------|------|
 | `database.py` | 声明基类(`Base`/`CreateTimeBase`/`TimeBase`)。 |
 | `__init__.py` | 引擎与会话工厂。按 `DB_INFO.dbset` 支持 SQLite(默认,WAL)/MySQL/PostgreSQL。`async_session_maker`、`create_all()`。 |
-| `transform_db_modle.py` | 核心业务表 `Raiding`/`Transform`(转账)/`User`(用户名+大量统计查询)。 |
-| `redpocket_db_modle.py` | `Redpocket`(红包记录)。 |
-| `ydx_db_modle.py` | `Zhuqueydx`(猜大小)+`YdxStock`(K线)+MACD/KDJ 指标。 |
-| `ai_db_model.py` | `AiMessageModel`(AI 对话历史)。 |
-| `alter_tables.py` | 一次性 DDL 迁移脚本(仅 MySQL)。 |
-| `db_to_excel.py` | ORM 表导出 Excel/CSV。 |
 
 ### libs/ — 通用工具库
 
@@ -170,9 +149,6 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | `async_bash.py` | 异步执行 shell。 |
 | `command_tablepy.py` / `leaderboard_imge.py` | 命令表 / 打赏排行榜 出 PNG(imgkit)。 |
 | `others.py` | 杂项(发送黑名单、用户链接构造、延迟删消息、按 TGID 查用户名、日期解析)。 |
-| `transfer_helper.py` | 转账记录统一入口 `do_transfer()`(去重+走 TransferService+post-record 钩子)。 |
-| `ydx_betmodel.py` | 朱雀猜大小下注策略模型(策略 A/B/E/S，S 用 KDJ)。 |
-| `zhuque_listBackpack.py` / `zhuque_recycleMagicCard.py` | 朱雀站点 API(查背包卡片 / 回收魔法卡)。 |
 
 ### schedulers/ — 定时任务（APScheduler）
 
@@ -183,7 +159,6 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | `universal/auto_changename.py` | 定时把昵称改成报时。 |
 | `universal/custom_auto_reply.py` | 多任务定时自动回复。 |
 | `universal/log_cleaner.py` | 每天裁剪日志文件到最后 N 行。 |
-| `zhuque/fireGenshinCharacterMagic.py` | 朱雀"释放原神角色技能"自动领灵石。 |
 
 ### filters/ — 自定义消息过滤器
 

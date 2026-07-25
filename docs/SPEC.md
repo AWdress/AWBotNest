@@ -40,7 +40,7 @@ AWBotNest/
 │   ├── static/              # 前端构建产物（FastAPI 托管）
 │   └── frontend/            # Vue3 + Vite 源码
 │
-├── core/ infra/ adapters/ models/ libs/ schedulers/ filters/
+├── core/ infra/ models/ libs/ schedulers/ filters/
 │                            # 复用自旧项目的底座（统一出口仍是 core/）
 ├── config/                  # 平台代码（垫片 config.py，不做卷映射）
 ├── data/                    # 运行时数据（卷映射）：config.json（唯一配置源）、

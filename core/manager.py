@@ -85,14 +85,6 @@ class Manager:
 
             await new_client.start()
 
-            # 主账号重绑 DI 容器
-            if self.user_apps and self.user_apps[0].name == session_name:
-                try:
-                    from infra.container import rebind_user_client
-                    rebind_user_client(new_client)
-                except Exception:
-                    logger.warning("更新 DI 容器 user_client 失败（容器可能尚未初始化）")
-
             return True
         except Exception:
             logger.exception("启动 Userbot [%s] 失败", session_name)

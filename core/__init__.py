@@ -51,16 +51,6 @@ API_HASH = config.telegram.api_hash.get_secret_value()
 BOT_TOKEN = config.telegram.bot_token.get_secret_value()
 MY_TGID = config.telegram.my_tgid
 
-# ──────────────────────────────────────────────
-# 便捷函数
-# ──────────────────────────────────────────────
-
-def get_container():
-    """获取 DI 容器实例"""
-    from infra.container import get_container as _gc
-    return _gc()
-
-
 __all__ = [
     # 核心基础
     "Client", "filters", "enums", "Message", "CallbackQuery", "User", "WebAppInfo",
@@ -75,7 +65,5 @@ __all__ = [
     "create", "Filter", "MessageHandler", "SQLiteStorage", "idle", "PYROGRAM_VERSION",
     "logger", "config", "get_settings",
     "manager", "API_ID", "API_HASH", "BOT_TOKEN", "MY_TGID",
-    # 基础设施
-    "get_container",
 ]
 
