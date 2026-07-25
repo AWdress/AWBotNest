@@ -179,7 +179,7 @@ class TransferService:
                 masked_id = uid_str[:2] + '*' * (len(uid_str) - 4) + uid_str[-2:]
 
             from config.config import MY_NAME
-            _owner = me_name or MY_NAME
+            _owner = MY_NAME
 
             user_display = others.build_user_html_link(record.user_id, record.user_name or f'用户{masked_id}')
             amount_display = f"<b>{abs(record.amount):,} {bonus_name}</b>"

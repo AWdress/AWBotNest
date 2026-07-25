@@ -6,7 +6,10 @@ from copy import deepcopy
 from libs import toml
 
 
-state_path = Path("data/state.toml")
+# 用相对仓库根的绝对路径，避免依赖进程工作目录（与 infra/config.py 的 DATA_DIR 基准一致）；
+# 否则以 systemd/Docker 等「工作目录≠仓库根」方式启动时，会读写到另一个 state.toml，状态不同步。
+_DATA_DIR = Path(__file__).resolve().parent.parent / "data"
+state_path = _DATA_DIR / "state.toml"
 state_path.parent.mkdir(parents=True, exist_ok=True)
 
 
@@ -59,11 +62,12 @@ class StateManager:
         self.state[key] = value
         self.write_state()
 
-    def get_section(self, section: str, default={}) -> dict:
+    def get_section(self, section: str, default=None) -> dict:
         """
         获取指定表头（section）的数据
         """
-        return self.state.get(section, default)
+        # 不用可变默认参数 {}（会被所有调用共享、被写入后污染后续调用）
+        return self.state.get(section, default if default is not None else {})
 
     def get_item(self, section: str, key: str, default=None):
         """

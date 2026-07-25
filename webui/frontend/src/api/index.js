@@ -94,6 +94,11 @@ export const api = {
     const headers = authHeaders()
     delete headers['Content-Type'] // 让浏览器自动设置 multipart 边界
     const res = await fetch('/api/plugins/upload', { method: 'POST', headers, body: form })
+    if (res.status === 401) {
+      setToken('')
+      if (onUnauthorized) onUnauthorized()
+      throw new Error('未登录或登录已过期')
+    }
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}

@@ -27,6 +27,7 @@ const dirty = computed(() => !!s.value && JSON.stringify(s.value) !== savedSnap.
 // 保存后需重启提示
 const restartHint = ref(false)
 const restarting = ref(false)
+let restartTimer = null   // 重启轮询定时器；提升为模块级以便组件卸载时清理
 const notificationSyncSource = `settings_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
 // 用户又开始改动时，隐藏“需重启”横幅（新改动得重新保存）
@@ -174,10 +175,11 @@ async function doRestart() {
     toast.success('平台正在重启，十几秒后自动刷新')
     restartHint.value = false
     let tries = 0
-    const timer = setInterval(async () => {
+    if (restartTimer) clearInterval(restartTimer)
+    restartTimer = setInterval(async () => {
       tries++
-      try { await api.status(); clearInterval(timer); location.reload() }
-      catch { if (tries > 30) { clearInterval(timer); restarting.value = false } }
+      try { await api.status(); clearInterval(restartTimer); restartTimer = null; location.reload() }
+      catch { if (tries > 30) { clearInterval(restartTimer); restartTimer = null; restarting.value = false } }
     }, 2000)
   } catch (e) { toast.error('重启请求失败：' + e.message); restarting.value = false }
 }
@@ -730,7 +732,10 @@ onMounted(() => {
   load(); loadUsername()
   stopNotificationSync = subscribeNotificationSync(refreshNotificationSync)
 })
-onUnmounted(() => stopNotificationSync?.())
+onUnmounted(() => {
+  stopNotificationSync?.()
+  if (restartTimer) { clearInterval(restartTimer); restartTimer = null }
+})
 
 // 点击外部关闭添加渠道下拉菜单
 function handleClickOutside(e) {

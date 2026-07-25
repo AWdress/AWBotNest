@@ -86,7 +86,6 @@ async def do_transfer(
             f"dir={direction}, chat={dedupe_key[2]}, msg={dedupe_key[3]}, amount={bonus}"
         )
         return
-    _recent_transfer_keys[dedupe_key] = now
 
     container = get_container()
     svc = container.transfer_service()
@@ -122,6 +121,9 @@ async def do_transfer(
         group_id=transform_message.chat.id if transform_message else 0,
         message_id=transform_message.id if transform_message else 0,
     )
+    # 落库成功后再打去重标记：此前在 record 之前打标，一旦 record 失败（如瞬时
+    # database is locked），TTL 内的重试会被当成重复跳过，导致转账记录丢失。
+    _recent_transfer_keys[dedupe_key] = now
     logger.info(
         f"[{site_name}] TransferService.record 成功: "
         f"user={user_name}, amount={bonus}, dir={direction}"

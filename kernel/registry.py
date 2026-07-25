@@ -109,13 +109,27 @@ class PluginRegistry:
             self._bot_choice = {}
 
     def _save_state(self) -> None:
-        """写回磁盘"""
+        """写回磁盘（原子写：临时文件 + os.replace，避免写一半崩溃留下半截 JSON，
+        导致下次加载失败、全部插件的启用/配置/账号范围/Bot 路由被静默清零）"""
+        import os
+        import tempfile
         try:
             payload = {"enabled": self._enabled_state, "config": self._config_state,
                        "account_scope": self._account_scope, "bot_choice": self._bot_choice}
-            self.state_file.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            data = json.dumps(payload, ensure_ascii=False, indent=2)
+            directory = self.state_file.parent
+            directory.mkdir(parents=True, exist_ok=True)
+            fd, tmp_path = tempfile.mkstemp(prefix=".plugins_state_", suffix=".tmp", dir=str(directory))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(data)
+                os.replace(tmp_path, self.state_file)
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
         except OSError as e:
             logger.error("写入插件状态文件失败：%s", e)
 
@@ -476,6 +490,11 @@ class PluginRegistry:
                         defaults[key] = spec["default"]
             saved = self._config_state.get(plugin_id, {})
             return {**defaults, **saved}
+
+    def get_saved_config(self, plugin_id: str) -> dict[str, Any]:
+        """返回用户已保存的配置原始值（不叠加 config_schema 默认值）。"""
+        with self._lock:
+            return dict(self._config_state.get(plugin_id, {}))
 
     def set_config(self, plugin_id: str, values: dict[str, Any]) -> None:
         with self._lock:

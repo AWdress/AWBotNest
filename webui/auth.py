@@ -46,14 +46,28 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
+    import tempfile
     _AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _AUTH_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    # 原子写：临时文件 + os.replace，避免写一半崩溃留下半截 JSON，
+    # 下次加载被当成损坏而重置成默认 admin/password（凭据丢失 + 安全降级）。
+    fd, tmp = tempfile.mkstemp(prefix=".auth_", suffix=".tmp", dir=str(_AUTH_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(payload)
+        os.replace(tmp, _AUTH_FILE)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _ensure_default() -> dict:
     """首次运行或旧格式缺字段：写入默认 admin/password"""
     data = _load()
-    if not data.get("pwd_hash") or not data.get("username") or not data.get("secret"):
+    if not data.get("pwd_hash") or not data.get("username") or not data.get("secret") or not data.get("salt"):
         salt = secrets.token_hex(16)
         data = {
             "username": DEFAULT_USERNAME,
@@ -112,7 +126,8 @@ def _verify_token(token: str) -> bool:
     data = _load()
     if not data.get("pwd_hash"):
         return False
-    return hmac.compare_digest(token, _make_token(data))
+    # 转 bytes 再比：compare_digest 对含非 ASCII 的 str 会抛 TypeError（变成 500 而非 401）
+    return hmac.compare_digest((token or "").encode("utf-8"), _make_token(data).encode("utf-8"))
 
 
 def is_default_password() -> bool:
@@ -220,7 +235,8 @@ async def require_api_key(
         )
 
     provided_key = x_api_key or api_key
-    if not provided_key or not hmac.compare_digest(provided_key, configured_key):
+    # 转 bytes 再比：compare_digest 对含非 ASCII 的 str 会抛 TypeError
+    if not provided_key or not hmac.compare_digest(provided_key.encode("utf-8"), configured_key.encode("utf-8")):
         raise HTTPException(
             status_code=401,
             detail="API Key 无效或缺失"

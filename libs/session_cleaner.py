@@ -1,6 +1,7 @@
 # 标准库
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 # 自定义模块
@@ -22,12 +23,11 @@ def clean_corrupted_sessions(sessions_dir: str = "sessions"):
     cleaned_count = 0
     for session_file in sessions_path.glob("*.session"):
         try:
-            # 尝试打开SQLite文件检查是否损坏
-            conn = sqlite3.connect(str(session_file))
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = cursor.fetchall()
-            conn.close()
+            # 尝试打开SQLite文件检查是否损坏（closing 保证异常/提前返回路径也释放连接，避免泄漏）
+            with closing(sqlite3.connect(str(session_file))) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+                tables = cursor.fetchall()
 
             if not tables:
                 logger.warning(f"发现空的会话文件: {session_file}")
@@ -66,20 +66,20 @@ def repair_session_file(session_file_path: str):
         session_file_path: 会话文件路径
     """
     try:
-        # 尝试使用SQLite的修复功能
-        conn = sqlite3.connect(str(session_file_path))
-        cursor = conn.cursor()
-
-        # 检查数据库完整性
-        cursor.execute("PRAGMA integrity_check;")
-        result = cursor.fetchone()
+        # 尝试使用SQLite的修复功能（closing 保证异常路径也释放连接）
+        with closing(sqlite3.connect(str(session_file_path))) as conn:
+            cursor = conn.cursor()
+            # 检查数据库完整性
+            cursor.execute("PRAGMA integrity_check;")
+            result = cursor.fetchone()
 
         if result[0] == "ok":
             logger.info(f"会话文件完整: {session_file_path}")
-        else:
-            logger.warning(f"会话文件损坏: {session_file_path}, 完整性检查: {result[0]}")
+            return True
 
-        conn.close()
+        # 完整性检查未通过 = 实际并未修复，不能误报成功
+        logger.warning(f"会话文件损坏: {session_file_path}, 完整性检查: {result[0]}")
+        return False
 
     except sqlite3.DatabaseError as e:
         logger.error(f"无法修复会话文件: {session_file_path}, 错误: {e}")
@@ -87,8 +87,6 @@ def repair_session_file(session_file_path: str):
     except Exception as e:
         logger.error(f"修复会话文件时出错: {session_file_path}, 错误: {e}")
         return False
-
-    return True
 
 
 if __name__ == "__main__":

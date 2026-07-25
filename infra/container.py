@@ -232,22 +232,29 @@ def _settings_to_dict(settings: object) -> dict:
     """将 AppSettings 转为 dependency-injector config 可接受的 dict"""
     try:
         cfg = settings  # type: ignore[attr-defined]
+        # 陷阱检测：以默认值为底叠加用户配置 trap_lottery_detection，
+        # 否则用户在 WebUI 调的参数（人数上限/最小金额/关键词/黑名单/大小写）全不生效。
+        trap_cfg = {
+            "case_sensitive": False,
+            "enable_prize_pattern_check": True,
+            "enable_creator_blacklist": True,
+            "enable_participant_check": True,
+            "max_participants": 1,
+            "blacklist_creator_ids": [],
+            "suspicious_keywords": [],
+            "min_prize_amount": 500,
+            "enable_prize_amount_check": True,
+        }
+        trap_cfg.update(getattr(cfg, "trap_lottery_detection", None) or {})
+        # 抽奖大小写敏感来自 prize_match_rules（此前被硬编码为 False）
+        prize_rules = getattr(cfg, "prize_match_rules", None) or {}
         return {
             "notify_chat_id": cfg.notify_chat_id,
-            "trap": {
-                "case_sensitive": False,
-                "enable_prize_pattern_check": True,
-                "enable_creator_blacklist": True,
-                "enable_participant_check": True,
-                "max_participants": 1,
-                "blacklist_creator_ids": [],
-                "suspicious_keywords": [],
-                "min_prize_amount": 500,
-            },
+            "trap": trap_cfg,
             "lottery": {
                 "target_groups": cfg.lottery_target_groups,
                 "prize_list": cfg.prize_list,
-                "case_sensitive": False,
+                "case_sensitive": prize_rules.get("case_sensitive", False),
             },
             "ai": {
                 "enabled": cfg.ai.enabled,

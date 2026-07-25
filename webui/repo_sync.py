@@ -332,16 +332,15 @@ async def sync_once() -> dict[str, Any]:
         # 本地上传 / 手动 GitHub 导入 / 与仓库撞 id 的本地插件没有版本记录，
         # 绝不自动覆盖——否则用户的本地改动会被官方仓库同名插件静默冲掉。
         if prev is None:
-            # 对于来自已配置仓库的插件，读取本地版本作为基线，下次就能检测更新。
-            # 这样预装的官方插件和第三方仓库插件都能进入自动更新流程。
+            # 没有版本记录 = 本地上传 / 手动导入 / 与仓库撞 id 的本地插件。
+            # 只把当前本地版本记为基线供下次比对，**绝不在此触发下载覆盖**——
+            # 否则用户本地代码会被仓库同名插件静默替换并热重载执行（供应链投毒）。
+            # 待本次记下基线后，下次轮询 prev 不再为 None，版本变化才走正常更新。
             if remote_ver and p.get("repo_url") in {r["url"] for r in _get_repos()}:
                 local_ver = _read_local_version(pid)
                 if local_ver:
                     versions[pid] = local_ver
                     versions_changed = True
-                    # 如果本地版本低于远程版本，立即加入更新列表
-                    if local_ver != remote_ver:
-                        to_update.append(p)
             continue
 
         if remote_ver and prev != remote_ver:

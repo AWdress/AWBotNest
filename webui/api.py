@@ -51,6 +51,21 @@ STATIC_DIR.mkdir(parents=True, exist_ok=True)
 PLUGINS_DIR = Path("plugins")
 
 
+def _assert_safe_plugin_id(plugin_id: str) -> str:
+    """校验插件 ID 合法，拒绝路径遍历。
+
+    Starlette 的 {plugin_id} 只禁止 /，不禁止反斜杠（%5C 解码成 \\），
+    而 Windows 上 pathlib 把 \\ 当路径分隔符——不校验的话，
+    `DELETE /api/plugins/..%5Ccore` 能越界删/读 plugins/ 之外的目录与文件。
+    """
+    if (not plugin_id or "\x00" in plugin_id
+            or "/" in plugin_id or "\\" in plugin_id
+            or ".." in plugin_id
+            or plugin_id.strip(".") != plugin_id):
+        raise HTTPException(status_code=400, detail="非法的插件 ID")
+    return plugin_id
+
+
 # ──────────────────────────────────────────────
 # 鉴权：密码登录 + 令牌
 # ──────────────────────────────────────────────
@@ -175,7 +190,20 @@ async def upload_plugin(file: UploadFile = File(...), user=Depends(_auth_pwc)):
     if filename.startswith("_") or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="非法文件名")
 
-    content = await file.read()
+    # 分块读取并限制总大小：单文件插件 .py 不会超过几 MB，
+    # 不设上限会让超大上传把内存/磁盘打满。
+    max_upload = 5 * 1024 * 1024
+    chunks = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > max_upload:
+            raise HTTPException(status_code=413, detail="文件过大（上限 5MB）")
+        chunks.append(chunk)
+    content = b"".join(chunks)
     dest = PLUGINS_DIR / filename
     dest.write_bytes(content)
 
@@ -291,8 +319,9 @@ async def reload_plugin(plugin_id: str, user=Depends(_auth_pwc)):
 
 
 @app.delete("/api/plugins/{plugin_id}")
-async def delete_plugin(plugin_id: str, user=Depends(_auth)):
+async def delete_plugin(plugin_id: str, user=Depends(_auth_pwc)):
     """删除插件：先停用，再删文件/目录与状态记录（支持单文件与文件夹两种形态）"""
+    _assert_safe_plugin_id(plugin_id)   # 拒绝路径遍历，防止越界删文件
     import shutil
     runtime = _get_runtime()
     # 删文件后 get_meta 取不到，先把中文名留下来供日志用
@@ -1578,6 +1607,7 @@ async def api_get_plugin(plugin_id: str, user=Depends(_api_key)):
 @app.get("/api/v1/plugins/{plugin_id}/source")
 async def api_get_plugin_source(plugin_id: str, user=Depends(_api_key)):
     """读取插件源代码"""
+    _assert_safe_plugin_id(plugin_id)   # 拒绝路径遍历，防止越界读源码
     meta = registry.get_meta(plugin_id)
     if meta is None:
         raise HTTPException(status_code=404, detail="插件不存在")

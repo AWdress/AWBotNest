@@ -125,6 +125,18 @@ def _raw_url(owner: str, repo: str, branch: str, path: str) -> str:
     return f"https://{RAW_HOST}/{owner}/{repo}/{branch}/{path.lstrip('/')}"
 
 
+def _assert_raw_url(url: str) -> str:
+    """校验下载地址主机必须是 raw.githubusercontent.com，防认证后 SSRF。
+
+    导入清单里的 download_url 来自客户端请求体，若不校验，攻击者可让平台
+    去抓云元数据(169.254.169.254)/内网 HTTP 服务，并把响应落盘成插件文件。
+    """
+    from urllib.parse import urlparse
+    if (urlparse(url).hostname or "").lower() != RAW_HOST:
+        raise ValueError(f"不允许的插件下载地址（仅支持 {RAW_HOST}）")
+    return url
+
+
 async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[dict]]:
     """尝试读取 manifest，成功返回插件列表，失败返回 None"""
     base = f"{subdir}/" if subdir else ""
@@ -311,6 +323,7 @@ async def resolve_files(plugin: dict) -> list[dict]:
         if not url:
             owner, repo, branch = plugin["owner"], plugin["repo"], plugin["branch"]
             url = _raw_url(owner, repo, branch, plugin["path"])
+        _assert_raw_url(url)   # 防 SSRF：只允许从 raw.githubusercontent.com 下载
         return [{"target": f"{pid}.py", "download_url": url}]
 
     # 文件夹插件：递归列出目录内所有文件，target 保留相对结构

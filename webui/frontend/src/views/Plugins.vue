@@ -30,6 +30,7 @@ const configBotConfirmed = ref([])
 const configBotLoading = ref(false)
 const configBotSaving = ref(false)
 const configBotReady = ref(false)
+let configRequestId = 0
 let configBotRequestId = 0
 const notificationSyncSource = `plugins_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
@@ -143,8 +144,12 @@ async function openAccounts(p) {
 async function openConfig(p) {
   closeMenu()
   configTarget.value = p
+  // 请求序号守卫：快速连点两个插件的「配置」时，先发的请求可能后返回，
+  // 若不丢弃过期响应，会把旧插件的表单写进已切到新插件的弹窗，保存时配置串号。
+  const requestId = ++configRequestId
   try {
     const data = await api.getPluginConfig(p.id)
+    if (requestId !== configRequestId) return
     configSchema.value = data.schema || {}
     configValues.value = data.values || {}
     configRenderMode.value = data.render_mode || 'schema'
@@ -153,6 +158,7 @@ async function openConfig(p) {
     loadWebhook()
     loadConfigBot(p.id)
   } catch (e) {
+    if (requestId !== configRequestId) return
     error.value = e.message
   }
 }
@@ -365,6 +371,7 @@ function logsDisconnect() {
 
 async function openLogs(p) {
   closeMenu()
+  logsDisconnect()          // 先断旧连接，避免日志弹窗重复打开时泄漏 WebSocket
   logsTarget.value = p
   logsList.value = []
   logsOpen.value = true

@@ -51,7 +51,15 @@ class _PluginLoggerAdapter:
 
     def _emit(self, level: str, msg, *args, **kwargs):
         fn = getattr(_root_logger, level)
-        text = str(msg) % args if args else str(msg)
+        # 惰性格式化并吞错：一个日志调用不该因格式化失败（msg 含未转义的 %、
+        # 或 args 数量不匹配）而把异常传进插件 handler 打崩业务（对齐标准 logging 行为）。
+        if args:
+            try:
+                text = str(msg) % args
+            except (TypeError, ValueError):
+                text = " ".join([str(msg), *[str(a) for a in args]])
+        else:
+            text = str(msg)
         # 前缀显示插件中文名，便于阅读；extra.plugin 仍存插件 id 作为稳定标识供 log_stream/前端使用
         fn(f"[{self._display_name()}] {text}", extra={"plugin": self._pid}, **kwargs)
 
@@ -59,7 +67,9 @@ class _PluginLoggerAdapter:
     def info(self, msg, *a, **k):    self._emit("info", msg, *a, **k)
     def warning(self, msg, *a, **k): self._emit("warning", msg, *a, **k)
     def error(self, msg, *a, **k):   self._emit("error", msg, *a, **k)
-    def exception(self, msg, *a, **k): self._emit("error", msg, *a, **k)
+    def exception(self, msg, *a, **k):
+        k.setdefault("exc_info", True)   # 保留堆栈，否则 exception() 名不副实
+        self._emit("error", msg, *a, **k)
 
 
 def _make_plugin_logger(plugin_id: str, registry=None):
@@ -306,7 +316,9 @@ class PlatformContext:
         """
         if not isinstance(patch, dict):
             raise TypeError("update_config 需要 dict")
-        merged = {**self._registry.get_config(self.plugin_id), **patch}
+        # 只以「用户已保存值」为底叠加 patch，不把 schema 默认值焊进用户配置——
+        # 否则插件后续版本调整默认值，对已安装用户会被首次写回的旧默认值永久遮蔽。
+        merged = {**self._registry.get_saved_config(self.plugin_id), **patch}
         self._registry.set_config(self.plugin_id, merged)
         return merged
 
@@ -560,9 +572,15 @@ class PlatformContext:
         @functools.wraps(func)
         async def wrapper(client, update, *args, **kwargs):
             from kernel import activity
+            import inspect
             token = activity.set_current(pid)
             try:
-                return await func(client, update, *args, **kwargs)
+                # 兼容同步 handler：直接 await 非协程会每次触发都抛 TypeError，
+                # 导致同步 handler 永不执行、同 group 后续 handler 被跳过。
+                result = func(client, update, *args, **kwargs)
+                if inspect.iscoroutine(result):
+                    return await result
+                return result
             finally:
                 activity.reset_current(token)
 
@@ -636,9 +654,16 @@ class PlatformContext:
                 _root_logger.warning("注销 handler 失败 [%s]: %r", self.plugin_id, e)
         self._handles.clear()
 
+        import asyncio
+        import inspect
         for fn in self._cleanups:
             try:
-                fn()
+                result = fn()
+                # 清理回调可能是协程（如 aiohttp ClientSession.close()）；直接 fn() 只会
+                # 创建协程随即丢弃，造成连接/句柄静默泄漏 + "coroutine was never awaited"。
+                # 卸载在事件循环中进行，这里调度执行它。
+                if inspect.iscoroutine(result):
+                    asyncio.ensure_future(result)
             except Exception as e:  # noqa: BLE001
                 _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, e)
         self._cleanups.clear()

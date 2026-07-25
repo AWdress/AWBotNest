@@ -28,16 +28,19 @@ class InvokeMixin:
 
         retries = 0
         while retries < self._invoke_retries:
+            # 退避秒数：放到信号量外睡眠，避免 FloodWait（e.value 可达数百秒）
+            # 持有并发槽睡眠占满整个调用池、拖垮所有账号的所有 invoke。
+            backoff = 0
             async with self._pool_semaphore:
                 try:
                     return await self._session_invoke(query, *args, **kwargs)
 
                 except FloodWait as e:
-                    await asyncio.sleep(e.value)
+                    backoff = e.value
                     retries += 1
 
                 except asyncio.TimeoutError:
-                    await asyncio.sleep(1)
+                    backoff = 1
                     retries += 1
                     if retries >= self._invoke_retries:
                         logger.error(f"TimeoutError for {query.__class__.__name__}")
@@ -46,7 +49,7 @@ class InvokeMixin:
                     if await self._handle_rpc_error(query, e):
                         return None # 错误已处理（如已拉黑），不再重试
 
-                    await asyncio.sleep(1)
+                    backoff = 1
                     retries += 1
 
                 except PeerIdInvalid as e:
@@ -59,8 +62,12 @@ class InvokeMixin:
                 except Exception as e:
                     if "database" in str(e).lower():
                         return None
-                    await asyncio.sleep(1)
+                    backoff = 1
                     retries += 1
+
+            # 信号量外退避，不占用并发槽
+            if backoff:
+                await asyncio.sleep(backoff)
 
         return None
 

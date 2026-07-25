@@ -150,8 +150,10 @@ class AccountManager:
         # 各 Bot 的显示名（id -> name），供通知/列表展示
         self._bot_names: dict[str, str] = {}
 
-        # 登录流程的临时会话状态：{session_name: {client, phone, phone_code_hash}}
+        # 登录流程的临时会话状态：{session_name: {client, phone, phone_code_hash, created_at}}
         self._login_sessions: dict[str, dict] = {}
+        # per-session 上线锁：防并发双击上线竞争（见 set_online）
+        self._session_locks: dict[str, asyncio.Lock] = {}
 
         # 代理：复用 manager 的解析结果
         self.proxy = manager.proxy
@@ -513,26 +515,30 @@ class AccountManager:
         if not session_file.exists():
             raise FileNotFoundError(f"账号 [{session_name}] 尚未登录，请先登录")
 
-        app = next((a for a in self.user_apps if a.name == session_name), None)
-        if app and app.is_connected:
+        # per-session 锁：防止并发双击上线触发两个 client.start() 竞争——
+        # 后失败者会按名字把已成功连上的同名 app 从 user_apps 误删，孤立真实连接。
+        lock = self._session_locks.setdefault(session_name, asyncio.Lock())
+        async with lock:
+            app = next((a for a in self.user_apps if a.name == session_name), None)
+            if app and app.is_connected:
+                return True
+            if app is None:
+                app = self._build_user_client(session_name)
+                self.user_apps.append(app)
+            try:
+                await app.start()
+            except Exception as e:  # noqa: BLE001
+                # session 失效（AUTH_KEY_UNREGISTERED 等）→ 清理并提示重新登录
+                self.user_apps = [a for a in self.user_apps if a.name != session_name]
+                msg = str(e)
+                if "AUTH_KEY_UNREGISTERED" in msg or "Unauthorized" in type(e).__name__:
+                    raise RuntimeError(f"账号 [{session_name}] 的登录已失效，请删除后重新登录")
+                raise RuntimeError(f"账号 [{session_name}] 上线失败: {e}")
+            _unpause_account(session_name, self.workdir)
+            manager.user_apps = self.user_apps
+            self._rebind_primary()
+            logger.info("账号 [%s] 已上线", session_name)
             return True
-        if app is None:
-            app = self._build_user_client(session_name)
-            self.user_apps.append(app)
-        try:
-            await app.start()
-        except Exception as e:  # noqa: BLE001
-            # session 失效（AUTH_KEY_UNREGISTERED 等）→ 清理并提示重新登录
-            self.user_apps = [a for a in self.user_apps if a.name != session_name]
-            msg = str(e)
-            if "AUTH_KEY_UNREGISTERED" in msg or "Unauthorized" in type(e).__name__:
-                raise RuntimeError(f"账号 [{session_name}] 的登录已失效，请删除后重新登录")
-            raise RuntimeError(f"账号 [{session_name}] 上线失败: {e}")
-        _unpause_account(session_name, self.workdir)
-        manager.user_apps = self.user_apps
-        self._rebind_primary()
-        logger.info("账号 [%s] 已上线", session_name)
-        return True
 
     async def set_offline(self, session_name: str) -> bool:
         """下线一个账号（保留 session 文件，标记暂停，重启不自动上线）"""
@@ -594,6 +600,25 @@ class AccountManager:
     # 登录流程（多步：手机号 → 验证码 → 可选两步密码）
     # 状态保存在 _login_sessions，键为 session_name
     # ──────────────────────────────────────────────
+    # 登录会话过期时间（秒）：用户发了验证码后放弃登录，临时 client 会一直持有
+    # 到 Telegram 的长连接；超过 TTL 视为放弃，清理时断开释放。
+    _LOGIN_SESSION_TTL = 600
+
+    async def _purge_expired_login_sessions(self) -> None:
+        """清理过期的登录会话并断开其临时 client，避免放弃登录导致连接泄漏。"""
+        import time
+        now = time.monotonic()
+        expired = [k for k, v in list(self._login_sessions.items())
+                   if now - v.get("created_at", now) > self._LOGIN_SESSION_TTL]
+        for k in expired:
+            sess = self._login_sessions.pop(k, None)
+            client = sess.get("client") if sess else None
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def login_send_code(self, session_name: str, phone: str) -> dict:
         """第一步：连接并发送验证码。返回 {need: 'code'} 或抛异常。"""
         phone = phone.strip().replace("＋", "+").replace(" ", "")
@@ -605,17 +630,40 @@ class AccountManager:
         if not _re.fullmatch(r"\+\d{6,15}", phone):
             raise ValueError("手机号格式无效（示例：+8615012345678）")
 
+        # 先清理过期登录会话（放弃登录的临时 client 否则一直持有连接）
+        await self._purge_expired_login_sessions()
+
         # 复用已有 client 或新建（仅连接，不挂插件）
         client = next((a for a in self.user_apps if a.name == session_name), None)
+        is_new_client = client is None
         if client is None:
             client = self._build_user_client(session_name)
-        if not client.is_connected:
-            await client.connect()
-        code_info = await client.send_code(phone)
+        try:
+            if not client.is_connected:
+                await client.connect()
+            code_info = await client.send_code(phone)
+        except Exception:
+            # connect 成功但 send_code 失败（FLOOD_WAIT / 号码无效等）：新建的 client
+            # 没人持有，必须 disconnect，否则泄漏一个到 Telegram 的长连接。
+            if is_new_client:
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+            raise
+        # 重发验证码：先断开旧临时 client，避免覆盖条目时泄漏旧连接
+        old = self._login_sessions.get(session_name)
+        if old and old.get("client") is not client:
+            try:
+                await old["client"].disconnect()
+            except Exception:  # noqa: BLE001
+                pass
+        import time
         self._login_sessions[session_name] = {
             "client": client,
             "phone": phone,
             "phone_code_hash": code_info.phone_code_hash,
+            "created_at": time.monotonic(),
         }
         logger.info("已向 [%s] 发送验证码", phone)
         return {"need": "code"}
