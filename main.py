@@ -5,17 +5,15 @@ AWBotNest 平台入口。
 启动顺序：
   1. 兼容性修复（Python 3.13 事件循环、配置文件自检）
   2. 启动账号（AccountManager）
-  3. 初始化数据库 + DI 容器（复用旧底座）
-  4. 恢复已启用插件（PluginRuntime）
-  5. 启动 Web UI
-  6. idle 等待
+  3. 恢复已启用插件（PluginRuntime）
+  4. 启动 Web UI
+  5. idle 等待
 """
 # ── 前置：配置文件自检（必须在导入业务模块前）──
 import sys
 import asyncio
 import os
 import json
-from pathlib import Path
 
 # A restore is applied before config, databases, Telegram sessions, or plugins are opened.
 try:
@@ -89,36 +87,11 @@ elif sys.platform != "win32":
 from core import logger, config, manager
 from kernel import AccountManager, PluginRuntime
 from kernel import state as kernel_state
-from models import create_all, async_engine
 from schedulers import scheduler, start_scheduler
 
 # 全局内核实例（供 Web UI 引用）
 accounts: AccountManager = None
 runtime: PluginRuntime = None
-
-
-async def _init_database() -> None:
-    """初始化数据库（幂等）"""
-    import json
-    db_flag_path = Path("db_file/dbflag/dbflag.json")
-    db_flag_path.parent.mkdir(parents=True, exist_ok=True)
-
-    db_flag_data = None
-    if db_flag_path.exists():
-        try:
-            db_flag_data = json.loads(db_flag_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("读取 dbflag.json 失败，将重新初始化：%s", e)
-
-    if not db_flag_data or db_flag_data.get("db_flag") is not True:
-        logger.debug("首次运行，初始化数据库...")
-        await create_all()
-        db_flag_path.write_text(
-            json.dumps({"db_flag": True, "alter_tables": False}, ensure_ascii=False, indent=4),
-            encoding="utf-8",
-        )
-    # 兼容升级：幂等确保新表创建
-    await create_all()
 
 
 async def start_platform() -> None:
@@ -134,17 +107,14 @@ async def start_platform() -> None:
     # 1) 启动账号
     await accounts.start_all()
 
-    # 2) 数据库
-    await _init_database()
-
-    # 3) 调度器
+    # 2) 调度器
     scheduler.start()
     await start_scheduler()
 
-    # 4) 恢复已启用插件
+    # 3) 恢复已启用插件
     await runtime.restore_enabled()
 
-    # 5) 插件仓库轮询（强制常开）：注册定时任务并立即刷新一次市场 + 检查已装更新
+    # 4) 插件仓库轮询（强制常开）：注册定时任务并立即刷新一次市场 + 检查已装更新
     try:
         from webui import repo_sync
         repo_sync.reschedule()
@@ -157,7 +127,7 @@ async def start_platform() -> None:
 
     logger.info("AWBotNest 平台启动完成")
 
-    # 6) idle 等待
+    # 5) idle 等待
     from core import idle
     try:
         await idle()
@@ -165,7 +135,6 @@ async def start_platform() -> None:
         logger.debug("平台关闭中...")
         await runtime.shutdown()
         await accounts.stop_all()
-        await async_engine.dispose()
         logger.info("平台已关闭")
 
 

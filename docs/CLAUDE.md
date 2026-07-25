@@ -31,13 +31,13 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 │  kernel/  平台内核（稳定）：账号 / 插件热插拔 / ctx 能力面 │
 │  plugins/ 单文件插件（所有业务在这，用户上传）             │
 ├─────────────────────────────────────────────────────┤
-│  core/ infra/ models/ libs/ schedulers/               │
+│  core/ infra/ libs/ schedulers/                       │
 │  复用自旧项目的「底座」（内核可用，插件不可直接用）        │
 └─────────────────────────────────────────────────────┘
 ```
 
 - **内核与插件分离铁律**：业务一律是插件，禁止往 `kernel/` 塞业务；插件只能通过 `ctx` 访问平台，禁止 `import pyrogram` / `from config` / `from core|kernel`。
-- **底座是旧项目复用层**：`core`（Pyrogram 客户端封装/类型转发 + 账号 Manager）、`infra`（配置/日志/调度封装）、`models`（数据库引擎与会话工厂）、`libs`（通用工具）、`schedulers`（通用定时任务）。业务一律在插件里用 `ctx` 实现，底座只提供基础能力，新内核通过 `app.py` 兼容垫片复用它。
+- **底座是旧项目复用层**：`core`（Pyrogram 客户端封装/类型转发 + 账号 Manager）、`infra`（配置/日志/调度封装）、`libs`（通用工具）、`schedulers`（通用定时任务）。业务一律在插件里用 `ctx` 实现，底座只提供基础能力，新内核通过 `app.py` 兼容垫片复用它。
 
 ---
 
@@ -47,7 +47,7 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 
 | 文件 | 职责 |
 |------|------|
-| `main.py` | **平台入口**。启动顺序：配置文件自检(写 `data/config.json` 模板) → 挂 `data/plugin_deps` 到 sys.path → 导出代理环境变量 → 启动账号(AccountManager) → 初始化数据库 → 启动调度器 → 恢复已启用插件(PluginRuntime) → 插件仓库轮询 → 启动 Web UI → idle 等待。用 `asyncio.wait(FIRST_EXCEPTION)` 让平台/WebUI 任一崩溃即退出。 |
+| `main.py` | **平台入口**。启动顺序：配置文件自检(写 `data/config.json` 模板) → 挂 `data/plugin_deps` 到 sys.path → 导出代理环境变量 → 启动账号(AccountManager) → 启动调度器 → 恢复已启用插件(PluginRuntime) → 插件仓库轮询 → 启动 Web UI → idle 等待。用 `asyncio.wait(FIRST_EXCEPTION)` 让平台/WebUI 任一崩溃即退出。 |
 | `app.py` | **兼容垫片**。旧代码大量 `from app import ...`，此处把 `get_bot_app`/`get_user_app`/`get_user_apps`/`scheduler`/`logger` 等旧访问点重新导出、指向新内核（`kernel.state`），使旧业务代码零改动可用。 |
 | `pyproject.toml` / `requirements.txt` | 依赖声明（Python 3.13）。ruff/mypy/pytest 配置在 pyproject。 |
 | `Dockerfile` | 多阶段构建：stage1 Node 构建 Vue 前端 → `webui/static`；stage2 Python 运行时，装依赖(含 wkhtmltopdf、CJK 字体、ddddocr 系统库)、`playwright install-deps`（只装系统库，**不烤浏览器二进制**，内核运行时懒下载到卷）→ `python main.py`。 |
@@ -127,13 +127,6 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | `config.py` | pydantic-settings 统一配置(`AppSettings` 组合 Telegram/Database/Proxy/Ai)。多源优先级：环境变量 > `state.toml` > 旧 `config/config.py`。`get_settings()` lru_cache 单例。 |
 | `logging.py` | structlog 配置(JSON/彩色双模)，`logger` 向后兼容。 |
 | `scheduler.py` | APScheduler 封装(AsyncIOScheduler，Asia/Shanghai)。 |
-
-### models/ — 数据库模型（SQLAlchemy 异步 ORM）
-
-| 文件 | 职责 |
-|------|------|
-| `database.py` | 声明基类(`Base`/`CreateTimeBase`/`TimeBase`)。 |
-| `__init__.py` | 引擎与会话工厂。按 `DB_INFO.dbset` 支持 SQLite(默认,WAL)/MySQL/PostgreSQL。`async_session_maker`、`create_all()`。 |
 
 ### libs/ — 通用工具库
 
