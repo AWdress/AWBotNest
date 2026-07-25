@@ -24,12 +24,3 @@ class StateRepository(Protocol):
     def get_section(self, section: str) -> dict:
         """获取整个 section"""
         ...
-
-
-@runtime_checkable
-class RedpocketRepository(Protocol):
-    """红包记录仓库接口（替代 Redpocket.add_redpocket_record()）"""
-
-    async def save(self, website: str, gamemode: str, bonus: float) -> None:
-        """保存红包记录"""
-        ...

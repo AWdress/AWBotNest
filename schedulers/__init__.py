@@ -9,14 +9,12 @@ from libs.state import state_manager
 scheduler = AsyncIOScheduler()
 
 
-from .zhuque.fireGenshinCharacterMagic import zhuque_autofire_firsttimeget
 from .universal.auto_changename import auto_changename_temp
 from .universal.auto_avatar import auto_avatar_temp
 from .universal.custom_auto_reply import custom_auto_reply_init
 from .universal.log_cleaner import start_log_cleaner
 
 scheduler_jobs = {
-    "autofire": zhuque_autofire_firsttimeget,
     "autochangename": auto_changename_temp,
     "autoavatar": auto_avatar_temp,
     "custom_auto_reply": custom_auto_reply_init,

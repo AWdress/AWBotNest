@@ -10,8 +10,6 @@ from __future__ import annotations
 from dependency_injector import containers, providers
 
 from adapters.storage.toml_state import TomlStateRepository
-from adapters.storage.sqlalchemy.redpocket_repo import SqlAlchemyRedpocketRepository
-from core.services.redpocket_record_service import RedpocketRecordService
 
 
 class Container(containers.DeclarativeContainer):
@@ -23,7 +21,7 @@ class Container(containers.DeclarativeContainer):
         container.config.from_pydantic(get_settings())
 
     获取服务：
-        redpocket_svc = container.redpocket_record_service()
+        state = container.state_repo()
     """
 
     # ------------------------------------------------------------------ #
@@ -52,17 +50,6 @@ class Container(containers.DeclarativeContainer):
 
     # SQLAlchemy 会话工厂（由 models/__init__.py 的 async_session_maker 提供）
     _session_maker_raw = providers.Object(None)
-
-    # ------------------------------------------------------------------ #
-    # 业务服务                                                              #
-    # ------------------------------------------------------------------ #
-
-    # 红包记录仓库 + 服务
-    redpocket_repo = providers.Factory(SqlAlchemyRedpocketRepository)
-    redpocket_record_service = providers.Singleton(
-        RedpocketRecordService,
-        repo=redpocket_repo,
-    )
 
 
 def build_container(

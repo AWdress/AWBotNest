@@ -4,8 +4,6 @@ core/__init__.py
 
 使用方式：
     from core import Client, filters, Message, logger, config
-    from core.domain import BombGameState, TelegramUser
-    from core.services import RedpocketRecordService
 """
 
 from __future__ import annotations
@@ -54,19 +52,6 @@ BOT_TOKEN = config.telegram.bot_token.get_secret_value()
 MY_TGID = config.telegram.my_tgid
 
 # ──────────────────────────────────────────────
-# 领域实体（core/domain/）
-# ──────────────────────────────────────────────
-from core.domain import (
-    BombGameState, GamePhase,
-    TelegramUser,
-)
-
-# ──────────────────────────────────────────────
-# 业务服务（core/services/）
-# ──────────────────────────────────────────────
-from core.services import RedpocketRecordService
-
-# ──────────────────────────────────────────────
 # 便捷函数
 # ──────────────────────────────────────────────
 
@@ -90,11 +75,6 @@ __all__ = [
     "create", "Filter", "MessageHandler", "SQLiteStorage", "idle", "PYROGRAM_VERSION",
     "logger", "config", "get_settings",
     "manager", "API_ID", "API_HASH", "BOT_TOKEN", "MY_TGID",
-    # 领域实体
-    "BombGameState", "GamePhase",
-    "TelegramUser",
-    # 服务
-    "RedpocketRecordService",
     # 基础设施
     "get_container",
 ]
