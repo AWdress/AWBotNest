@@ -14,6 +14,7 @@ import os
 import sqlite3
 import tempfile
 import copy
+import base64
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -37,6 +38,7 @@ from webui.backup import (
     stored_backup_path,
 )
 from kernel.registry import registry
+from kernel import ai as ai_kernel
 
 app = FastAPI(title="AWBotNest Platform API")
 
@@ -893,6 +895,8 @@ async def get_settings_api(user=Depends(_auth)):
     import config.config as cfg
     data = cfg.load()
     out = copy.deepcopy(data)
+    # AI 服务由专用接口管理，避免通用设置接口顺带暴露服务商密钥。
+    out.pop("AI_SERVICES", None)
     for f in _SECRET_FIELDS:
         out[f] = _mask(data.get(f, ""))
     # proxy 密码打码
@@ -934,6 +938,95 @@ async def get_settings_api(user=Depends(_auth)):
     from libs.log_cleaner_settings import get_log_cleaner_settings
     out["LOG_CLEANER"] = get_log_cleaner_settings()
     return {"settings": out}
+
+
+# ──────────────────────────────────────────────
+# 平台 AI 服务（独立接口，避免把密钥交给插件）
+# ──────────────────────────────────────────────
+@app.get("/api/ai/settings")
+async def get_ai_settings(user=Depends(_auth)):
+    return {
+        "settings": ai_kernel.masked_ai_settings(),
+        "status": ai_kernel.status_snapshot(),
+    }
+
+
+@app.put("/api/ai/settings")
+async def put_ai_settings(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    try:
+        saved = ai_kernel.save_ai_settings((body or {}).get("settings") or body)
+    except (TypeError, ValueError, ai_kernel.AIServiceError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("平台 AI 服务设置已更新")
+    return {"status": "success", "settings": saved}
+
+
+def _resolve_ai_provider_preview(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="AI 服务配置不正确")
+    provider = dict(value)
+    if provider.get("api_key") == ai_kernel.AI_MASK:
+        provider_id = str(provider.get("id") or "")
+        current = ai_kernel.load_ai_settings()
+        matched = next(
+            (item for item in current["providers"] if item["id"] == provider_id),
+            None,
+        )
+        if matched:
+            provider["api_key"] = matched.get("api_key", "")
+    return provider
+
+
+@app.post("/api/ai/provider-models")
+async def get_ai_models(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    provider = _resolve_ai_provider_preview((body or {}).get("provider"))
+    try:
+        models = await ai_kernel.list_provider_models(provider)
+    except ai_kernel.AIServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"models": models, "count": len(models)}
+
+
+@app.post("/api/ai/test")
+async def test_ai_capability(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    capability = str((body or {}).get("capability") or "text")
+    if capability not in ai_kernel.AI_CAPABILITIES:
+        raise HTTPException(status_code=400, detail="不支持的 AI 能力")
+
+    tester = ai_kernel.PluginAI("__platform_test__", Path("data/ai_test"))
+    try:
+        if capability == "text":
+            result = await tester.chat("只回复“连接成功”四个字。", max_tokens=20)
+            return {"ok": True, "message": result[:120]}
+        if capability == "vision":
+            # 1×1 PNG，只用于确认模型是否接受图片输入。
+            pixel = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
+                "AAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+            result = await tester.vision(pixel, "这是一张测试图片，请简短回复已收到图片。")
+            return {"ok": True, "message": result[:120]}
+        path = await tester.generate_image("一个简单的蓝色圆点，纯白背景", size="1024x1024")
+        try:
+            size = path.stat().st_size
+        finally:
+            path.unlink(missing_ok=True)
+        return {"ok": True, "message": f"图片生成成功（{size // 1024}KB）"}
+    except ai_kernel.AIServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/status")
+async def get_ai_status(user=Depends(_auth)):
+    settings = ai_kernel.load_ai_settings()
+    return {
+        "enabled": settings["enabled"],
+        "configured": {
+            key: bool(value.get("default_model"))
+            for key, value in settings["capabilities"].items()
+        },
+        **ai_kernel.status_snapshot(),
+    }
 
 
 # 安全考虑：禁用通过 API 修改系统设置

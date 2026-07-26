@@ -44,6 +44,28 @@ _DEFAULTS: dict[str, Any] = {
     # 通知渠道配置（支持多个通知渠道）
     # 每项：{"id": "<唯一id>", "name": "<名称>", "type": "telegram|wechat|bark", "enabled": bool, "config": {...}}
     "NOTIFICATION_CHANNELS": [],
+    # 平台统一 AI 服务。插件只通过 ctx.ai 使用，不接触服务商密钥。
+    "AI_SERVICES": {
+        "enabled": False,
+        "providers": [
+            {
+                "id": "default",
+                "name": "默认 AI 服务",
+                "enabled": True,
+                "base_url": "https://api.openai.com/v1",
+                "api_key": "",
+            }
+        ],
+        "models": [],
+        "capabilities": {
+            "text": {"default_model": "", "fallback_model": ""},
+            "vision": {"default_model": "", "fallback_model": ""},
+            "image": {"default_model": "", "fallback_model": ""},
+        },
+        "timeout_seconds": 60,
+        "max_concurrency": 3,
+        "plugin_permissions": {},
+    },
     "proxy_set": {
         "proxy_enable": False,
         "proxy": {"scheme": "http", "hostname": "127.0.0.1", "port": 7890, "username": "", "password": ""},

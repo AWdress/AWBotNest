@@ -302,6 +302,9 @@ class NotificationSettingsApiTests(unittest.IsolatedAsyncioTestCase):
             "API_HASH": "hash",
             "BOT_TOKEN": "bot-token",
             "PLUGIN_REPOS": [],
+            "AI_SERVICES": {
+                "providers": [{"id": "main", "api_key": "ai-secret"}],
+            },
             "NOTIFICATION_CHANNELS": [
                 {
                     "id": "work",
@@ -330,6 +333,7 @@ class NotificationSettingsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channels[0]["config"]["secret"], "********")
         self.assertEqual(channels[1]["config"]["device_key"], "********")
         self.assertEqual(stored["NOTIFICATION_CHANNELS"][0]["config"]["secret"], "real-secret")
+        self.assertNotIn("AI_SERVICES", response["settings"])
 
     async def test_settings_write_api_stays_disabled(self) -> None:
         registered = {

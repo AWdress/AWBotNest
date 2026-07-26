@@ -126,6 +126,11 @@ export const api = {
   // 平台设置（config.json）
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
+  getAiSettings: () => request('GET', '/api/ai/settings'),
+  saveAiSettings: (settings) => request('PUT', '/api/ai/settings', { settings }),
+  getAiModels: (provider) => request('POST', '/api/ai/provider-models', { provider }),
+  testAiCapability: (capability) => request('POST', '/api/ai/test', { capability }),
+  getAiStatus: () => request('GET', '/api/ai/status'),
   restartPlatform: () => request('POST', '/api/system/restart'),
   downloadBackup: async () => {
     const res = await fetch('/api/system/backup', { method: 'POST', headers: authHeaders() })

@@ -99,6 +99,17 @@ async def setup(ctx):
     cfg = ctx.config
     ctx.log.info("示例插件已启用，触发命令=%s", cfg.get("keyword"))
 
+    # 平台 AI（可选）：先在「系统设置 → AI 服务」配置模型。
+    # 插件不需要保存 API Key，也不要自己创建 OpenAI 客户端。
+    # if ctx.ai.available:
+    #     choices = ctx.ai.available_models("text")  # 可让插件按 alias 自主选择
+    #     answer = await ctx.ai.chat("把这句话改得更简洁", model="fast")  # model 使用平台模型别名
+    # 图片识别：
+    # image_path = await ctx.download(message, subdir="imgs")
+    # description = await ctx.ai.vision(image_path, "识别图片里的文字和内容")
+    # 生成图片（返回本插件 data/plugin_data/<id>/ai/ 下的 Path）：
+    # generated_path = await ctx.ai.generate_image("一张简洁的电影海报")
+
     @ctx.on_message(ctx.filters.outgoing & ctx.filters.text)
     async def on_text(client, message):
         c = ctx.config  # 每次读取，确保拿到前端最新配置

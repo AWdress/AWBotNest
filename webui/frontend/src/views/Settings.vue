@@ -6,11 +6,12 @@ import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 
-const tab = ref('login')   // login | notify | api | system | maint
+const tab = ref('login')   // login | notify | ai | api | system | maint
 
 const TABS = [
   { key: 'login',  label: '安全认证' },
   { key: 'notify', label: '通知推送' },
+  { key: 'ai',     label: 'AI 服务' },
   { key: 'api',    label: '开放接口' },
   { key: 'system', label: '系统配置' },
   { key: 'maint',  label: '维护' },
@@ -24,6 +25,19 @@ const err = ref('')          // 仅用于加载失败（页面无数据时内联
 // 未保存改动检测：快照 vs 当前
 const savedSnap = ref('')
 const dirty = computed(() => !!s.value && JSON.stringify(s.value) !== savedSnap.value)
+const ai = ref(null)
+const aiSavedSnap = ref('')
+const aiLoading = ref(false)
+const aiSaving = ref(false)
+const aiStatus = ref(null)
+const aiPlugins = ref([])
+const aiModels = ref({})
+const aiModelLoading = ref({})
+const aiTesting = ref({})
+const aiDirty = computed(() => !!ai.value && JSON.stringify(ai.value) !== aiSavedSnap.value)
+const currentDirty = computed(() => tab.value === 'ai' ? aiDirty.value : dirty.value)
+const currentSaving = computed(() => tab.value === 'ai' ? aiSaving.value : saving.value)
+const anyDirty = computed(() => dirty.value || aiDirty.value)
 // 保存后需重启提示
 const restartHint = ref(false)
 const restarting = ref(false)
@@ -32,6 +46,203 @@ const notificationSyncSource = `settings_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
 // 用户又开始改动时，隐藏“需重启”横幅（新改动得重新保存）
 watch(dirty, (d) => { if (d) restartHint.value = false })
+
+const AI_CAPABILITIES = [
+  { key: 'text', label: '文字模型', desc: '总结、改写、问答和结构化处理' },
+  { key: 'vision', label: '图片识别', desc: '识别图片、截图、海报和文字内容' },
+  { key: 'image', label: '生图模型', desc: '根据提示词生成图片并保存给插件' },
+]
+
+function newAiProvider() {
+  return {
+    id: `ai_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    name: '新 AI 服务',
+    enabled: true,
+    base_url: 'https://api.openai.com/v1',
+    api_key: '',
+  }
+}
+
+function newAiModel(providerId = '') {
+  const id = `model_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
+  const existing = new Set((ai.value.models || []).map((item) => item.alias))
+  let number = ai.value.models.length + 1
+  while (existing.has(`model-${number}`)) number += 1
+  return {
+    id,
+    alias: `model-${number}`,
+    name: '新模型',
+    enabled: true,
+    provider_id: providerId || ai.value.providers[0]?.id || '',
+    model: '',
+    capabilities: ['text'],
+  }
+}
+
+async function loadAiSettings() {
+  aiLoading.value = true
+  try {
+    const [configData, pluginData] = await Promise.all([
+      api.getAiSettings(),
+      api.listPlugins(),
+    ])
+    ai.value = configData.settings
+    aiStatus.value = configData.status || {}
+    aiPlugins.value = pluginData.plugins || []
+    aiSavedSnap.value = JSON.stringify(ai.value)
+  } catch (e) {
+    toast.error('读取 AI 设置失败：' + e.message)
+  } finally {
+    aiLoading.value = false
+  }
+}
+
+async function saveAiSettings() {
+  if (!ai.value || aiSaving.value) return false
+  aiSaving.value = true
+  try {
+    const data = await api.saveAiSettings(ai.value)
+    ai.value = data.settings
+    aiSavedSnap.value = JSON.stringify(ai.value)
+    toast.success('AI 设置已保存并立即生效')
+    return true
+  } catch (e) {
+    toast.error('保存 AI 设置失败：' + e.message)
+    return false
+  } finally {
+    aiSaving.value = false
+  }
+}
+
+function undoCurrent() {
+  if (tab.value === 'ai') {
+    loadAiSettings()
+  } else {
+    load()
+  }
+}
+
+function saveCurrent() {
+  return tab.value === 'ai' ? saveAiSettings() : save()
+}
+
+function addAiProvider() {
+  const provider = newAiProvider()
+  ai.value.providers.push(provider)
+}
+
+function removeAiProvider(index) {
+  if (ai.value.providers.length <= 1) {
+    toast.error('至少保留一个 AI 服务')
+    return
+  }
+  const removed = ai.value.providers[index]
+  ai.value.providers.splice(index, 1)
+  const removedModelIds = new Set(
+    ai.value.models.filter((item) => item.provider_id === removed.id).map((item) => item.id)
+  )
+  ai.value.models = ai.value.models.filter((item) => item.provider_id !== removed.id)
+  for (const capability of AI_CAPABILITIES) {
+    const target = ai.value.capabilities[capability.key]
+    if (removedModelIds.has(target.default_model)) target.default_model = ''
+    if (removedModelIds.has(target.fallback_model)) {
+      ai.value.capabilities[capability.key].fallback_model = ''
+    }
+  }
+  delete aiModels.value[removed.id]
+}
+
+async function fetchAiModels(provider) {
+  aiModelLoading.value[provider.id] = true
+  try {
+    const data = await api.getAiModels(provider)
+    aiModels.value[provider.id] = data.models || []
+    toast.success(`已读取 ${data.count || 0} 个模型`)
+  } catch (e) {
+    toast.error('读取模型失败：' + e.message)
+  } finally {
+    aiModelLoading.value[provider.id] = false
+  }
+}
+
+function aiProviderModels(providerId) {
+  return aiModels.value[providerId] || []
+}
+
+function addAiModel() {
+  ai.value.models.push(newAiModel())
+}
+
+function removeAiModel(index) {
+  const removed = ai.value.models[index]
+  ai.value.models.splice(index, 1)
+  for (const capability of AI_CAPABILITIES) {
+    const target = ai.value.capabilities[capability.key]
+    if (target.default_model === removed.id) target.default_model = ''
+    if (target.fallback_model === removed.id) target.fallback_model = ''
+  }
+}
+
+function toggleAiModelCapability(model, capability) {
+  const index = model.capabilities.indexOf(capability)
+  if (index >= 0) model.capabilities.splice(index, 1)
+  else model.capabilities.push(capability)
+}
+
+function availableAiModels(capability) {
+  return ai.value.models.filter((item) =>
+    item.enabled && item.model && item.capabilities.includes(capability)
+  )
+}
+
+async function testAi(capability) {
+  if (aiDirty.value && !(await saveAiSettings())) return
+  aiTesting.value[capability] = true
+  try {
+    const result = await api.testAiCapability(capability)
+    toast.success(result.message || '测试成功')
+    aiStatus.value = await api.getAiStatus()
+  } catch (e) {
+    toast.error('测试失败：' + e.message)
+  } finally {
+    aiTesting.value[capability] = false
+  }
+}
+
+function pluginPermission(pluginId) {
+  return ai.value?.plugin_permissions?.[pluginId] || null
+}
+
+function pluginAiEnabled(pluginId) {
+  return pluginPermission(pluginId)?.enabled !== false
+}
+
+function pluginAiCapability(pluginId, capability) {
+  const permission = pluginPermission(pluginId)
+  return !permission || permission.capabilities.includes(capability)
+}
+
+function ensurePluginPermission(pluginId) {
+  if (!ai.value.plugin_permissions[pluginId]) {
+    ai.value.plugin_permissions[pluginId] = {
+      enabled: true,
+      capabilities: AI_CAPABILITIES.map((item) => item.key),
+    }
+  }
+  return ai.value.plugin_permissions[pluginId]
+}
+
+function togglePluginAi(pluginId) {
+  const permission = ensurePluginPermission(pluginId)
+  permission.enabled = !permission.enabled
+}
+
+function togglePluginAiCapability(pluginId, capability) {
+  const permission = ensurePluginPermission(pluginId)
+  const index = permission.capabilities.indexOf(capability)
+  if (index >= 0) permission.capabilities.splice(index, 1)
+  else permission.capabilities.push(capability)
+}
 
 async function load(silent = false) {
   if (!silent) loading.value = true
@@ -686,6 +897,7 @@ const filteredRoutePlugins = computed(() => {
 function goTab(k) {
   tab.value = k
   if (k === 'bots' && routing.value.plugins.length === 0) loadRouting()
+  if (k === 'ai' && !ai.value && !aiLoading.value) loadAiSettings()
 }
 
 // ── 登录凭据修改 ──
@@ -750,11 +962,11 @@ onMounted(() => document.addEventListener('click', handleClickOutside))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside))
 
 // 未保存改动保护：刷新/关页 + 站内切换路由时提醒
-function beforeUnload(e) { if (dirty.value) { e.preventDefault(); e.returnValue = '' } }
+function beforeUnload(e) { if (anyDirty.value) { e.preventDefault(); e.returnValue = '' } }
 onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 onUnmounted(() => window.removeEventListener('beforeunload', beforeUnload))
 onBeforeRouteLeave(async () => {
-  if (!dirty.value) return true
+  if (!anyDirty.value) return true
   return await confirm({
     title: '离开系统设置',
     message: '有未保存的改动，离开将丢失。确定离开？',
@@ -772,9 +984,9 @@ onBeforeRouteLeave(async () => {
                 @click="goTab(t.key)">{{ t.label }}</button>
       </div>
       <div class="row gap" v-if="s && tab !== 'login'">
-        <button class="btn" @click="load" :disabled="!dirty" title="撤销未保存的改动，从服务器重新加载">撤销更改</button>
-        <button class="btn btn-primary" @click="save" :disabled="saving || !dirty">
-          <span v-if="dirty" class="dirty-dot"></span>{{ saving ? '保存中…' : (dirty ? '保存设置' : '已保存') }}
+        <button class="btn" @click="undoCurrent" :disabled="!currentDirty" title="撤销未保存的改动，从服务器重新加载">撤销更改</button>
+        <button class="btn btn-primary" @click="saveCurrent" :disabled="currentSaving || !currentDirty">
+          <span v-if="currentDirty" class="dirty-dot"></span>{{ currentSaving ? '保存中…' : (currentDirty ? '保存设置' : '已保存') }}
         </button>
       </div>
     </div>
@@ -941,6 +1153,227 @@ onBeforeRouteLeave(async () => {
           </div>
         </template>
       </div>
+
+      <!-- 平台 AI 服务 -->
+      <template v-if="tab === 'ai'">
+        <div v-if="aiLoading" class="card center muted">正在读取 AI 设置…</div>
+        <template v-else-if="ai">
+          <div class="card ai-overview">
+            <div class="ai-overview-main">
+              <div class="ai-mark">AI</div>
+              <div>
+                <div class="card-title">平台 AI 服务</div>
+                <div class="hint muted">
+                  插件统一通过平台调用文字、图片识别和生图模型，不会接触服务商密钥。
+                </div>
+              </div>
+            </div>
+            <button type="button" class="toggle" :class="{ on: ai.enabled }"
+                    :aria-pressed="ai.enabled" aria-label="启用平台 AI"
+                    @click="ai.enabled = !ai.enabled"></button>
+            <div v-if="aiStatus" class="ai-status-strip">
+              <span><b>{{ aiStatus.total || 0 }}</b> 次调用</span>
+              <span class="ok"><b>{{ aiStatus.succeeded || 0 }}</b> 成功</span>
+              <span :class="{ bad: aiStatus.failed }"><b>{{ aiStatus.failed || 0 }}</b> 失败</span>
+              <span><b>{{ aiStatus.active || 0 }}</b> 进行中</span>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="row between ai-section-head">
+              <div>
+                <div class="card-title">AI 服务商</div>
+                <div class="hint muted">支持 OpenAI 兼容接口，可添加云端服务或本地模型服务。</div>
+              </div>
+              <button class="btn sm btn-primary" @click="addAiProvider">+ 添加服务</button>
+            </div>
+            <div class="ai-provider-grid">
+              <div v-for="(provider, index) in ai.providers" :key="provider.id" class="ai-provider-card">
+                <div class="row between">
+                  <label class="ai-provider-enable">
+                    <input type="checkbox" v-model="provider.enabled" />
+                    <span>{{ provider.enabled ? '已启用' : '已停用' }}</span>
+                  </label>
+                  <button class="ai-remove" @click="removeAiProvider(index)" title="删除服务">×</button>
+                </div>
+                <div class="field">
+                  <label>显示名称</label>
+                  <input class="input" v-model="provider.name" placeholder="例如：主 AI 服务" />
+                </div>
+                <div class="field">
+                  <label>服务地址</label>
+                  <input class="input mono" v-model="provider.base_url"
+                         placeholder="https://api.openai.com/v1" />
+                </div>
+                <div class="field">
+                  <label>API Key</label>
+                  <input class="input" type="password" v-model="provider.api_key"
+                         placeholder="本地服务不需要时可留空" />
+                </div>
+                <button class="btn sm" @click="fetchAiModels(provider)"
+                        :disabled="aiModelLoading[provider.id]">
+                  {{ aiModelLoading[provider.id] ? '读取中…' : '读取模型列表' }}
+                </button>
+                <span v-if="aiProviderModels(provider.id).length" class="muted small">
+                  已读取 {{ aiProviderModels(provider.id).length }} 个模型
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="row between ai-section-head">
+              <div>
+                <div class="card-title">模型库</div>
+                <div class="hint muted">
+                  从服务商列表选择或手动填写真实模型名，并设置插件调用时使用的别名。
+                </div>
+              </div>
+              <button class="btn sm btn-primary" @click="addAiModel">+ 添加模型</button>
+            </div>
+            <div v-if="ai.models.length === 0" class="muted center ai-model-empty">
+              还没有模型，请先添加一个模型。
+            </div>
+            <div v-else class="ai-model-grid">
+              <div v-for="(model, index) in ai.models" :key="model.id" class="ai-model-card">
+                <div class="row between">
+                  <label class="ai-provider-enable">
+                    <input type="checkbox" v-model="model.enabled" />
+                    <span>{{ model.enabled ? '已启用' : '已停用' }}</span>
+                  </label>
+                  <button class="ai-remove" @click="removeAiModel(index)" title="删除模型">×</button>
+                </div>
+                <div class="grid2">
+                  <div class="field">
+                    <label>显示名称</label>
+                    <input class="input" v-model="model.name" placeholder="例如：快速文字模型" />
+                  </div>
+                  <div class="field">
+                    <label>插件调用别名</label>
+                    <input class="input mono" v-model="model.alias" placeholder="例如：fast" />
+                  </div>
+                </div>
+                <div class="grid2">
+                  <div class="field">
+                    <label>所属服务</label>
+                    <select class="select" v-model="model.provider_id">
+                      <option v-for="provider in ai.providers" :key="provider.id" :value="provider.id">
+                        {{ provider.name }}
+                      </option>
+                    </select>
+                  </div>
+                  <div class="field">
+                    <label>真实模型名</label>
+                    <input class="input mono" v-model="model.model"
+                           :list="`provider-models-${model.id}`"
+                           placeholder="从列表选择或手动填写" />
+                    <datalist :id="`provider-models-${model.id}`">
+                      <option v-for="item in aiProviderModels(model.provider_id)"
+                              :key="item" :value="item"></option>
+                    </datalist>
+                  </div>
+                </div>
+                <div class="ai-model-capabilities">
+                  <span class="muted small">模型能力</span>
+                  <label v-for="capability in AI_CAPABILITIES" :key="capability.key">
+                    <input type="checkbox"
+                           :checked="model.capabilities.includes(capability.key)"
+                           @change="toggleAiModelCapability(model, capability.key)" />
+                    <span>{{ capability.label }}</span>
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="card-title">模型分工</div>
+            <div class="hint muted">
+              不指定模型的插件使用这里的默认模型；插件也可以通过别名自主选择模型库中的其他模型。
+            </div>
+            <div class="ai-capability-grid">
+              <div v-for="capability in AI_CAPABILITIES" :key="capability.key" class="ai-capability-card">
+                <div class="ai-capability-title">
+                  <span>{{ capability.label }}</span>
+                  <button class="btn sm" @click="testAi(capability.key)"
+                          :disabled="aiTesting[capability.key] || !ai.enabled">
+                    {{ aiTesting[capability.key] ? '测试中…' : '测试' }}
+                  </button>
+                </div>
+                <div class="muted small">{{ capability.desc }}</div>
+                <div class="field">
+                  <label>默认模型</label>
+                  <select class="select" v-model="ai.capabilities[capability.key].default_model">
+                    <option value="">未设置</option>
+                    <option v-for="model in availableAiModels(capability.key)"
+                            :key="model.id" :value="model.id">
+                      {{ model.name }}（{{ model.alias }}）
+                    </option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>备用模型（可空）</label>
+                  <select class="select" v-model="ai.capabilities[capability.key].fallback_model">
+                    <option value="">不使用备用模型</option>
+                    <option v-for="model in availableAiModels(capability.key)"
+                            :key="model.id" :value="model.id"
+                            :disabled="model.id === ai.capabilities[capability.key].default_model">
+                      {{ model.name }}（{{ model.alias }}）
+                    </option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div class="hint muted small ai-test-note">
+              生图测试会真正生成一张简单图片，可能产生少量服务商费用。
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="card-title">调用保护</div>
+            <div class="grid2">
+              <div class="field">
+                <label>请求超时（秒）</label>
+                <input class="input" type="number" min="5" max="300"
+                       v-model.number="ai.timeout_seconds" />
+              </div>
+              <div class="field">
+                <label>最多同时调用</label>
+                <input class="input" type="number" min="1" max="20"
+                       v-model.number="ai.max_concurrency" />
+              </div>
+            </div>
+            <div class="hint muted">超过并发数量的请求会自动排队，避免多个插件同时调用拖慢平台。</div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="card-title">插件 AI 权限</div>
+            <div class="hint muted">默认允许插件使用全部能力，也可以在这里单独关闭。</div>
+            <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无已安装插件</div>
+            <div v-else class="ai-permission-list">
+              <div v-for="plugin in aiPlugins" :key="plugin.id" class="ai-permission-row">
+                <div class="ai-plugin-name">
+                  <strong>{{ plugin.name }}</strong>
+                  <span class="mono muted small">{{ plugin.id }}</span>
+                </div>
+                <label class="ai-permission-switch">
+                  <input type="checkbox" :checked="pluginAiEnabled(plugin.id)"
+                         @change="togglePluginAi(plugin.id)" />
+                  <span>允许 AI</span>
+                </label>
+                <label v-for="capability in AI_CAPABILITIES" :key="capability.key"
+                       class="ai-permission-cap" :class="{ disabled: !pluginAiEnabled(plugin.id) }">
+                  <input type="checkbox"
+                         :checked="pluginAiCapability(plugin.id, capability.key)"
+                         :disabled="!pluginAiEnabled(plugin.id)"
+                         @change="togglePluginAiCapability(plugin.id, capability.key)" />
+                  <span>{{ capability.label }}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </template>
+      </template>
 
       <!-- 平台 Webhook -->
       <div v-show="tab === 'api'" class="card">
@@ -1829,10 +2262,176 @@ onBeforeRouteLeave(async () => {
   border-top: 1px solid var(--border);
 }
 
+/* 平台 AI 服务 */
+.ai-overview {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  overflow: hidden;
+  background:
+    radial-gradient(420px 160px at 15% 0%, rgba(48,128,240,.17), transparent 70%),
+    var(--bg-card);
+}
+.ai-overview::after {
+  content: '';
+  position: absolute;
+  width: 180px;
+  height: 180px;
+  right: -70px;
+  bottom: -110px;
+  border: 1px solid rgba(16,176,128,.22);
+  border-radius: 50%;
+}
+.ai-overview-main { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.ai-mark {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: -.04em;
+  background: linear-gradient(135deg, #3080f0, #10b080);
+  box-shadow: 0 10px 28px rgba(48,128,240,.28);
+}
+.ai-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  position: absolute;
+  left: 82px;
+  bottom: 12px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ai-status-strip b { color: var(--text-secondary); }
+.ai-status-strip .ok b { color: var(--success); }
+.ai-status-strip .bad b { color: var(--danger); }
+.ai-section-head { margin-bottom: 14px; }
+.ai-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.ai-provider-card {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(145deg, rgba(32,34,46,.78), rgba(17,19,26,.72));
+}
+.ai-model-grid { display: flex; flex-direction: column; gap: 10px; }
+.ai-model-empty {
+  padding: 24px;
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius);
+  background: rgba(255,255,255,.012);
+}
+.ai-model-card {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.ai-model-capabilities {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding-top: 2px;
+}
+.ai-model-capabilities label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ai-model-capabilities input { accent-color: var(--accent); }
+.ai-provider-enable { display: flex; align-items: center; gap: 7px; font-size: 12px; cursor: pointer; }
+.ai-provider-enable input { accent-color: var(--accent-2); }
+.ai-remove {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+}
+.ai-remove:hover { color: var(--danger); background: var(--danger-dim); }
+.ai-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+.ai-capability-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.ai-capability-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 650; }
+.ai-test-note { margin-top: 10px; }
+.ai-permission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 460px;
+  margin-top: 14px;
+  overflow-y: auto;
+}
+.ai-permission-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto repeat(3, auto);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-elevated);
+}
+.ai-plugin-name { display: flex; min-width: 0; flex-direction: column; }
+.ai-plugin-name .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-permission-switch,
+.ai-permission-cap {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ai-permission-switch input,
+.ai-permission-cap input { accent-color: var(--accent); }
+.ai-permission-cap.disabled { opacity: .42; cursor: not-allowed; }
+
 @media (max-width: 600px) {
   .grid2 { grid-template-columns: 1fr; }
   .bot-grid { grid-template-columns: 1fr; }
   .channel-grid { grid-template-columns: 1fr; }
+  .ai-provider-grid,
+  .ai-capability-grid { grid-template-columns: 1fr; }
+  .ai-overview { align-items: flex-start; }
+  .ai-status-strip { position: static; flex-basis: 100%; }
+  .ai-overview { flex-wrap: wrap; }
 }
 
 /* 手机适配 */
@@ -1844,5 +2443,8 @@ onBeforeRouteLeave(async () => {
   .panel { max-width: 100%; }
   .maint-item { flex-direction: column; align-items: stretch; }
   .grid3 { grid-template-columns: 1fr; }
+  .ai-capability-grid { grid-template-columns: 1fr; }
+  .ai-permission-row { grid-template-columns: 1fr 1fr; }
+  .ai-plugin-name { grid-column: 1 / -1; }
 }
 </style>

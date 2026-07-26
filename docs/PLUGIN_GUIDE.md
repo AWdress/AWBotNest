@@ -254,6 +254,37 @@ data = await ctx.browser.run("https://example.com", grab, headless=True)
 - `ctx.browser.engine` 返回当前引擎名（`"cloakbrowser"` / `"playwright"` / `None`）。
 - 为减小镜像体积，浏览器内核不随镜像发布，也不在启动时下载：**插件首次调用 `ctx.browser` 时**才下载到 `data/browser_cache`（随卷持久化，容器重建不必重下）。所以首次调用会多花一次下载时间，之后就快了；不用浏览器的部署零开销。出站默认走平台代理。
 
+### 平台 AI
+
+需要文字处理、图片识别或生成图片时，统一使用 `ctx.ai`。服务地址、API Key、主模型和备用模型由管理员在「系统设置 → AI 服务」配置，插件不保存密钥，也不要自行创建 OpenAI 客户端。
+
+```python
+# 判断文字能力是否可用
+if ctx.ai.available:
+    answer = await ctx.ai.chat(
+        "把下面内容整理成三条要点：……",
+        system="只输出简洁的中文。",
+    )
+
+# 图片识别：先把 Telegram 媒体下载到插件目录
+image_path = await ctx.download(message, subdir="imgs")
+description = await ctx.ai.vision(image_path, "识别图片中的文字和主要内容")
+
+# 生图：返回本插件专属目录中的 Path
+generated_path = await ctx.ai.generate_image("一张蓝绿色的极简电影海报")
+await client.send_photo(message.chat.id, str(generated_path))
+```
+
+- `ctx.ai.is_available("text" | "vision" | "image")` 可分别判断能力是否可用。
+- `ctx.ai.available_models("text" | "vision" | "image")` 返回当前插件可用的模型别名、显示名和能力，插件可据此自行选择。
+- `chat(prompt, system=None, images=None, model=None, temperature=None, max_tokens=None)` 返回文字。传 `images` 时自动使用图片识别模型和权限。
+- `vision(image, prompt=..., model=None, system=None)` 接受本地 `Path`、文件路径或图片字节，支持 PNG、JPEG、GIF、WebP，单张不超过 20MB。
+- `generate_image(prompt, model=None, size="1024x1024", quality=None)` 返回生成图片的 `Path`，文件自动放进当前插件的 `data/plugin_data/<id>/ai/`。
+- `model=` 填管理员在模型库中设置的“插件调用别名”，插件可以自主选择任意已启用且支持当前能力的模型；不传时使用平台默认模型。
+- 主模型调用失败时，平台会自动尝试备用模型；并发、超时、代理和错误记录都由平台统一处理。
+- 管理员可以关闭某个插件的全部 AI 权限，或只允许文字、识图、生图中的一部分。
+- 平台 AI 只提供调用能力，不注册 `/models` 等聊天命令，也不会自行监听或回复消息。
+
 ### 键值存储
 
 每个插件拥有独立命名空间，互不干扰。
