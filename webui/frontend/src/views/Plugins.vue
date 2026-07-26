@@ -40,6 +40,7 @@ let pluginPageMounted = false
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
 const menuAlignRight = ref(false)   // 靠近右边界时菜单改为向左展开
+const configScopeDropdown = ref('')
 function toggleMenu(p, ev) {
   if (menuFor.value === p.id) { menuFor.value = null; return }
   menuAlignRight.value = false
@@ -54,6 +55,11 @@ function toggleMenu(p, ev) {
   })
 }
 function closeMenu() { menuFor.value = null }
+function closePageDropdowns() {
+  closeMenu()
+  filterOpen.value = false
+  configScopeDropdown.value = ''
+}
 
 // 配置弹窗内的应用账号范围
 const acctOptions = ref([])    // [{session,name}]
@@ -149,6 +155,7 @@ async function loadConfigAccounts(pluginId) {
 
 async function openConfig(p) {
   closeMenu()
+  configScopeDropdown.value = ''
   configTarget.value = p
   // 请求序号守卫：快速连点两个插件的「配置」时，先发的请求可能后返回，
   // 若不丢弃过期响应，会把旧插件的表单写进已切到新插件的弹窗，保存时配置串号。
@@ -230,6 +237,30 @@ function configAvailableBots() {
   const requiresTelegram = configTarget.value?.scope === 'bot' || configTarget.value?.scope === 'both'
   return requiresTelegram ? configBots.value.filter(bot => bot.type === 'telegram') : configBots.value
 }
+
+const configBotSummary = computed(() => {
+  if (configBotLoading.value) return '正在读取…'
+  if (!configBotReady.value) return '加载失败'
+  if (configBotChoice.value.length === 0) {
+    return `跟随默认（${configDefaultBotName()}）`
+  }
+  const names = configBotChoice.value.map((id) => {
+    const bot = configBots.value.find((item) => item.id === id)
+    return bot?.name || id
+  })
+  return names.length === 1 ? names[0] : `已选择 ${names.length} 个渠道`
+})
+
+const configAccountSummary = computed(() => {
+  if (acctLoading.value) return '正在读取…'
+  if (!acctReady.value) return '加载失败'
+  if (acctAllMode.value || acctSelected.value.length === 0) return '全部账号'
+  const names = acctSelected.value.map((session) => {
+    const account = acctOptions.value.find((item) => item.session === session)
+    return account?.name || session
+  })
+  return names.length === 1 ? names[0] : `已选择 ${names.length} 个账号`
+})
 
 function toggleConfigBot(id) {
   const idx = configBotChoice.value.indexOf(id)
@@ -343,10 +374,6 @@ function useAllAccounts() {
   acctAllMode.value = true
   acctSelected.value = []
   saveAccounts(previous)
-}
-
-function useSelectedAccounts() {
-  acctAllMode.value = false
 }
 
 // ── 插件日志弹窗（只看当前插件的日志） ──
@@ -887,7 +914,7 @@ function cancelStoreLoad() {
 onMounted(() => {
   pluginPageMounted = true
   load().finally(() => { if (pluginPageMounted) scheduleStoreLoad() })
-  document.addEventListener('click', closeMenu)
+  document.addEventListener('click', closePageDropdowns)
   window.addEventListener('keydown', onSearchHotkey)
   stopNotificationSync = subscribeNotificationSync((change) => {
     if (change.source === notificationSyncSource || !configOpen.value || configBotSaving.value) return
@@ -899,7 +926,7 @@ onUnmounted(() => {
   logsDisconnect()
   cancelStoreLoad()
   stopNotificationSync?.()
-  document.removeEventListener('click', closeMenu)
+  document.removeEventListener('click', closePageDropdowns)
   window.removeEventListener('keydown', onSearchHotkey)
 })
 </script>
@@ -1274,73 +1301,79 @@ onUnmounted(() => {
                     v-model="configValues" :schema="configSchema" :plugin-id="configTarget?.id" />
         <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
 
-        <div class="config-routing-box">
-          <div>
-            <div class="config-routing-title">通知渠道</div>
-            <div class="hint muted small">选择这个插件的通知发到哪些渠道，可多选，切换后立即生效。</div>
-          </div>
-          <div v-if="configBotLoading" class="muted small">正在读取…</div>
-          <div v-else-if="!configBotReady" class="muted small">加载失败</div>
-          <div v-else class="config-bot-checks">
-            <!-- 空路由表示始终跟随平台当前默认渠道。 -->
-            <label class="config-bot-item">
-              <input type="checkbox"
-                     :checked="configBotChoice.length === 0"
-                     @change="configBotChoice = []; saveConfigBot()"
-                     :disabled="configBotSaving" />
-              <span>跟随默认（{{ configDefaultBotName() }}）</span>
-            </label>
-            <!-- 所有可用渠道 -->
-            <label v-for="bot in configAvailableBots()" :key="bot.id" class="config-bot-item">
-              <input type="checkbox"
-                     :checked="configBotChoice.includes(bot.id)"
-                     @change="toggleConfigBot(bot.id)"
-                     :disabled="configBotSaving" />
-              <span>{{ bot.name || bot.id }}
-                <span v-if="bot.is_default" class="muted small">（当前默认）</span>
-                <span class="muted small">{{ bot.username ? bot.username : '' }}</span>
-                <span v-if="!bot.online" class="muted small">（离线）</span>
-              </span>
-            </label>
-          </div>
-        </div>
-
-        <div v-if="configTarget?.scope === 'user' || configTarget?.scope === 'both'" class="config-routing-box">
-          <div>
-            <div class="config-routing-title">应用账号</div>
-            <div class="hint muted small">选择这个插件在哪些账号上生效，切换后立即保存。</div>
-          </div>
-          <div v-if="acctLoading" class="muted small">正在读取…</div>
-          <div v-else-if="!acctReady" class="muted small">加载失败</div>
-          <template v-else>
-            <div class="config-account-modes">
-              <label class="config-choice-card" :class="{ active: acctAllMode }">
-                <input type="radio" :checked="acctAllMode" @change="useAllAccounts" :disabled="acctSaving" />
-                <span>
-                  <strong>全部账号</strong>
-                  <small>新登录的账号也会自动生效</small>
-                </span>
+        <div class="config-scope-grid">
+          <div class="config-scope-field" @click.stop>
+            <div class="config-scope-heading">
+              <span>通知渠道</span>
+              <span class="muted small">可多选 · 立即保存</span>
+            </div>
+            <button type="button" class="config-scope-select"
+                    :class="{ open: configScopeDropdown === 'channels' }"
+                    :disabled="configBotLoading || !configBotReady"
+                    @click="configScopeDropdown = configScopeDropdown === 'channels' ? '' : 'channels'">
+              <span>{{ configBotSummary }}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+            <div v-if="configScopeDropdown === 'channels'" class="config-scope-menu">
+              <!-- 空路由表示始终跟随平台当前默认渠道。 -->
+              <label class="config-scope-option">
+                <input type="checkbox"
+                       :checked="configBotChoice.length === 0"
+                       @change="configBotChoice = []; saveConfigBot()"
+                       :disabled="configBotSaving" />
+                <span>跟随默认（{{ configDefaultBotName() }}）</span>
               </label>
-              <label class="config-choice-card" :class="{ active: !acctAllMode }">
-                <input type="radio" :checked="!acctAllMode" @change="useSelectedAccounts" :disabled="acctSaving" />
-                <span>
-                  <strong>仅指定账号</strong>
-                  <small>只在下面勾选的账号中生效</small>
+              <div class="config-scope-divider"></div>
+              <label v-for="bot in configAvailableBots()" :key="bot.id" class="config-scope-option">
+                <input type="checkbox"
+                       :checked="configBotChoice.includes(bot.id)"
+                       @change="toggleConfigBot(bot.id)"
+                       :disabled="configBotSaving" />
+                <span>{{ bot.name || bot.id }}
+                  <span v-if="bot.is_default" class="muted small">（当前默认）</span>
+                  <span class="muted small">{{ bot.username || '' }}</span>
+                  <span v-if="!bot.online" class="muted small">（离线）</span>
                 </span>
               </label>
             </div>
-            <div v-if="!acctAllMode" class="config-account-checks">
-              <div v-if="acctOptions.length === 0" class="muted small">还没有账号，请先到「账号管理」登录。</div>
-              <label v-for="a in acctOptions" :key="a.session" class="config-bot-item">
+          </div>
+
+          <div v-if="configTarget?.scope === 'user' || configTarget?.scope === 'both'"
+               class="config-scope-field" @click.stop>
+            <div class="config-scope-heading">
+              <span>应用账号</span>
+              <span class="muted small">可多选 · 立即保存</span>
+            </div>
+            <button type="button" class="config-scope-select"
+                    :class="{ open: configScopeDropdown === 'accounts' }"
+                    :disabled="acctLoading || !acctReady"
+                    @click="configScopeDropdown = configScopeDropdown === 'accounts' ? '' : 'accounts'">
+              <span>{{ configAccountSummary }}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                   stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m6 9 6 6 6-6"/>
+              </svg>
+            </button>
+            <div v-if="configScopeDropdown === 'accounts'" class="config-scope-menu">
+              <label class="config-scope-option">
+                <input type="checkbox" :checked="acctAllMode"
+                       @change="useAllAccounts" :disabled="acctSaving" />
+                <span>全部账号 <span class="muted small">新账号也会自动生效</span></span>
+              </label>
+              <div class="config-scope-divider"></div>
+              <div v-if="acctOptions.length === 0" class="config-scope-empty">
+                还没有账号，请先到“账号管理”登录。
+              </div>
+              <label v-for="a in acctOptions" :key="a.session" class="config-scope-option">
                 <input type="checkbox" :checked="acctSelected.includes(a.session)"
                        @change="toggleAcct(a.session)" :disabled="acctSaving" />
                 <span>{{ a.name }} <span class="muted mono small">{{ a.session }}</span></span>
               </label>
-              <div v-if="acctOptions.length && acctSelected.length === 0" class="config-choice-warning">
-                请至少选择一个账号，选择后会立即保存。
-              </div>
             </div>
-          </template>
+          </div>
         </div>
 
         <!-- Webhook（仅插件声明 "webhook": True 时显示） -->
@@ -1947,48 +1980,101 @@ onUnmounted(() => {
 .form .field label { font-size: 13px; color: var(--text-secondary); }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 .hint { font-size: 12px; }
-.config-routing-box {
-  display: flex; flex-direction: column; gap: 10px;
-  margin-top: 18px; padding: 14px; border: 1px solid var(--border);
-  border-radius: var(--radius-sm); background: var(--bg-elevated);
+.config-scope-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
 }
-.config-routing-title { margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.config-bot-checks,
-.config-account-checks {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+.config-scope-field {
+  position: relative;
+  min-width: 0;
 }
-.config-bot-item {
-  display: flex; align-items: center; gap: 8px;
-  font-size: 13px; color: var(--text-primary); cursor: pointer;
-  min-width: 180px; padding: 9px 11px; border: 1px solid var(--border);
-  border-radius: 8px; background: rgba(255,255,255,.018);
-  transition: background 0.15s, border-color 0.15s;
+.config-scope-field:only-child { grid-column: 1 / -1; }
+.config-scope-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
 }
-.config-bot-item:hover { background: var(--bg-hover); border-color: var(--border-light); }
-.config-bot-item input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
+.config-scope-select {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  cursor: pointer;
+}
+.config-scope-select:disabled { cursor: not-allowed; opacity: .55; }
+.config-scope-select.open { border-color: var(--accent); }
+.config-scope-select > span {
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.config-scope-select svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  transition: transform .15s;
+}
+.config-scope-select.open svg { transform: rotate(180deg); }
+.config-scope-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 60;
+  max-height: 280px;
+  padding: 7px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: 0 16px 42px rgba(0,0,0,.45);
+}
+.config-scope-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 9px;
+  border-radius: 7px;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+.config-scope-option:hover { background: var(--bg-hover); }
+.config-scope-option input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+.config-scope-divider {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--border);
+}
+.config-scope-empty {
+  padding: 12px 9px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
 .repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .repo-row .input { flex: 1; }
-.config-account-modes {
-  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
-}
-.config-choice-card {
-  display: flex; align-items: center; gap: 10px; min-width: 0;
-  padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px;
-  background: rgba(255,255,255,.018); cursor: pointer;
-  transition: border-color .15s, background .15s, box-shadow .15s;
-}
-.config-choice-card:hover { border-color: var(--border-light); background: var(--bg-hover); }
-.config-choice-card.active {
-  border-color: var(--accent); background: var(--accent-dim);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
-}
-.config-choice-card > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.config-choice-card strong { font-size: 13px; color: var(--text-primary); }
-.config-choice-card small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.config-choice-warning {
-  flex-basis: 100%; padding: 8px 10px; border-radius: 7px;
-  color: #eeb86b; background: rgba(238,184,107,.08); font-size: 12px;
-}
 
 /* Webhook 区（配置弹窗内） */
 .webhook-box {
@@ -2127,13 +2213,16 @@ onUnmounted(() => {
   top: calc(100% + 8px);
   right: 0;
   z-index: 1000;
-  background: var(--bg-surface); /* 确保有背景色 */
+  isolation: isolate;
+  background: var(--bg-card);
+  opacity: 1;
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
   min-width: 300px;
   max-width: 400px;
   padding: 16px;
+  backdrop-filter: none;
 
   /* 自适应位置：如果右侧空间不足，改为左对齐 */
   left: auto;
@@ -2322,10 +2411,8 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .search-meta span:nth-child(n+3) { display: none; }
   .search-foot { padding: 10px 16px; }
   .search-foot > span:first-child { display: none; }
-  .config-routing-box { align-items: stretch; flex-direction: column; gap: 10px; }
-  .config-account-modes { grid-template-columns: 1fr; }
-  .config-bot-item { flex: 1 1 100%; min-width: 0; }
-  .config-bot-select { width: 100%; }
+  .config-scope-grid { grid-template-columns: 1fr; gap: 12px; }
+  .config-scope-field:only-child { grid-column: auto; }
   /* 窄屏直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */
   .modal.modal-wide {
