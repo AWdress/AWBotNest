@@ -41,6 +41,45 @@ let pluginPageMounted = false
 const menuFor = ref(null)
 const menuAlignRight = ref(false)   // 靠近右边界时菜单改为向左展开
 const configScopeDropdown = ref('')
+const configScopeMenuStyle = ref({})
+let configScopeTrigger = null
+
+function positionConfigScopeMenu() {
+  if (!configScopeDropdown.value || !configScopeTrigger?.isConnected) return
+  const rect = configScopeTrigger.getBoundingClientRect()
+  const viewportGap = 12
+  const menuGap = 6
+  const availableBelow = window.innerHeight - rect.bottom - menuGap - viewportGap
+  const availableAbove = rect.top - menuGap - viewportGap
+  const openAbove = availableBelow < 180 && availableAbove > availableBelow
+  const width = Math.min(rect.width, window.innerWidth - viewportGap * 2)
+  const left = Math.min(
+    Math.max(viewportGap, rect.left),
+    window.innerWidth - width - viewportGap,
+  )
+
+  configScopeMenuStyle.value = {
+    left: `${left}px`,
+    right: 'auto',
+    top: openAbove ? 'auto' : `${rect.bottom + menuGap}px`,
+    bottom: openAbove ? `${window.innerHeight - rect.top + menuGap}px` : 'auto',
+    width: `${width}px`,
+    maxHeight: `${Math.max(100, Math.min(280, openAbove ? availableAbove : availableBelow))}px`,
+  }
+}
+
+function toggleConfigScopeDropdown(type, event) {
+  if (configScopeDropdown.value === type) {
+    configScopeDropdown.value = ''
+    configScopeTrigger = null
+    return
+  }
+  configScopeTrigger = event.currentTarget
+  configScopeDropdown.value = type
+  positionConfigScopeMenu()
+  nextTick(positionConfigScopeMenu)
+}
+
 function toggleMenu(p, ev) {
   if (menuFor.value === p.id) { menuFor.value = null; return }
   menuAlignRight.value = false
@@ -59,6 +98,7 @@ function closePageDropdowns() {
   closeMenu()
   filterOpen.value = false
   configScopeDropdown.value = ''
+  configScopeTrigger = null
 }
 
 // 配置弹窗内的应用账号范围
@@ -915,6 +955,8 @@ onMounted(() => {
   pluginPageMounted = true
   load().finally(() => { if (pluginPageMounted) scheduleStoreLoad() })
   document.addEventListener('click', closePageDropdowns)
+  window.addEventListener('resize', positionConfigScopeMenu)
+  window.addEventListener('scroll', positionConfigScopeMenu, true)
   window.addEventListener('keydown', onSearchHotkey)
   stopNotificationSync = subscribeNotificationSync((change) => {
     if (change.source === notificationSyncSource || !configOpen.value || configBotSaving.value) return
@@ -927,6 +969,8 @@ onUnmounted(() => {
   cancelStoreLoad()
   stopNotificationSync?.()
   document.removeEventListener('click', closePageDropdowns)
+  window.removeEventListener('resize', positionConfigScopeMenu)
+  window.removeEventListener('scroll', positionConfigScopeMenu, true)
   window.removeEventListener('keydown', onSearchHotkey)
 })
 </script>
@@ -1310,35 +1354,38 @@ onUnmounted(() => {
             <button type="button" class="config-scope-select"
                     :class="{ open: configScopeDropdown === 'channels' }"
                     :disabled="configBotLoading || !configBotReady"
-                    @click="configScopeDropdown = configScopeDropdown === 'channels' ? '' : 'channels'">
+                    @click="toggleConfigScopeDropdown('channels', $event)">
               <span>{{ configBotSummary }}</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m6 9 6 6 6-6"/>
               </svg>
             </button>
-            <div v-if="configScopeDropdown === 'channels'" class="config-scope-menu">
-              <!-- 空路由表示始终跟随平台当前默认渠道。 -->
-              <label class="config-scope-option">
-                <input type="checkbox"
-                       :checked="configBotChoice.length === 0"
-                       @change="configBotChoice = []; saveConfigBot()"
-                       :disabled="configBotSaving" />
-                <span>跟随默认（{{ configDefaultBotName() }}）</span>
-              </label>
-              <div class="config-scope-divider"></div>
-              <label v-for="bot in configAvailableBots()" :key="bot.id" class="config-scope-option">
-                <input type="checkbox"
-                       :checked="configBotChoice.includes(bot.id)"
-                       @change="toggleConfigBot(bot.id)"
-                       :disabled="configBotSaving" />
-                <span>{{ bot.name || bot.id }}
-                  <span v-if="bot.is_default" class="muted small">（当前默认）</span>
-                  <span class="muted small">{{ bot.username || '' }}</span>
-                  <span v-if="!bot.online" class="muted small">（离线）</span>
-                </span>
-              </label>
-            </div>
+            <Teleport to="body">
+              <div v-if="configScopeDropdown === 'channels'" class="config-scope-menu"
+                   :style="configScopeMenuStyle" @click.stop>
+                <!-- 空路由表示始终跟随平台当前默认渠道。 -->
+                <label class="config-scope-option">
+                  <input type="checkbox"
+                         :checked="configBotChoice.length === 0"
+                         @change="configBotChoice = []; saveConfigBot()"
+                         :disabled="configBotSaving" />
+                  <span>跟随默认（{{ configDefaultBotName() }}）</span>
+                </label>
+                <div class="config-scope-divider"></div>
+                <label v-for="bot in configAvailableBots()" :key="bot.id" class="config-scope-option">
+                  <input type="checkbox"
+                         :checked="configBotChoice.includes(bot.id)"
+                         @change="toggleConfigBot(bot.id)"
+                         :disabled="configBotSaving" />
+                  <span>{{ bot.name || bot.id }}
+                    <span v-if="bot.is_default" class="muted small">（当前默认）</span>
+                    <span class="muted small">{{ bot.username || '' }}</span>
+                    <span v-if="!bot.online" class="muted small">（离线）</span>
+                  </span>
+                </label>
+              </div>
+            </Teleport>
           </div>
 
           <div v-if="configTarget?.scope === 'user' || configTarget?.scope === 'both'"
@@ -1350,29 +1397,32 @@ onUnmounted(() => {
             <button type="button" class="config-scope-select"
                     :class="{ open: configScopeDropdown === 'accounts' }"
                     :disabled="acctLoading || !acctReady"
-                    @click="configScopeDropdown = configScopeDropdown === 'accounts' ? '' : 'accounts'">
+                    @click="toggleConfigScopeDropdown('accounts', $event)">
               <span>{{ configAccountSummary }}</span>
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="m6 9 6 6 6-6"/>
               </svg>
             </button>
-            <div v-if="configScopeDropdown === 'accounts'" class="config-scope-menu">
-              <label class="config-scope-option">
-                <input type="checkbox" :checked="acctAllMode"
-                       @change="useAllAccounts" :disabled="acctSaving" />
-                <span>全部账号 <span class="muted small">新账号也会自动生效</span></span>
-              </label>
-              <div class="config-scope-divider"></div>
-              <div v-if="acctOptions.length === 0" class="config-scope-empty">
-                还没有账号，请先到“账号管理”登录。
+            <Teleport to="body">
+              <div v-if="configScopeDropdown === 'accounts'" class="config-scope-menu"
+                   :style="configScopeMenuStyle" @click.stop>
+                <label class="config-scope-option">
+                  <input type="checkbox" :checked="acctAllMode"
+                         @change="useAllAccounts" :disabled="acctSaving" />
+                  <span>全部账号 <span class="muted small">新账号也会自动生效</span></span>
+                </label>
+                <div class="config-scope-divider"></div>
+                <div v-if="acctOptions.length === 0" class="config-scope-empty">
+                  还没有账号，请先到“账号管理”登录。
+                </div>
+                <label v-for="a in acctOptions" :key="a.session" class="config-scope-option">
+                  <input type="checkbox" :checked="acctSelected.includes(a.session)"
+                         @change="toggleAcct(a.session)" :disabled="acctSaving" />
+                  <span>{{ a.name }} <span class="muted mono small">{{ a.session }}</span></span>
+                </label>
               </div>
-              <label v-for="a in acctOptions" :key="a.session" class="config-scope-option">
-                <input type="checkbox" :checked="acctSelected.includes(a.session)"
-                       @change="toggleAcct(a.session)" :disabled="acctSaving" />
-                <span>{{ a.name }} <span class="muted mono small">{{ a.session }}</span></span>
-              </label>
-            </div>
+            </Teleport>
           </div>
         </div>
 
@@ -2032,11 +2082,8 @@ onUnmounted(() => {
 }
 .config-scope-select.open svg { transform: rotate(180deg); }
 .config-scope-menu {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  left: 0;
-  z-index: 60;
+  position: fixed;
+  z-index: 10050;
   max-height: 280px;
   padding: 7px;
   overflow-y: auto;
