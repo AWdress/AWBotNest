@@ -17,7 +17,7 @@ import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
 import httpx
@@ -30,6 +30,13 @@ AI_CAPABILITIES = ("text", "vision", "image")
 MODEL_ALIAS_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 MAX_INPUT_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_OUTPUT_IMAGE_BYTES = 30 * 1024 * 1024
+MAX_IMAGE_REDIRECTS = 5
+IMAGE_SUFFIXES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
 
 DEFAULT_AI_SETTINGS: dict[str, Any] = {
     "enabled": False,
@@ -77,13 +84,36 @@ def _config_module():
     return cfg
 
 
+def _bounded_int(value: Any, default: int, minimum: int, maximum: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(minimum, min(maximum, number))
+
+
+def _capability_list(value: Any, default: Iterable[str] = ()) -> list[str]:
+    source = value if isinstance(value, (list, tuple, set)) else default
+    return [item for item in source if item in AI_CAPABILITIES]
+
+
+def _valid_provider_url(value: str) -> bool:
+    parsed = urlparse(value)
+    return bool(
+        parsed.scheme in ("http", "https")
+        and parsed.hostname
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
 def normalize_ai_settings(value: Any) -> dict[str, Any]:
     """清洗配置并补齐旧版本缺少的字段。"""
     raw = value if isinstance(value, dict) else {}
     result = copy.deepcopy(DEFAULT_AI_SETTINGS)
     result["enabled"] = bool(raw.get("enabled", False))
-    result["timeout_seconds"] = max(5, min(300, int(raw.get("timeout_seconds", 60) or 60)))
-    result["max_concurrency"] = max(1, min(20, int(raw.get("max_concurrency", 3) or 3)))
+    result["timeout_seconds"] = _bounded_int(raw.get("timeout_seconds"), 60, 5, 300)
+    result["max_concurrency"] = _bounded_int(raw.get("max_concurrency"), 3, 1, 20)
 
     providers: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -120,10 +150,7 @@ def normalize_ai_settings(value: Any) -> dict[str, Any]:
         alias = str(item.get("alias") or model_id).strip() or model_id
         if alias in model_aliases:
             continue
-        allowed = [
-            capability for capability in item.get("capabilities", [])
-            if capability in AI_CAPABILITIES
-        ]
+        allowed = _capability_list(item.get("capabilities"))
         model_ids.add(model_id)
         model_aliases.add(alias)
         models.append({
@@ -158,10 +185,9 @@ def normalize_ai_settings(value: Any) -> dict[str, Any]:
         for plugin_id, permission in permissions.items():
             if not isinstance(permission, dict):
                 continue
-            allowed = [
-                item for item in permission.get("capabilities", AI_CAPABILITIES)
-                if item in AI_CAPABILITIES
-            ]
+            allowed = _capability_list(
+                permission.get("capabilities"), AI_CAPABILITIES,
+            )
             result["plugin_permissions"][str(plugin_id)] = {
                 "enabled": bool(permission.get("enabled", True)),
                 "capabilities": allowed,
@@ -197,9 +223,12 @@ def save_ai_settings(value: Any) -> dict[str, Any]:
         aliases.add(alias)
         if not str(item.get("model") or "").strip():
             raise AIServiceError(f"模型“{alias}”没有填写真实模型名")
-        if not any(capability in AI_CAPABILITIES for capability in item.get("capabilities", [])):
+        if not _capability_list(item.get("capabilities")):
             raise AIServiceError(f"模型“{alias}”至少要选择一种能力")
     incoming = normalize_ai_settings(value)
+    for provider in incoming["providers"]:
+        if provider["enabled"] and not _valid_provider_url(provider["base_url"]):
+            raise AIServiceError(f"AI 服务“{provider['name']}”的服务地址不正确")
     current = load_ai_settings()
     current_keys = {item["id"]: item.get("api_key", "") for item in current["providers"]}
     for provider in incoming["providers"]:
@@ -217,6 +246,8 @@ def _provider(settings: dict[str, Any], provider_id: str) -> dict[str, Any]:
                 raise AIServiceError(f"AI 服务“{item['name']}”未启用")
             if not item["base_url"]:
                 raise AIServiceError(f"AI 服务“{item['name']}”未填写服务地址")
+            if not _valid_provider_url(item["base_url"]):
+                raise AIServiceError(f"AI 服务“{item['name']}”的服务地址不正确")
             return item
     raise AIServiceError("AI 服务不存在")
 
@@ -265,6 +296,7 @@ def _model_candidates(
     models_by_id = {item["id"]: item for item in settings["models"]}
     models_by_alias = {item["alias"]: item for item in settings["models"]}
     candidates: list[tuple[dict[str, Any], str, str]] = []
+    provider_error: AIServiceError | None = None
     for model_id in selected_ids:
         item = models_by_id.get(model_id) or (models_by_alias.get(model_id) if requested else None)
         if not item or not item["enabled"] or not item["model"]:
@@ -275,8 +307,17 @@ def _model_candidates(
             if requested:
                 raise AIServiceError("插件指定的模型不支持当前能力")
             continue
-        candidates.append((_provider(settings, item["provider_id"]), item["model"], item["id"]))
+        try:
+            provider = _provider(settings, item["provider_id"])
+        except AIServiceError as exc:
+            if requested:
+                raise
+            provider_error = exc
+            continue
+        candidates.append((provider, item["model"], item["id"]))
     if not candidates:
+        if provider_error:
+            raise provider_error
         raise AIServiceError(f"没有可用的 {capability} 模型")
     return candidates
 
@@ -292,14 +333,17 @@ async def list_provider_models(provider: dict[str, Any], timeout: int = 30) -> l
     }
     if not normalized["base_url"]:
         raise AIServiceError("请先填写服务地址")
-    client = _client(normalized, max(5, min(120, int(timeout or 30))))
+    if not _valid_provider_url(normalized["base_url"]):
+        raise AIServiceError("AI 服务地址不正确")
+    client: AsyncOpenAI | None = None
     try:
+        client = _client(normalized, max(5, min(120, int(timeout or 30))))
         page = await client.models.list()
         return sorted({str(item.id) for item in page.data if getattr(item, "id", None)})
     except Exception as exc:  # noqa: BLE001
         raise AIServiceError(_friendly_error(exc)) from exc
     finally:
-        await client.close()
+        await _close_client(client)
 
 
 def _friendly_error(exc: Exception) -> str:
@@ -362,38 +406,68 @@ def _is_safe_image_url(value: str, provider_base_url: str) -> bool:
 
 async def _download_generated_image(
     url: str,
-    target: Path,
+    target_stem: Path,
     timeout: int,
     provider_base_url: str,
-) -> None:
-    if not _is_safe_image_url(url, provider_base_url):
-        raise AIServiceError("生图服务返回了不安全的图片地址")
-    async with httpx.AsyncClient(timeout=float(timeout), follow_redirects=True, trust_env=True) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        if not _is_safe_image_url(str(response.url), provider_base_url):
-            raise AIServiceError("生图服务把图片跳转到了不安全的地址")
-        content = response.content
-        if len(content) > MAX_OUTPUT_IMAGE_BYTES:
-            raise AIServiceError("生成的图片超过 30MB")
-        if not str(response.headers.get("content-type", "")).lower().startswith("image/"):
-            raise AIServiceError("生图服务返回的不是图片")
-        target.write_bytes(content)
+) -> Path:
+    current_url = url
+    async with httpx.AsyncClient(
+        timeout=float(timeout), follow_redirects=False, trust_env=True,
+    ) as client:
+        for _ in range(MAX_IMAGE_REDIRECTS + 1):
+            if not _is_safe_image_url(current_url, provider_base_url):
+                raise AIServiceError("生图服务返回了不安全的图片地址")
+            async with client.stream("GET", current_url) as response:
+                if response.is_redirect:
+                    location = response.headers.get("location")
+                    if not location:
+                        raise AIServiceError("生图服务返回了无效的图片跳转地址")
+                    current_url = urljoin(str(response.url), location)
+                    continue
+                response.raise_for_status()
+                content_type = str(response.headers.get("content-type", "")).lower()
+                if not content_type.startswith("image/"):
+                    raise AIServiceError("生图服务返回的不是图片")
+                try:
+                    content_length = int(response.headers.get("content-length", "0") or 0)
+                except ValueError:
+                    content_length = 0
+                if content_length > MAX_OUTPUT_IMAGE_BYTES:
+                    raise AIServiceError("生成的图片超过 30MB")
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > MAX_OUTPUT_IMAGE_BYTES:
+                        raise AIServiceError("生成的图片超过 30MB")
+                data = bytes(content)
+                mime = _mime_for_image(None, data)
+                target = target_stem.with_suffix(IMAGE_SUFFIXES[mime])
+                target.write_bytes(data)
+                return target
+    raise AIServiceError("生图服务的图片跳转次数过多")
 
 
-async def _with_status(awaitable):
+def _status_started() -> None:
     _status.total += 1
     _status.active += 1
-    try:
-        result = await awaitable
+
+
+def _status_finished(error: Exception | None = None) -> None:
+    _status.active = max(0, _status.active - 1)
+    if error is None:
         _status.succeeded += 1
-        return result
-    except Exception as exc:
-        _status.failed += 1
-        _status.last_error = _friendly_error(exc)
-        raise
-    finally:
-        _status.active -= 1
+        return
+    _status.failed += 1
+    _status.last_error = _friendly_error(error)
+
+
+async def _close_client(client: AsyncOpenAI | None) -> None:
+    if client is None:
+        return
+    try:
+        await client.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("关闭 AI 客户端失败: %s", _friendly_error(exc))
 
 
 class PluginAI:
@@ -432,14 +506,27 @@ class PluginAI:
         allowed_capabilities = set(
             permission["capabilities"] if permission else AI_CAPABILITIES
         )
-        defaults = {
-            item["default_model"]
-            for item in settings["capabilities"].values()
-            if item.get("default_model")
+        if capability is None:
+            defaults = {
+                item["default_model"]
+                for item in settings["capabilities"].values()
+                if item.get("default_model")
+            }
+        else:
+            default_id = settings["capabilities"][capability].get("default_model")
+            defaults = {default_id} if default_id else set()
+        usable_providers = {
+            item["id"]
+            for item in settings["providers"]
+            if item["enabled"] and _valid_provider_url(item["base_url"])
         }
         result = []
         for item in settings["models"]:
-            if not item["enabled"] or not item["model"]:
+            if (
+                not item["enabled"]
+                or not item["model"]
+                or item["provider_id"] not in usable_providers
+            ):
                 continue
             allowed = [
                 name for name in item["capabilities"]
@@ -519,26 +606,31 @@ class PluginAI:
         last_error: Exception | None = None
         async with semaphore:
             for provider, selected, model_id in candidates:
-                client = _client(provider, timeout)
+                client: AsyncOpenAI | None = None
+                attempt_error: Exception | None = None
+                _status_started()
                 try:
+                    client = _client(provider, timeout)
                     kwargs: dict[str, Any] = {"model": selected, "messages": messages}
                     if temperature is not None:
                         kwargs["temperature"] = float(temperature)
                     if max_tokens is not None:
                         kwargs["max_tokens"] = int(max_tokens)
-                    response = await _with_status(client.chat.completions.create(**kwargs))
+                    response = await client.chat.completions.create(**kwargs)
                     text = response.choices[0].message.content if response.choices else ""
                     if not text:
                         raise AIServiceError("模型没有返回文字内容")
                     return str(text)
                 except Exception as exc:  # noqa: BLE001
+                    attempt_error = exc
                     last_error = exc
                     logger.warning(
                         "AI 模型调用失败 [%s/%s/%s]: %s",
                         provider["id"], model_id, selected, _friendly_error(exc),
                     )
                 finally:
-                    await client.close()
+                    _status_finished(attempt_error)
+                    await _close_client(client)
         raise AIServiceError(_friendly_error(last_error or RuntimeError("AI 调用失败")))
 
     async def generate_image(
@@ -558,8 +650,11 @@ class PluginAI:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         async with semaphore:
             for provider, selected, model_id in candidates:
-                client = _client(provider, timeout)
+                client: AsyncOpenAI | None = None
+                attempt_error: Exception | None = None
+                _status_started()
                 try:
+                    client = _client(provider, timeout)
                     kwargs: dict[str, Any] = {
                         "model": selected,
                         "prompt": str(prompt),
@@ -568,31 +663,35 @@ class PluginAI:
                     }
                     if quality:
                         kwargs["quality"] = quality
-                    response = await _with_status(client.images.generate(**kwargs))
+                    response = await client.images.generate(**kwargs)
                     if not response.data:
                         raise AIServiceError("生图模型没有返回图片")
                     item = response.data[0]
-                    target = self.data_dir / f"ai_{uuid4().hex}.png"
+                    target_stem = self.data_dir / f"ai_{uuid4().hex}"
                     if getattr(item, "b64_json", None):
                         data = base64.b64decode(item.b64_json, validate=True)
                         if len(data) > MAX_OUTPUT_IMAGE_BYTES:
                             raise AIServiceError("生成的图片超过 30MB")
+                        mime = _mime_for_image(None, data)
+                        target = target_stem.with_suffix(IMAGE_SUFFIXES[mime])
                         target.write_bytes(data)
                     elif getattr(item, "url", None):
-                        await _download_generated_image(
-                            str(item.url), target, timeout, provider["base_url"],
+                        target = await _download_generated_image(
+                            str(item.url), target_stem, timeout, provider["base_url"],
                         )
                     else:
                         raise AIServiceError("生图服务没有返回可用图片")
                     return target
                 except Exception as exc:  # noqa: BLE001
+                    attempt_error = exc
                     last_error = exc
                     logger.warning(
                         "AI 生图失败 [%s/%s/%s]: %s",
                         provider["id"], model_id, selected, _friendly_error(exc),
                     )
                 finally:
-                    await client.close()
+                    _status_finished(attempt_error)
+                    await _close_client(client)
         raise AIServiceError(_friendly_error(last_error or RuntimeError("AI 生图失败")))
 
 

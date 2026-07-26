@@ -189,9 +189,28 @@ function toggleAiModelCapability(model, capability) {
   else model.capabilities.push(capability)
 }
 
+function isUsableAiProvider(provider) {
+  if (!provider.enabled) return false
+  try {
+    const url = new URL(provider.base_url)
+    return ['http:', 'https:'].includes(url.protocol) && !!url.hostname &&
+      !url.username && !url.password
+  } catch {
+    return false
+  }
+}
+
 function availableAiModels(capability) {
+  const usableProviders = new Set(
+    ai.value.providers
+      .filter(isUsableAiProvider)
+      .map((provider) => provider.id)
+  )
   return ai.value.models.filter((item) =>
-    item.enabled && item.model && item.capabilities.includes(capability)
+    item.enabled &&
+    item.model &&
+    usableProviders.has(item.provider_id) &&
+    item.capabilities.includes(capability)
   )
 }
 
