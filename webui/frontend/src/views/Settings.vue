@@ -32,6 +32,9 @@ const aiSaving = ref(false)
 const aiStatus = ref(null)
 const aiPlugins = ref([])
 const aiModels = ref({})
+const aiModelSearch = ref('')
+const aiSelectedModels = ref([])
+const aiModelDropdown = ref('')
 const aiModelLoading = ref({})
 const aiTesting = ref({})
 const aiDirty = computed(() => !!ai.value && JSON.stringify(ai.value) !== aiSavedSnap.value)
@@ -89,6 +92,9 @@ async function loadAiSettings() {
     ai.value = configData.settings
     aiStatus.value = configData.status || {}
     aiPlugins.value = pluginData.plugins || []
+    aiModels.value = {}
+    aiModelSearch.value = ''
+    aiSelectedModels.value = []
     aiSavedSnap.value = JSON.stringify(ai.value)
   } catch (e) {
     toast.error('读取 AI 设置失败：' + e.message)
@@ -150,6 +156,9 @@ function removeAiProvider(index) {
     }
   }
   delete aiModels.value[removed.id]
+  aiSelectedModels.value = aiSelectedModels.value.filter((key) => {
+    try { return JSON.parse(key)[0] !== removed.id } catch { return false }
+  })
 }
 
 async function fetchAiModels(provider) {
@@ -157,6 +166,19 @@ async function fetchAiModels(provider) {
   try {
     const data = await api.getAiModels(provider)
     aiModels.value[provider.id] = data.models || []
+    const currentKeys = new Set(
+      aiModels.value[provider.id].map((modelName) =>
+        JSON.stringify([provider.id, modelName])
+      )
+    )
+    aiSelectedModels.value = aiSelectedModels.value.filter((key) => {
+      try {
+        const [providerId] = JSON.parse(key)
+        return providerId !== provider.id || currentKeys.has(key)
+      } catch {
+        return false
+      }
+    })
     toast.success(`已读取 ${data.count || 0} 个模型`)
   } catch (e) {
     toast.error('读取模型失败：' + e.message)
@@ -169,8 +191,105 @@ function aiProviderModels(providerId) {
   return aiModels.value[providerId] || []
 }
 
+function aiModelChoices(model) {
+  const choices = aiProviderModels(model.provider_id)
+  const query = String(model.model || '').trim().toLowerCase()
+  if (!query || choices.some((item) => String(item).toLowerCase() === query)) {
+    return choices
+  }
+  return choices.filter((item) => String(item).toLowerCase().includes(query))
+}
+
+function chooseAiModel(model, modelName) {
+  model.model = modelName
+  if (!model.name || model.name === '新模型') model.name = modelName
+  if (!model.alias || /^model-\d+$/.test(model.alias)) {
+    model.alias = uniqueAiModelAlias(modelName)
+  }
+  aiModelDropdown.value = ''
+}
+
 function addAiModel() {
   ai.value.models.push(newAiModel())
+}
+
+function uniqueAiModelAlias(modelName) {
+  const existing = new Set(ai.value.models.map((item) => item.alias))
+  let base = String(modelName || 'model')
+    .replace(/[^A-Za-z0-9_.-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64) || 'model'
+  let alias = base
+  let number = 2
+  while (existing.has(alias)) {
+    const suffix = `-${number++}`
+    alias = `${base.slice(0, Math.max(1, 64 - suffix.length))}${suffix}`
+  }
+  return alias
+}
+
+const allFetchedAiModelOptions = computed(() => {
+  if (!ai.value) return []
+  const imported = new Set(
+    ai.value.models.map((item) => JSON.stringify([item.provider_id, item.model]))
+  )
+  const result = []
+  for (const provider of ai.value.providers) {
+    for (const modelName of aiModels.value[provider.id] || []) {
+      const key = JSON.stringify([provider.id, modelName])
+      if (imported.has(key)) continue
+      result.push({
+        key,
+        providerId: provider.id,
+        providerName: provider.name,
+        modelName,
+      })
+    }
+  }
+  return result
+})
+
+const fetchedAiModelOptions = computed(() => {
+  const query = aiModelSearch.value.trim().toLowerCase()
+  if (!query) return allFetchedAiModelOptions.value
+  return allFetchedAiModelOptions.value.filter((item) =>
+    String(item.modelName).toLowerCase().includes(query) ||
+    String(item.providerName).toLowerCase().includes(query)
+  )
+})
+
+const fetchedAiModelCount = computed(() =>
+  Object.values(aiModels.value).reduce(
+    (total, models) => total + (Array.isArray(models) ? models.length : 0),
+    0
+  )
+)
+
+function addSelectedAiModels() {
+  if (!aiSelectedModels.value.length) {
+    toast.error('请先选择需要添加的模型')
+    return
+  }
+  const options = new Map(
+    allFetchedAiModelOptions.value.map((item) => [item.key, item])
+  )
+  let added = 0
+  for (const key of aiSelectedModels.value) {
+    const option = options.get(key)
+    if (!option) continue
+    ai.value.models.push({
+      id: `model_${Date.now()}_${added}_${Math.random().toString(36).slice(2, 7)}`,
+      alias: uniqueAiModelAlias(option.modelName),
+      name: option.modelName,
+      enabled: true,
+      provider_id: option.providerId,
+      model: option.modelName,
+      capabilities: ['text'],
+    })
+    added += 1
+  }
+  aiSelectedModels.value = []
+  if (added) toast.success(`已添加 ${added} 个模型，请按实际用途勾选模型能力`)
 }
 
 function removeAiModel(index) {
@@ -976,6 +1095,9 @@ function handleClickOutside(e) {
       addMenuOpen.value = false
     }
   }
+  if (aiModelDropdown.value && !e.target.closest('.ai-model-combobox')) {
+    aiModelDropdown.value = ''
+  }
 }
 onMounted(() => document.addEventListener('click', handleClickOutside))
 onUnmounted(() => document.removeEventListener('click', handleClickOutside))
@@ -1187,9 +1309,6 @@ onBeforeRouteLeave(async () => {
                 </div>
               </div>
             </div>
-            <button type="button" class="toggle" :class="{ on: ai.enabled }"
-                    :aria-pressed="ai.enabled" aria-label="启用平台 AI"
-                    @click="ai.enabled = !ai.enabled"></button>
             <div v-if="aiStatus" class="ai-status-strip">
               <span><b>{{ aiStatus.total || 0 }}</b> 次调用</span>
               <span class="ok"><b>{{ aiStatus.succeeded || 0 }}</b> 成功</span>
@@ -1248,10 +1367,40 @@ onBeforeRouteLeave(async () => {
                   从服务商列表选择或手动填写真实模型名，并设置插件调用时使用的别名。
                 </div>
               </div>
-              <button class="btn sm btn-primary" @click="addAiModel">+ 添加模型</button>
+              <button class="btn sm btn-primary" @click="addAiModel">+ 手动添加模型</button>
+            </div>
+            <div v-if="fetchedAiModelCount" class="ai-model-picker">
+              <div class="row between ai-model-picker-head">
+                <div>
+                  <strong>已读取的模型</strong>
+                  <span class="muted small">
+                    共 {{ fetchedAiModelCount }} 个，选择需要使用的模型加入模型库
+                  </span>
+                </div>
+                <div class="row gap">
+                  <span class="muted small">已选 {{ aiSelectedModels.length }} 个</span>
+                  <button class="btn sm btn-primary" @click="addSelectedAiModels"
+                          :disabled="aiSelectedModels.length === 0">
+                    添加所选模型
+                  </button>
+                </div>
+              </div>
+              <input class="input ai-model-search" v-model="aiModelSearch"
+                     placeholder="搜索模型名称或服务商" />
+              <div v-if="fetchedAiModelOptions.length" class="ai-fetched-models">
+                <label v-for="option in fetchedAiModelOptions" :key="option.key"
+                       class="ai-fetched-model">
+                  <input type="checkbox" v-model="aiSelectedModels" :value="option.key" />
+                  <span class="ai-fetched-model-name mono">{{ option.modelName }}</span>
+                  <span class="muted small">{{ option.providerName }}</span>
+                </label>
+              </div>
+              <div v-else class="muted center ai-model-picker-empty">
+                {{ aiModelSearch ? '没有符合条件的模型' : '读取到的模型已全部加入模型库' }}
+              </div>
             </div>
             <div v-if="ai.models.length === 0" class="muted center ai-model-empty">
-              还没有模型，请先添加一个模型。
+              还没有模型，请从上方读取结果中选择，或手动添加一个模型。
             </div>
             <div v-else class="ai-model-grid">
               <div v-for="(model, index) in ai.models" :key="model.id" class="ai-model-card">
@@ -1283,13 +1432,39 @@ onBeforeRouteLeave(async () => {
                   </div>
                   <div class="field">
                     <label>真实模型名</label>
-                    <input class="input mono" v-model="model.model"
-                           :list="`provider-models-${model.id}`"
-                           placeholder="从列表选择或手动填写" />
-                    <datalist :id="`provider-models-${model.id}`">
-                      <option v-for="item in aiProviderModels(model.provider_id)"
-                              :key="item" :value="item"></option>
-                    </datalist>
+                    <div class="ai-model-combobox"
+                         :class="{ open: aiModelDropdown === model.id }">
+                      <input class="input mono" v-model="model.model"
+                             autocomplete="off"
+                             placeholder="从列表选择或手动填写"
+                             @focus="aiModelDropdown = model.id"
+                             @input="aiModelDropdown = model.id"
+                             @keydown.esc="aiModelDropdown = ''" />
+                      <button type="button" class="ai-model-combobox-toggle"
+                              title="选择模型"
+                              @mousedown.prevent
+                              @click="aiModelDropdown = aiModelDropdown === model.id ? '' : model.id">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                          <path d="m6 9 6 6 6-6"/>
+                        </svg>
+                      </button>
+                      <div v-if="aiModelDropdown === model.id" class="ai-model-dropdown">
+                        <button v-for="item in aiModelChoices(model)" :key="item"
+                                type="button" class="ai-model-dropdown-option mono"
+                                @mousedown.prevent @click="chooseAiModel(model, item)">
+                          {{ item }}
+                        </button>
+                        <div v-if="aiProviderModels(model.provider_id).length === 0"
+                             class="ai-model-dropdown-empty">
+                          请先读取这个服务商的模型列表，也可以直接手动填写
+                        </div>
+                        <div v-else-if="aiModelChoices(model).length === 0"
+                             class="ai-model-dropdown-empty">
+                          没有匹配的模型，可以保留当前内容并手动填写
+                        </div>
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div class="ai-model-capabilities">
@@ -1315,7 +1490,7 @@ onBeforeRouteLeave(async () => {
                 <div class="ai-capability-title">
                   <span>{{ capability.label }}</span>
                   <button class="btn sm" @click="testAi(capability.key)"
-                          :disabled="aiTesting[capability.key] || !ai.enabled">
+                          :disabled="aiTesting[capability.key]">
                     {{ aiTesting[capability.key] ? '测试中…' : '测试' }}
                   </button>
                 </div>
@@ -2346,6 +2521,54 @@ onBeforeRouteLeave(async () => {
   background: linear-gradient(145deg, rgba(32,34,46,.78), rgba(17,19,26,.72));
 }
 .ai-model-grid { display: flex; flex-direction: column; gap: 10px; }
+.ai-model-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+.ai-model-picker-head { gap: 12px; }
+.ai-model-picker-head > div:first-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.ai-model-search { max-width: 460px; }
+.ai-fetched-models {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 7px;
+  max-height: 300px;
+  padding: 4px;
+  overflow-y: auto;
+}
+.ai-fetched-model {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,.018);
+  cursor: pointer;
+}
+.ai-fetched-model:hover {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.ai-fetched-model input { accent-color: var(--accent); }
+.ai-fetched-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-model-picker-empty { padding: 18px; }
 .ai-model-empty {
   padding: 24px;
   border: 1px dashed var(--border-light);
@@ -2360,6 +2583,73 @@ onBeforeRouteLeave(async () => {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
+}
+.ai-model-combobox {
+  position: relative;
+}
+.ai-model-combobox.open { z-index: 30; }
+.ai-model-combobox .input { padding-right: 38px; }
+.ai-model-combobox-toggle {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: transparent;
+  transform: translateY(-50%);
+  cursor: pointer;
+}
+.ai-model-combobox-toggle:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,.06);
+}
+.ai-model-combobox-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+.ai-model-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: 0;
+  z-index: 40;
+  max-height: 260px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-card);
+  box-shadow: 0 16px 42px rgba(0,0,0,.42);
+}
+.ai-model-dropdown-option {
+  display: block;
+  width: 100%;
+  padding: 9px 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 7px;
+  color: var(--text-primary);
+  background: transparent;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ai-model-dropdown-option:hover {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.ai-model-dropdown-empty {
+  padding: 14px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .ai-model-capabilities {
   display: flex;
@@ -2448,6 +2738,9 @@ onBeforeRouteLeave(async () => {
   .channel-grid { grid-template-columns: 1fr; }
   .ai-provider-grid,
   .ai-capability-grid { grid-template-columns: 1fr; }
+  .ai-model-picker-head { align-items: stretch; flex-direction: column; }
+  .ai-model-picker-head .row { justify-content: space-between; }
+  .ai-fetched-models { grid-template-columns: 1fr; }
   .ai-overview { align-items: flex-start; }
   .ai-status-strip { position: static; flex-basis: 100%; }
   .ai-overview { flex-wrap: wrap; }

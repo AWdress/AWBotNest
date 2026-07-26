@@ -46,7 +46,6 @@ _DEFAULTS: dict[str, Any] = {
     "NOTIFICATION_CHANNELS": [],
     # 平台统一 AI 服务。插件只通过 ctx.ai 使用，不接触服务商密钥。
     "AI_SERVICES": {
-        "enabled": False,
         "providers": [
             {
                 "id": "default",

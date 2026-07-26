@@ -1020,7 +1020,7 @@ async def test_ai_capability(body: Dict[str, Any], user=Depends(_auth_pwc)):
 async def get_ai_status(user=Depends(_auth)):
     settings = ai_kernel.load_ai_settings()
     return {
-        "enabled": settings["enabled"],
+        "enabled": True,
         "configured": {
             key: bool(value.get("default_model"))
             for key, value in settings["capabilities"].items()

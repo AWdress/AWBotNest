@@ -39,7 +39,6 @@ IMAGE_SUFFIXES = {
 }
 
 DEFAULT_AI_SETTINGS: dict[str, Any] = {
-    "enabled": False,
     "providers": [
         {
             "id": "default",
@@ -111,7 +110,6 @@ def normalize_ai_settings(value: Any) -> dict[str, Any]:
     """清洗配置并补齐旧版本缺少的字段。"""
     raw = value if isinstance(value, dict) else {}
     result = copy.deepcopy(DEFAULT_AI_SETTINGS)
-    result["enabled"] = bool(raw.get("enabled", False))
     result["timeout_seconds"] = _bounded_int(raw.get("timeout_seconds"), 60, 5, 300)
     result["max_concurrency"] = _bounded_int(raw.get("max_concurrency"), 3, 1, 20)
 
@@ -284,8 +282,6 @@ def _model_candidates(
     capability: str,
     requested: str | None,
 ) -> list[tuple[dict[str, Any], str, str]]:
-    if not settings["enabled"]:
-        raise AIServiceError("平台 AI 服务尚未启用")
     target = settings["capabilities"][capability]
     selected_ids = [requested] if requested else [
         target["default_model"], target["fallback_model"],
@@ -486,8 +482,6 @@ class PluginAI:
             if capability not in AI_CAPABILITIES:
                 return False
             settings = load_ai_settings()
-            if not settings["enabled"]:
-                return False
             _permission(settings, self.plugin_id, capability)
             return bool(_model_candidates(settings, capability, None))
         except AIServiceError:
@@ -498,8 +492,6 @@ class PluginAI:
         if capability is not None and capability not in AI_CAPABILITIES:
             return []
         settings = load_ai_settings()
-        if not settings["enabled"]:
-            return []
         permission = settings["plugin_permissions"].get(self.plugin_id)
         if permission and not permission["enabled"]:
             return []
