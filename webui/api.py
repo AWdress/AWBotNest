@@ -889,6 +889,42 @@ def _clean_notification_channels(value: Any, current: Any,
     return cleaned
 
 
+def _apply_legacy_bot_settings(settings: dict[str, Any]) -> None:
+    """把通知渠道同步到旧 Bot 字段，供账号管理器和旧版配置继续使用。"""
+    channels = settings.get("NOTIFICATION_CHANNELS") or []
+    telegram_channels = [
+        channel for channel in channels
+        if (isinstance(channel, dict)
+            and channel.get("type") == "telegram"
+            and channel.get("enabled")
+            and (channel.get("config") or {}).get("token"))
+    ]
+    builtin = next((channel for channel in telegram_channels if channel.get("id") == "default"), None)
+    selected_default = next((channel for channel in telegram_channels if channel.get("is_default")), None)
+    default_channel = selected_default or (telegram_channels[0] if telegram_channels else None)
+
+    settings["BOT_TOKEN"] = (builtin.get("config") or {}).get("token", "") if builtin else ""
+    settings["BOT_NAME"] = (
+        str(builtin.get("name") or "").strip() if builtin else ""
+    ) or "主要通知渠道"
+    settings["DEFAULT_BOT_CHAT_ID"] = (
+        str((builtin.get("config") or {}).get("chat_id") or "").strip() if builtin else ""
+    )
+    settings["BOTS"] = [
+        {
+            "id": str(channel.get("id") or "").strip(),
+            "name": str(channel.get("name") or channel.get("id") or "").strip(),
+            "token": (channel.get("config") or {}).get("token", ""),
+            "chat_id": str((channel.get("config") or {}).get("chat_id") or "").strip(),
+        }
+        for channel in telegram_channels
+        if channel.get("id") != "default"
+    ]
+    settings["DEFAULT_BOT_ID"] = (
+        str(default_channel.get("id") or "default") if default_channel else "default"
+    )
+
+
 @app.get("/api/settings")
 async def get_settings_api(user=Depends(_auth)):
     """读取平台设置（敏感字段打码）"""
@@ -938,6 +974,89 @@ async def get_settings_api(user=Depends(_auth)):
     from libs.log_cleaner_settings import get_log_cleaner_settings
     out["LOG_CLEANER"] = get_log_cleaner_settings()
     return {"settings": out}
+
+
+@app.put("/api/settings/notification-channels")
+async def put_notification_channels(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    """只保存通知渠道，避免通过网页入口修改未授权的其他系统字段。"""
+    import config.config as cfg
+
+    incoming = body.get("channels")
+    if not isinstance(incoming, list):
+        raise HTTPException(status_code=400, detail="通知渠道必须是列表")
+
+    current = cfg.load()
+    merged = copy.deepcopy(current)
+    merged["NOTIFICATION_CHANNELS"] = _clean_notification_channels(
+        incoming, current.get("NOTIFICATION_CHANNELS"), legacy_settings=current,
+    )
+    _apply_legacy_bot_settings(merged)
+    merged["DEFAULT_BOT_ID"] = cfg.normalize_default_bot_id(
+        merged.get("DEFAULT_BOT_ID"), merged.get("BOTS"),
+    )
+    cfg.save(merged)
+
+    bot_sync = None
+    restart_required = False
+    bot_keys = {"BOT_TOKEN", "BOT_NAME", "DEFAULT_BOT_ID", "DEFAULT_BOT_CHAT_ID", "BOTS"}
+    if any(current.get(key) != merged.get(key) for key in bot_keys):
+        try:
+            bot_sync = await _get_accounts().sync_bots(current, merged)
+            if merged.get("DEFAULT_BOT_ID") != bot_sync["default_id"]:
+                merged["DEFAULT_BOT_ID"] = bot_sync["default_id"]
+            failed_ids = {item["id"] for item in bot_sync.get("failed", [])}
+            if "default" in failed_ids and current.get("BOT_TOKEN"):
+                merged["BOT_TOKEN"] = current["BOT_TOKEN"]
+            old_tokens = {
+                str(bot.get("id") or ""): bot.get("token", "")
+                for bot in current.get("BOTS") or [] if isinstance(bot, dict)
+            }
+            old_channel_tokens = {
+                str(channel.get("id") or ""): (channel.get("config") or {}).get("token", "")
+                for channel in current.get("NOTIFICATION_CHANNELS") or []
+                if isinstance(channel, dict) and channel.get("type") == "telegram"
+            }
+            for bot in merged.get("BOTS") or []:
+                bot_id = str(bot.get("id") or "") if isinstance(bot, dict) else ""
+                if bot_id in failed_ids and bot_id in old_tokens:
+                    bot["token"] = old_tokens[bot_id]
+            for channel in merged.get("NOTIFICATION_CHANNELS") or []:
+                channel_id = str(channel.get("id") or "") if isinstance(channel, dict) else ""
+                if channel_id in failed_ids and channel_id in old_channel_tokens:
+                    channel.setdefault("config", {})["token"] = old_channel_tokens[channel_id]
+            if failed_ids or merged.get("DEFAULT_BOT_ID") != current.get("DEFAULT_BOT_ID"):
+                cfg.save(merged)
+        except Exception as exc:  # noqa: BLE001
+            restart_required = True
+            bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启平台后生效"}
+            logger.warning("通知渠道已保存，Bot 即时更新失败: %r", exc)
+
+    old_channel_ids = {
+        str(channel.get("id") or "").strip()
+        for channel in current.get("NOTIFICATION_CHANNELS") or []
+        if isinstance(channel, dict) and channel.get("id")
+    }
+    new_channel_ids = {
+        str(channel.get("id") or "").strip()
+        for channel in merged.get("NOTIFICATION_CHANNELS") or []
+        if isinstance(channel, dict) and channel.get("enabled") and channel.get("id")
+    }
+    affected: set[str] = set()
+    for channel_id in old_channel_ids - new_channel_ids:
+        affected.update(registry.purge_bot(channel_id))
+
+    if affected or (bot_sync and bot_sync.get("needs_resync")):
+        try:
+            await _get_runtime().resync()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("通知渠道更新后重新挂载插件失败: %r", exc)
+
+    logger.info("通知渠道设置已更新")
+    return {
+        "status": "success",
+        "restart_required": restart_required,
+        "bot_sync": bot_sync,
+    }
 
 
 # ──────────────────────────────────────────────

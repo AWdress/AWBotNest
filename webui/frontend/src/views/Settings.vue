@@ -47,6 +47,10 @@ const restarting = ref(false)
 let restartTimer = null   // 重启轮询定时器；提升为模块级以便组件卸载时清理
 const notificationSyncSource = `settings_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
+const notificationSettingKeys = [
+  'NOTIFICATION_CHANNELS', 'BOT_TOKEN', 'BOT_NAME', 'BOTS',
+  'DEFAULT_BOT_ID', 'DEFAULT_BOT_CHAT_ID',
+]
 // 用户又开始改动时，隐藏“需重启”横幅（新改动得重新保存）
 watch(dirty, (d) => { if (d) restartHint.value = false })
 
@@ -803,7 +807,7 @@ async function saveChannel() {
 
   // 先关闭弹窗，让用户不用等待 Bot 连接和路由同步；失败时恢复并重新打开。
   channelModalOpen.value = false
-  if (!await save()) {
+  if (!await saveNotificationChannels()) {
     s.value = originalSettings
     channelModalOpen.value = true
     return
@@ -832,8 +836,7 @@ async function deleteChannel(index) {
 
   const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
   s.value.NOTIFICATION_CHANNELS.splice(index, 1)
-  if (await save()) {
-    await loadRouting()
+  if (await saveNotificationChannels()) {
     publishNotificationSync({ source: notificationSyncSource, type: 'channels' })
     toast.success('已删除，相关插件路由已同步更新')
   } else {
@@ -850,10 +853,39 @@ async function toggleChannel(index) {
     ch.is_default = false
   }
 
-  if (await save()) {
-    await loadRouting()
+  if (await saveNotificationChannels()) {
     publishNotificationSync({ source: notificationSyncSource, type: 'channels', channelId: ch.id })
   } else s.value.NOTIFICATION_CHANNELS = originalChannels
+}
+
+async function saveNotificationChannels() {
+  saving.value = true
+  try {
+    const result = await api.saveNotificationChannels(s.value.NOTIFICATION_CHANNELS)
+    const data = await api.getSettings()
+    const latest = data.settings || {}
+    const baseline = savedSnap.value ? JSON.parse(savedSnap.value) : {}
+    for (const key of notificationSettingKeys) {
+      s.value[key] = latest[key]
+      baseline[key] = latest[key]
+    }
+    savedSnap.value = JSON.stringify(baseline)
+    restartHint.value = !!result.restart_required
+    await loadRouting()
+
+    const failedBots = result.bot_sync?.failed || []
+    if (failedBots.length) {
+      toast.error(`渠道已保存，但这些 Bot 连接失败：${failedBots.map(bot => bot.name).join('、')}`)
+    } else {
+      toast.success(result.restart_required ? '渠道已保存，重启平台后完全生效。' : '通知渠道已保存。')
+    }
+    return true
+  } catch (error) {
+    toast.error('保存通知渠道失败：' + error.message)
+    return false
+  } finally {
+    saving.value = false
+  }
 }
 
 function getChannelIcon(type) {

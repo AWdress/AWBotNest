@@ -247,6 +247,131 @@ class NotificationConfigTests(unittest.TestCase):
 
 
 class NotificationSettingsApiTests(unittest.IsolatedAsyncioTestCase):
+    async def test_edit_notification_channel_preserves_masked_token(self) -> None:
+        current = {
+            "BOT_TOKEN": "real-token",
+            "BOT_NAME": "旧名称",
+            "DEFAULT_BOT_ID": "default",
+            "DEFAULT_BOT_CHAT_ID": "100",
+            "BOTS": [],
+            "NOTIFICATION_CHANNELS": [{
+                "id": "default",
+                "name": "旧名称",
+                "type": "telegram",
+                "enabled": True,
+                "is_default": True,
+                "config": {"token": "real-token", "chat_id": "100"},
+            }],
+        }
+        incoming = [{
+            **current["NOTIFICATION_CHANNELS"][0],
+            "name": "新名称",
+            "config": {"token": "********", "chat_id": "100"},
+        }]
+        accounts = SimpleNamespace(sync_bots=AsyncMock(return_value={
+            "failed": [],
+            "default_id": "default",
+            "needs_resync": False,
+        }))
+        saved = []
+
+        with (
+            patch("config.config.load", return_value=current),
+            patch("config.config.save", side_effect=lambda value: saved.append(value)),
+            patch.object(web_api, "_get_accounts", return_value=accounts),
+        ):
+            response = await web_api.put_notification_channels(
+                {"channels": incoming}, user={},
+            )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(saved[-1]["NOTIFICATION_CHANNELS"][0]["name"], "新名称")
+        self.assertEqual(
+            saved[-1]["NOTIFICATION_CHANNELS"][0]["config"]["token"], "real-token",
+        )
+        self.assertEqual(saved[-1]["BOT_TOKEN"], "real-token")
+        self.assertEqual(saved[-1]["BOT_NAME"], "新名称")
+        accounts.sync_bots.assert_awaited_once()
+
+    async def test_disabling_notification_channel_purges_plugin_routes(self) -> None:
+        current = {
+            "BOT_TOKEN": "",
+            "BOT_NAME": "主要通知渠道",
+            "DEFAULT_BOT_ID": "default",
+            "DEFAULT_BOT_CHAT_ID": "",
+            "BOTS": [],
+            "NOTIFICATION_CHANNELS": [{
+                "id": "phone",
+                "name": "手机",
+                "type": "bark",
+                "enabled": True,
+                "is_default": True,
+                "config": {"device_key": "real-key"},
+            }],
+        }
+        incoming = [{
+            **current["NOTIFICATION_CHANNELS"][0],
+            "enabled": False,
+            "config": {"device_key": "********"},
+        }]
+        runtime = SimpleNamespace(resync=AsyncMock())
+
+        with (
+            patch("config.config.load", return_value=current),
+            patch("config.config.save"),
+            patch.object(web_api.registry, "purge_bot", return_value=["demo"]) as purge,
+            patch.object(web_api, "_get_runtime", return_value=runtime),
+        ):
+            response = await web_api.put_notification_channels(
+                {"channels": incoming}, user={},
+            )
+
+        self.assertEqual(response["status"], "success")
+        purge.assert_called_once_with("phone")
+        runtime.resync.assert_awaited_once()
+
+    async def test_failed_bot_edit_restores_previous_channel_token(self) -> None:
+        current = {
+            "BOT_TOKEN": "old-token",
+            "BOT_NAME": "主通知",
+            "DEFAULT_BOT_ID": "default",
+            "DEFAULT_BOT_CHAT_ID": "",
+            "BOTS": [],
+            "NOTIFICATION_CHANNELS": [{
+                "id": "default",
+                "name": "主通知",
+                "type": "telegram",
+                "enabled": True,
+                "is_default": True,
+                "config": {"token": "old-token", "chat_id": ""},
+            }],
+        }
+        incoming = [{
+            **current["NOTIFICATION_CHANNELS"][0],
+            "config": {"token": "invalid-new-token", "chat_id": ""},
+        }]
+        accounts = SimpleNamespace(sync_bots=AsyncMock(return_value={
+            "failed": [{"id": "default", "name": "主通知", "message": "连接失败"}],
+            "default_id": "default",
+            "needs_resync": False,
+        }))
+        saved = []
+
+        with (
+            patch("config.config.load", return_value=current),
+            patch("config.config.save", side_effect=lambda value: saved.append(value)),
+            patch.object(web_api, "_get_accounts", return_value=accounts),
+        ):
+            response = await web_api.put_notification_channels(
+                {"channels": incoming}, user={},
+            )
+
+        self.assertEqual(response["bot_sync"]["failed"][0]["id"], "default")
+        self.assertEqual(saved[-1]["BOT_TOKEN"], "old-token")
+        self.assertEqual(
+            saved[-1]["NOTIFICATION_CHANNELS"][0]["config"]["token"], "old-token",
+        )
+
     async def test_non_telegram_default_channel_is_reported_as_the_only_default(self) -> None:
         accounts = SimpleNamespace(list_bots=AsyncMock(return_value=[{
             "id": "default", "name": "Telegram", "online": True,

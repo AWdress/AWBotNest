@@ -126,6 +126,7 @@ export const api = {
   // 平台设置（config.json）
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
+  saveNotificationChannels: (channels) => request('PUT', '/api/settings/notification-channels', { channels }),
   getAiSettings: () => request('GET', '/api/ai/settings'),
   saveAiSettings: (settings) => request('PUT', '/api/ai/settings', { settings }),
   getAiModels: (provider) => request('POST', '/api/ai/provider-models', { provider }),
