@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import json
 from types import SimpleNamespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -48,6 +49,27 @@ class BotDefaultTests(unittest.TestCase):
 
             registry.set_bot_choice("demo", "")
             self.assertEqual(registry.get_bot_choice("demo"), "")
+
+    def test_duplicate_channels_are_normalized_before_saving(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            registry = PluginRegistry(root / "plugins", root / "state.json")
+
+            registry.set_bot_choice("demo", " work,phone,work, ,phone ")
+
+            self.assertEqual(registry.get_bot_choice("demo"), "work,phone")
+
+    def test_duplicate_channels_in_old_state_are_normalized_on_load(self) -> None:
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_file = root / "state.json"
+            state_file.write_text(json.dumps({
+                "bot_choice": {"demo": "work, work, phone,work"},
+            }), encoding="utf-8")
+
+            registry = PluginRegistry(root / "plugins", state_file)
+
+            self.assertEqual(registry.get_bot_choice("demo"), "work,phone")
 
     def test_removing_one_channel_keeps_other_selected_channels(self) -> None:
         with TemporaryDirectory() as tmp:

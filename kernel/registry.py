@@ -34,6 +34,19 @@ FRONTEND_DIST = "frontend/dist"
 FRONTEND_ENTRY = "frontend/dist/assets/remoteEntry.js"
 
 
+def normalize_bot_choice(value: Any) -> str:
+    """规范化插件渠道选择：去掉空项和重复项，同时保留用户选择顺序。"""
+    seen: set[str] = set()
+    channel_ids: list[str] = []
+    for item in str(value or "").split(","):
+        channel_id = item.strip()
+        if not channel_id or channel_id in seen:
+            continue
+        seen.add(channel_id)
+        channel_ids.append(channel_id)
+    return ",".join(channel_ids)
+
+
 @dataclass
 class PluginMeta:
     """插件元数据（解析自 __plugin__ 字典）"""
@@ -100,7 +113,13 @@ class PluginRegistry:
             self._enabled_state = data.get("enabled", {})
             self._config_state = data.get("config", {})
             self._account_scope = data.get("account_scope", {})
-            self._bot_choice = data.get("bot_choice", {})
+            raw_bot_choice = data.get("bot_choice", {})
+            self._bot_choice = {}
+            if isinstance(raw_bot_choice, dict):
+                for plugin_id, choice in raw_bot_choice.items():
+                    normalized = normalize_bot_choice(choice)
+                    if normalized:
+                        self._bot_choice[str(plugin_id)] = normalized
         except (json.JSONDecodeError, OSError) as e:
             logger.warning("读取插件状态文件失败，将重置：%s", e)
             self._enabled_state = {}
@@ -439,7 +458,7 @@ class PluginRegistry:
         return affected
 
     # ──────────────────────────────────────────────
-    # 通知推送 Bot 选择（单选；空/缺失=跟随默认，"default"=内置 Bot）
+    # 通知推送渠道选择（多选；空/缺失=跟随默认，"default"=内置 Bot）
     # ──────────────────────────────────────────────
     def get_bot_choice(self, plugin_id: str) -> str:
         """返回插件选定的 Bot id；空字符串表示跟随当前默认 Bot。"""
@@ -447,9 +466,9 @@ class PluginRegistry:
             return self._bot_choice.get(plugin_id, "") or ""
 
     def set_bot_choice(self, plugin_id: str, bot_id: str) -> None:
-        """设置插件推送/handler 用的 Bot；空=跟随默认，"default"=内置 Bot。"""
+        """设置插件推送渠道；空=跟随默认，多个渠道用逗号分隔。"""
         with self._lock:
-            bot_id = (bot_id or "").strip()
+            bot_id = normalize_bot_choice(bot_id)
             if bot_id:
                 self._bot_choice[plugin_id] = bot_id
             else:

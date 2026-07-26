@@ -143,7 +143,7 @@ def _plugin_bot_id(plugin_id: str) -> str:
 def _plugin_channel_ids(plugin_id: str) -> list[str]:
     """返回插件选择的渠道列表；没有单独选择时使用默认渠道或旧默认 Bot。"""
     raw = _plugin_bot_id(plugin_id)
-    ids = [item.strip() for item in raw.split(",") if item.strip()]
+    ids = list(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
     return ids or [""]
 
 

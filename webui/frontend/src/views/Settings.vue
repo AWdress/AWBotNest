@@ -508,7 +508,7 @@ async function save() {
         : (r.bot_sync ? '已保存，Bot 设置已立即生效。' : '已保存。'))
     }
     // Bot 列表可能变化 → 刷新推送路由的可选项
-    if (tab.value === 'bots') await loadRouting()
+    if (tab.value === 'notify') await loadRouting()
     return true
   } catch (e) {
     toast.error('保存失败：' + e.message)
@@ -1033,7 +1033,7 @@ const filteredRoutePlugins = computed(() => {
 
 function goTab(k) {
   tab.value = k
-  if (k === 'bots' && routing.value.plugins.length === 0) loadRouting()
+  if (k === 'notify' && routing.value.plugins.length === 0) loadRouting()
   if (k === 'ai' && !ai.value && !aiLoading.value) loadAiSettings()
 }
 
@@ -1273,7 +1273,7 @@ onBeforeRouteLeave(async () => {
             <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row-multi">
               <div class="route-plugin-info">
                 <span class="route-name" :title="p.id">{{ p.name }}</span>
-                <span v-if="(p.tags || []).includes('机器人') || (p.tags || []).includes('双账号')" class="route-tag">需要Bot</span>
+                <span v-if="p.scope === 'bot' || p.scope === 'both'" class="route-tag">需要 Bot</span>
               </div>
               <div class="route-channels">
                 <label v-for="ch in getAvailableChannels(p)" :key="ch.id" class="channel-checkbox">

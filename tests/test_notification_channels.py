@@ -297,6 +297,33 @@ class NotificationSettingsApiTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(raised.exception.status_code, 400)
 
+    async def test_route_api_removes_duplicate_channel_ids(self) -> None:
+        accounts = SimpleNamespace(list_bots=AsyncMock(return_value=[
+            {"id": "work"},
+            {"id": "phone"},
+        ]))
+        runtime = SimpleNamespace(is_loaded=lambda _plugin_id: False)
+        saved = {}
+
+        def save_choice(plugin_id: str, choice: str) -> None:
+            saved[plugin_id] = choice
+
+        with (
+            patch.object(web_api, "_get_accounts", return_value=accounts),
+            patch.object(web_api, "_get_runtime", return_value=runtime),
+            patch("config.config.load", return_value={"NOTIFICATION_CHANNELS": []}),
+            patch.object(web_api.registry, "get_meta", return_value=SimpleNamespace(scope="user")),
+            patch.object(web_api.registry, "set_bot_choice", side_effect=save_choice),
+            patch.object(web_api.registry, "get_bot_choice",
+                         side_effect=lambda plugin_id: saved.get(plugin_id, "")),
+        ):
+            response = await web_api.set_bots_routing(
+                {"plugin_id": "demo", "bot_id": "work, work,phone,work"}, user={},
+            )
+
+        self.assertEqual(saved["demo"], "work,phone")
+        self.assertEqual(response["bot"], "work,phone")
+
     async def test_channel_secrets_are_masked_in_settings_response(self) -> None:
         stored = {
             "API_HASH": "hash",

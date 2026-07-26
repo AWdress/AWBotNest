@@ -37,7 +37,7 @@ from webui.backup import (
     stage_restore_archive,
     stored_backup_path,
 )
-from kernel.registry import registry
+from kernel.registry import normalize_bot_choice, registry
 from kernel import ai as ai_kernel
 
 app = FastAPI(title="AWBotNest Platform API")
@@ -685,7 +685,7 @@ async def get_bots_routing(user=Depends(_auth)):
 async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """设置某个插件推送到哪个渠道（bot_id 空=跟随默认，支持逗号分隔多渠道）。"""
     plugin_id = str(body.get("plugin_id") or "").strip()
-    bot_id = str(body.get("bot_id") or "").strip()
+    bot_id = normalize_bot_choice(body.get("bot_id"))
     if not plugin_id:
         raise HTTPException(status_code=400, detail="缺少 plugin_id")
     meta = registry.get_meta(plugin_id)
@@ -706,7 +706,7 @@ async def set_bots_routing(body: Dict[str, Any], user=Depends(_auth_pwc)):
         channel_types.update(valid_channels)
         valid = set(channel_types)
         # 支持逗号分隔的多渠道
-        ids = [i.strip() for i in bot_id.split(",") if i.strip()]
+        ids = bot_id.split(",")
         invalid = [i for i in ids if i not in valid]
         if invalid:
             raise HTTPException(status_code=400, detail=f"渠道不存在：{', '.join(invalid)}")
