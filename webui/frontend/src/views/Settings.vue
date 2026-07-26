@@ -253,8 +253,7 @@ const fetchedAiModelOptions = computed(() => {
   const query = aiModelSearch.value.trim().toLowerCase()
   if (!query) return allFetchedAiModelOptions.value
   return allFetchedAiModelOptions.value.filter((item) =>
-    String(item.modelName).toLowerCase().includes(query) ||
-    String(item.providerName).toLowerCase().includes(query)
+    String(item.modelName).toLowerCase().includes(query)
   )
 })
 
@@ -1386,7 +1385,7 @@ onBeforeRouteLeave(async () => {
                 </div>
               </div>
               <input class="input ai-model-search" v-model="aiModelSearch"
-                     placeholder="搜索模型名称或服务商" />
+                     placeholder="搜索模型名称" />
               <div v-if="fetchedAiModelOptions.length" class="ai-fetched-models">
                 <label v-for="option in fetchedAiModelOptions" :key="option.key"
                        class="ai-fetched-model">
