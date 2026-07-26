@@ -152,7 +152,6 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
                 "errors": [], "last_sync": state.get("last_sync")}
 
     repos = _get_repos()
-    previous_store = state.get("store") or []
     aggregated: list[dict[str, Any]] = []
     errors: list[str] = []
     seen: set[str] = set()
@@ -163,22 +162,6 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
             listing = await github_import.list_plugins(repo["url"])
         except Exception as e:  # noqa: BLE001
             errors.append(f"{repo['url']}: {e}")
-            # 临时网络错误或 manifest 损坏时保留上次完整元数据，避免把市场
-            # 覆盖为空列表，或退化成只有 ID 的目录扫描占位卡片。
-            for cached in previous_store:
-                if cached.get("repo_url") != repo["url"]:
-                    continue
-                p = dict(cached)
-                pid = p.get("id")
-                if not pid or pid in seen:
-                    continue
-                seen.add(pid)
-                p["official"] = bool(repo.get("official"))
-                p["installed"] = _local_exists(pid)
-                p["local_version"] = versions.get(pid)
-                if p["official"]:
-                    official_ids.append(pid)
-                aggregated.append(p)
             continue
         for p in listing.get("plugins") or []:
             pid = p.get("id")
