@@ -138,8 +138,13 @@ def _assert_raw_url(url: str) -> str:
 
 
 async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[dict]]:
-    """尝试读取 manifest，成功返回插件列表，失败返回 None"""
+    """尝试读取 manifest。
+
+    清单不存在时返回 None；清单存在但内容损坏时必须报错，不能静默回退目录扫描，
+    否则市场卡片会降级成插件 ID、默认图标和无描述。
+    """
     base = f"{subdir}/" if subdir else ""
+    invalid: list[str] = []
     for name in MANIFEST_NAMES:
         url = _raw_url(owner, repo, branch, f"{base}{name}")
         try:
@@ -150,9 +155,11 @@ async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[di
             continue
         try:
             data = r.json()
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            invalid.append(f"{name}: JSON 解析失败（{exc}）")
             continue
         if not isinstance(data, dict):
+            invalid.append(f"{name}: 根节点必须是对象")
             continue
         plugins = []
         for pid, meta in data.items():
@@ -175,6 +182,9 @@ async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[di
             })
         if plugins:
             return plugins
+        invalid.append(f"{name}: 未包含有效插件条目")
+    if invalid:
+        raise ValueError("插件清单无效：" + "；".join(invalid))
     return None
 
 
