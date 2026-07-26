@@ -55,13 +55,14 @@ function toggleMenu(p, ev) {
 }
 function closeMenu() { menuFor.value = null }
 
-// 应用账号弹窗（多账号下按账号选择插件）
-const acctOpen = ref(false)
-const acctTarget = ref(null)
+// 配置弹窗内的应用账号范围
 const acctOptions = ref([])    // [{session,name}]
 const acctSelected = ref([])   // 勾选的 session
 const acctAllMode = ref(true)  // 应用到全部账号
+const acctLoading = ref(false)
+const acctReady = ref(false)
 const acctSaving = ref(false)
+let acctRequestId = 0
 
 const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号' }
 
@@ -125,20 +126,25 @@ async function remove(p) {
   }
 }
 
-// ── 应用账号弹窗 ──
-async function openAccounts(p) {
-  closeMenu()
-  acctTarget.value = p
+async function loadConfigAccounts(pluginId) {
+  const requestId = ++acctRequestId
   acctOptions.value = []
   acctSelected.value = []
   acctAllMode.value = true
+  acctLoading.value = true
+  acctReady.value = false
   try {
-    const data = await api.getPluginAccounts(p.id)
+    const data = await api.getPluginAccounts(pluginId)
+    if (requestId !== acctRequestId) return
     acctOptions.value = data.accounts || []
     acctSelected.value = [...(data.selected || [])]
     acctAllMode.value = acctSelected.value.length === 0
-    acctOpen.value = true
-  } catch (e) { error.value = e.message }
+    acctReady.value = true
+  } catch (e) {
+    if (requestId === acctRequestId) toast.error('读取应用账号失败：' + e.message)
+  } finally {
+    if (requestId === acctRequestId) acctLoading.value = false
+  }
 }
 
 async function openConfig(p) {
@@ -157,6 +163,7 @@ async function openConfig(p) {
     configOpen.value = true
     loadWebhook()
     loadConfigBot(p.id)
+    if (p.scope === 'user' || p.scope === 'both') loadConfigAccounts(p.id)
   } catch (e) {
     if (requestId !== configRequestId) return
     error.value = e.message
@@ -298,19 +305,48 @@ async function saveConfig() {
   }
 }
 
-function toggleAcct(session) {
+async function toggleAcct(session) {
   const i = acctSelected.value.indexOf(session)
+  if (i >= 0 && acctSelected.value.length === 1) {
+    toast.error('指定账号模式下请至少保留一个账号')
+    return
+  }
+  const previous = { allMode: acctAllMode.value, selected: [...acctSelected.value] }
   if (i >= 0) acctSelected.value.splice(i, 1)
   else acctSelected.value.push(session)
+  acctAllMode.value = false
+  await saveAccounts(previous)
 }
-async function saveAccounts() {
+async function saveAccounts(previous = null) {
+  if (!configTarget.value || acctSaving.value) return
+  if (!acctAllMode.value && acctSelected.value.length === 0) return
   acctSaving.value = true
   try {
     const sessions = acctAllMode.value ? [] : acctSelected.value
-    await api.setPluginAccounts(acctTarget.value.id, sessions)
-    acctOpen.value = false
+    const data = await api.setPluginAccounts(configTarget.value.id, sessions)
+    acctSelected.value = [...(data.selected || [])]
+    acctAllMode.value = acctSelected.value.length === 0
     toast.success('账号范围已保存')
-  } catch (e) { error.value = e.message } finally { acctSaving.value = false }
+  } catch (e) {
+    if (previous) {
+      acctAllMode.value = previous.allMode
+      acctSelected.value = [...previous.selected]
+    }
+    toast.error('保存应用账号失败：' + e.message)
+  } finally {
+    acctSaving.value = false
+  }
+}
+
+function useAllAccounts() {
+  const previous = { allMode: acctAllMode.value, selected: [...acctSelected.value] }
+  acctAllMode.value = true
+  acctSelected.value = []
+  saveAccounts(previous)
+}
+
+function useSelectedAccounts() {
+  acctAllMode.value = false
 }
 
 // ── 插件日志弹窗（只看当前插件的日志） ──
@@ -1007,9 +1043,6 @@ onUnmounted(() => {
                 <button class="menu-item" @click.stop="openLogs(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看日志
                 </button>
-                <button class="menu-item" v-if="p.scope === 'user' || p.scope === 'both'" @click.stop="openAccounts(p)">
-                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM4 21a8 8 0 0 1 16 0"/></svg> 应用账号
-                </button>
                 <button class="menu-item" @click.stop="reload(p)" :disabled="busy[p.id]">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 重载
                 </button>
@@ -1229,7 +1262,7 @@ onUnmounted(() => {
 
     <!-- 配置弹窗 -->
     <div v-if="configOpen" class="modal-mask" @click.self="configOpen=false">
-      <div class="modal card" :class="{ 'modal-wide': configRenderMode === 'vue' || Object.keys(configSchema).length }">
+      <div class="modal card modal-wide">
         <div class="modal-head">
           <h2>{{ configTarget?.name }} · 配置</h2>
           <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
@@ -1272,6 +1305,44 @@ onUnmounted(() => {
           </div>
         </div>
 
+        <div v-if="configTarget?.scope === 'user' || configTarget?.scope === 'both'" class="config-routing-box">
+          <div>
+            <div class="config-routing-title">应用账号</div>
+            <div class="hint muted small">选择这个插件在哪些账号上生效，切换后立即保存。</div>
+          </div>
+          <div v-if="acctLoading" class="muted small">正在读取…</div>
+          <div v-else-if="!acctReady" class="muted small">加载失败</div>
+          <template v-else>
+            <div class="config-account-modes">
+              <label class="config-choice-card" :class="{ active: acctAllMode }">
+                <input type="radio" :checked="acctAllMode" @change="useAllAccounts" :disabled="acctSaving" />
+                <span>
+                  <strong>全部账号</strong>
+                  <small>新登录的账号也会自动生效</small>
+                </span>
+              </label>
+              <label class="config-choice-card" :class="{ active: !acctAllMode }">
+                <input type="radio" :checked="!acctAllMode" @change="useSelectedAccounts" :disabled="acctSaving" />
+                <span>
+                  <strong>仅指定账号</strong>
+                  <small>只在下面勾选的账号中生效</small>
+                </span>
+              </label>
+            </div>
+            <div v-if="!acctAllMode" class="config-account-checks">
+              <div v-if="acctOptions.length === 0" class="muted small">还没有账号，请先到「账号管理」登录。</div>
+              <label v-for="a in acctOptions" :key="a.session" class="config-bot-item">
+                <input type="checkbox" :checked="acctSelected.includes(a.session)"
+                       @change="toggleAcct(a.session)" :disabled="acctSaving" />
+                <span>{{ a.name }} <span class="muted mono small">{{ a.session }}</span></span>
+              </label>
+              <div v-if="acctOptions.length && acctSelected.length === 0" class="config-choice-warning">
+                请至少选择一个账号，选择后会立即保存。
+              </div>
+            </div>
+          </template>
+        </div>
+
         <!-- Webhook（仅插件声明 "webhook": True 时显示） -->
         <div v-if="configTarget?.webhook" class="webhook-box">
           <div class="webhook-title">Webhook 入站地址</div>
@@ -1294,41 +1365,6 @@ onUnmounted(() => {
           <button class="btn" @click="configOpen=false">取消</button>
           <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
             {{ configSaving ? '保存中…' : '保存并应用' }}
-          </button>
-        </div>
-      </div>
-    </div>
-
-    <!-- 应用账号弹窗 -->
-    <div v-if="acctOpen" class="modal-mask" @click.self="acctOpen=false">
-      <div class="modal card">
-        <div class="modal-head">
-          <h2>{{ acctTarget?.name }} · 应用账号</h2>
-          <span class="close" @click="acctOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
-        </div>
-        <div class="form">
-          <div class="hint muted">选择这个插件在哪些账号上生效。多账号时可让不同号开不同插件。</div>
-          <label class="acct-row">
-            <input type="radio" :checked="acctAllMode" @change="acctAllMode = true" />
-            <span>全部账号（默认）</span>
-          </label>
-          <label class="acct-row">
-            <input type="radio" :checked="!acctAllMode" @change="acctAllMode = false" />
-            <span>仅指定账号</span>
-          </label>
-          <div v-if="!acctAllMode" class="acct-list">
-            <div v-if="acctOptions.length === 0" class="muted small">还没有账号，去「账号管理」登录。</div>
-            <label v-for="a in acctOptions" :key="a.session" class="acct-item">
-              <input type="checkbox" :checked="acctSelected.includes(a.session)" @change="toggleAcct(a.session)" />
-              <span>{{ a.name }}</span>
-              <span class="muted mono small">{{ a.session }}</span>
-            </label>
-          </div>
-        </div>
-        <div class="modal-foot">
-          <button class="btn" @click="acctOpen=false">取消</button>
-          <button class="btn btn-primary" @click="saveAccounts" :disabled="acctSaving">
-            {{ acctSaving ? '保存中…' : '保存' }}
           </button>
         </div>
       </div>
@@ -1917,21 +1953,42 @@ onUnmounted(() => {
   border-radius: var(--radius-sm); background: var(--bg-elevated);
 }
 .config-routing-title { margin-bottom: 4px; font-size: 13px; font-weight: 600; color: var(--text-primary); }
-.config-bot-checks { display: flex; flex-direction: column; gap: 8px; }
+.config-bot-checks,
+.config-account-checks {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+}
 .config-bot-item {
   display: flex; align-items: center; gap: 8px;
   font-size: 13px; color: var(--text-primary); cursor: pointer;
-  padding: 6px 8px; border-radius: 6px;
-  transition: background 0.15s;
+  min-width: 180px; padding: 9px 11px; border: 1px solid var(--border);
+  border-radius: 8px; background: rgba(255,255,255,.018);
+  transition: background 0.15s, border-color 0.15s;
 }
-.config-bot-item:hover { background: var(--bg-hover); }
+.config-bot-item:hover { background: var(--bg-hover); border-color: var(--border-light); }
 .config-bot-item input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; flex-shrink: 0; }
 .repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
 .repo-row .input { flex: 1; }
-.acct-row { display: flex; align-items: center; gap: 8px; font-size: 14px; cursor: pointer; }
-.acct-list { display: flex; flex-direction: column; gap: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
-.acct-item { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-.acct-item .small { margin-left: auto; }
+.config-account-modes {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px;
+}
+.config-choice-card {
+  display: flex; align-items: center; gap: 10px; min-width: 0;
+  padding: 11px 12px; border: 1px solid var(--border); border-radius: 9px;
+  background: rgba(255,255,255,.018); cursor: pointer;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.config-choice-card:hover { border-color: var(--border-light); background: var(--bg-hover); }
+.config-choice-card.active {
+  border-color: var(--accent); background: var(--accent-dim);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent);
+}
+.config-choice-card > span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.config-choice-card strong { font-size: 13px; color: var(--text-primary); }
+.config-choice-card small { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.config-choice-warning {
+  flex-basis: 100%; padding: 8px 10px; border-radius: 7px;
+  color: #eeb86b; background: rgba(238,184,107,.08); font-size: 12px;
+}
 
 /* Webhook 区（配置弹窗内） */
 .webhook-box {
@@ -2266,6 +2323,8 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .search-foot { padding: 10px 16px; }
   .search-foot > span:first-child { display: none; }
   .config-routing-box { align-items: stretch; flex-direction: column; gap: 10px; }
+  .config-account-modes { grid-template-columns: 1fr; }
+  .config-bot-item { flex: 1 1 100%; min-width: 0; }
   .config-bot-select { width: 100%; }
   /* 窄屏直接铺满视口（fullscreen）。
      用 .modal.modal-wide 提特异性 + !important，压过 tokens.css 全局的 .modal.card{width:94vw!important} */

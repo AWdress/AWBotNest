@@ -331,71 +331,18 @@ class NotificationSettingsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channels[1]["config"]["device_key"], "********")
         self.assertEqual(stored["NOTIFICATION_CHANNELS"][0]["config"]["secret"], "real-secret")
 
-    async def test_disabling_channel_removes_only_that_route_and_resyncs(self) -> None:
-        current = {
-            "BOT_TOKEN": "",
-            "BOT_NAME": "主要通知渠道",
-            "DEFAULT_BOT_ID": "default",
-            "BOTS": [],
-            "NOTIFICATION_CHANNELS": [
-                {
-                    "id": "work",
-                    "name": "工作通知",
-                    "type": "wechat",
-                    "enabled": True,
-                    "is_default": False,
-                    "config": {"corpid": "corp", "secret": "secret"},
-                }
-            ],
+    async def test_settings_write_api_stays_disabled(self) -> None:
+        registered = {
+            (method, route.path)
+            for route in web_api.app.routes
+            for method in getattr(route, "methods", set())
         }
-        incoming = [{**current["NOTIFICATION_CHANNELS"][0], "enabled": False}]
-        accounts = SimpleNamespace(sync_bots=AsyncMock(return_value={
-            "default_id": "default", "failed": [], "needs_resync": False,
-        }))
-        runtime = SimpleNamespace(resync=AsyncMock())
+        self.assertNotIn(("PUT", "/api/settings"), registered)
 
-        with (
-            patch("config.config.load", return_value=current),
-            patch("config.config.save"),
-            patch.object(web_api, "_get_accounts", return_value=accounts),
-            patch.object(web_api, "_get_runtime", return_value=runtime),
-            patch.object(web_api.registry, "purge_bot", return_value=["demo"]) as purge,
-        ):
-            response = await web_api.put_settings_api(
-                {"settings": {"NOTIFICATION_CHANNELS": incoming}}, user={},
-            )
+        with self.assertRaises(web_api.HTTPException) as raised:
+            await web_api.put_settings_api_disabled({"settings": {}}, user={})
 
-        self.assertEqual(response["status"], "success")
-        purge.assert_called_once_with("work")
-        accounts.sync_bots.assert_not_awaited()
-        runtime.resync.assert_awaited_once()
-
-    async def test_unchanged_maintenance_settings_do_not_restart_tasks(self) -> None:
-        cleaner = {"enabled": True, "keep_lines": 100, "hour": 3, "minute": 0}
-        current = {
-            "BOT_TOKEN": "",
-            "BOT_NAME": "主要通知渠道",
-            "DEFAULT_BOT_ID": "default",
-            "BOTS": [],
-            "PLUGIN_REPO_ENABLE": False,
-            "PLUGIN_REPOS": [],
-            "PLUGIN_REPO_INTERVAL": 20,
-        }
-
-        with (
-            patch("config.config.load", return_value=current),
-            patch("config.config.save"),
-            patch("libs.log_cleaner_settings.get_log_cleaner_settings", return_value=cleaner),
-            patch("libs.log_cleaner_settings.save_log_cleaner_settings") as save_cleaner,
-            patch("webui.repo_sync.reschedule") as reschedule,
-        ):
-            response = await web_api.put_settings_api(
-                {"settings": {**current, "LOG_CLEANER": cleaner}}, user={},
-            )
-
-        self.assertEqual(response["status"], "success")
-        save_cleaner.assert_not_called()
-        reschedule.assert_not_called()
+        self.assertEqual(raised.exception.status_code, 403)
 
 
 if __name__ == "__main__":
