@@ -1214,22 +1214,27 @@ async def put_settings_api_disabled(body: Dict[str, Any], user=Depends(_auth_pwc
     return {"status": "success", "restart_required": restart_required, "bot_sync": bot_sync}
 
 
-# 安全考虑：禁用系统重启 API
-# @app.post("/api/system/restart")
-async def restart_platform_disabled(user=Depends(_auth_pwc)):
-    """[已禁用] 重启平台。容器(restart:always)下进程退出会被自动拉起；
-    裸跑需外部进程守护(systemd/supervisor)才能自动重启。
-    出于安全考虑，此端点已被禁用。请通过服务器直接重启服务。"""
-    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
+@app.post("/api/system/restart")
+async def restart_platform(user=Depends(_auth_pwc)):
+    """先响应管理员请求，再用当前解释器重新启动平台进程。"""
     import asyncio as _aio
     import os as _os
+    import sys as _sys
+
+    current_task = getattr(app.state, "restart_task", None)
+    if current_task is not None and not current_task.done():
+        return {"status": "success", "message": "平台已经在重启"}
 
     async def _delayed_exit():
-        await _aio.sleep(0.5)   # 让本次 HTTP 响应先返回
-        logger.info("收到重启请求，进程即将退出由守护进程拉起…")
-        _os._exit(0)
+        await _aio.sleep(1.0)  # 让本次 HTTP 响应完整返回给前端。
+        logger.info("收到管理员重启请求，正在重新启动平台…")
+        try:
+            _os.execv(_sys.executable, [_sys.executable, *_sys.argv])
+        except Exception:  # noqa: BLE001
+            logger.exception("重新执行平台进程失败，改为退出并交给容器或守护进程拉起")
+            _os._exit(1)
 
-    _aio.create_task(_delayed_exit())
+    app.state.restart_task = _aio.create_task(_delayed_exit())
     return {"status": "success", "message": "平台正在重启，请稍候刷新页面"}
 
 
