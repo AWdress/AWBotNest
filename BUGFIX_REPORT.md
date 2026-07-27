@@ -2,7 +2,7 @@
 
 ## 概述
 
-本次修复共解决 **20 个潜在 bug**，清理 **AWBotHub 遗留代码**，删除 **3 个重复的 scheduler**，删除 **3 个无用文件**，修复 **日志文件命名问题**，所有改动通过 **51 个测试用例**验证。
+本次修复共解决 **20 个潜在 bug**，清理 **AWBotHub 遗留代码**，删除 **3 个重复的 scheduler**，删除 **7 个无用文件**，清理 **旧插件加载方式**，修复 **日志文件命名问题**，所有改动通过 **51 个测试用例**验证。
 
 ---
 
@@ -128,13 +128,25 @@
   - `schedulers/universal/log_cleaner.py`: 更新清理目标为 `app.log`
 - **影响**：新日志写入 `logs/app.log`，旧的 `logs/Mytgbot.log` 可手动删除
 
-#### 7. **删除无用的旧项目残留文件（3 个）**
+#### 7. **删除无用的旧项目残留文件（7 个）**
 - **libs/command_tablepy.py** - HTML 表格转图片工具
   - 全库零引用，依赖 imgkit 和 wkhtmltoimage
 - **libs/leaderboard_imge.py** - 排行榜图片生成
   - 全库零引用，硬编码 Windows 路径，引用已删除的配置
 - **infra/scheduler.py** - 旧的调度器架构
   - 全库零引用，与当前的 `schedulers/` 功能重复
+- **libs/async_bash.py** - 异步 bash 执行工具
+  - 全库零引用
+- **libs/toml_images.py** - TOML 文件转图片工具
+  - 全库零引用，硬编码 Windows 路径，依赖 imgkit
+
+#### 8. **清理旧插件加载方式和废弃功能**
+- **core/manager.py**: 删除 `plugins=dict(root="plugins/bot")` 和 `plugins=dict(root="plugins/user")`
+  - 这些目录在平台化后已不存在
+- **libs/client_base/peers.py**: 删除群组白名单验证功能
+  - 删除 `_valid_group_ids` 属性
+  - 删除 `set_valid_group_ids()` 和 `is_valid_group_id()` 方法
+  - AWBotHub 的群组验证机制已废弃
 
 ---
 
@@ -194,13 +206,17 @@ OK
  D infra/scheduler.py                       # 删除旧的调度器架构
  D libs/command_tablepy.py                  # 删除无用的 HTML 转图片工具
  D libs/leaderboard_imge.py                 # 删除无用的排行榜生成工具
+ D libs/async_bash.py                       # 删除无用的异步 bash 工具
+ D libs/toml_images.py                      # 删除无用的 TOML 转图片工具
+ M core/manager.py                          # 删除旧插件加载路径
+ M libs/client_base/peers.py                # 删除群组白名单验证功能
  M webui/api.py                             # 添加插件 ID 校验
  M webui/backup.py                          # 添加 Zip bomb 检测
  M webui/github_import.py                   # 优化错误提示
  M webui/repo_sync.py                       # 添加版本读取日志
 ```
 
-**共 15 个文件修改，6 个文件删除**
+**共 17 个文件修改，8 个文件删除**
 
 ---
 
@@ -217,10 +233,11 @@ OK
 - 异常处理精准化（不吞系统级错误）
 
 ### ✅ 代码质量提升
-- 删除 1350+ 行死代码（AWBotHub 残留 + 重复 scheduler + 无用工具）
+- 删除 1600+ 行死代码（AWBotHub 残留 + 重复 scheduler + 无用工具 + 废弃功能）
 - 插件与平台完全解耦（0 次引用旧 API）
 - 所有改动通过 51 个测试用例
 - 日志文件命名符合平台规范
+- 清理旧的插件加载方式和群组验证机制
 
 ### ⚠️ 兼容性影响
 - **无破坏性变更**：旧插件依赖 `ctx` API 继续工作
