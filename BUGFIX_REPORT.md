@@ -109,6 +109,15 @@
   - 通知改用平台的 `kernel.notifier.notify()` API
   - 成功通知发送到目标聊天（而非硬编码的 `BOT_MESSAGE_CHAT`）
 
+#### 5. **删除重复的 `schedulers/universal/custom_auto_reply.py`**
+- **原因**：与 `plugins/custom_auto_reply.py` 功能重复
+- **对比**：
+  - **Scheduler 版本**（已删除）：依赖 `PT_GROUP_ID`、无可视化配置、使用旧 API
+  - **Plugin 版本**（保留）：v1.0.11、WebUI 可视化配置、使用 `ctx` API、功能更完善
+- **保留的 schedulers**：
+  - `auto_avatar` / `auto_changename` - 暂无插件版本
+  - `log_cleaner` - 平台级功能（清理平台日志 + 插件日志）
+
 ---
 
 ## 三、验证结果
@@ -159,14 +168,15 @@ OK
  M libs/log.py                              # 删除 get_group_name()
  M libs/proxy.py                            # 修复空值判断
  M main.py                                  # 修复类型标注
- M schedulers/universal/custom_auto_reply.py # 移除 PT_GROUP_ID 依赖
+ M schedulers/__init__.py                   # 移除 custom_auto_reply 注册
+ D schedulers/universal/custom_auto_reply.py # 删除重复的 scheduler 版本
  M webui/api.py                             # 添加插件 ID 校验
  M webui/backup.py                          # 添加 Zip bomb 检测
  M webui/github_import.py                   # 优化错误提示
  M webui/repo_sync.py                       # 添加版本读取日志
 ```
 
-**共 15 个文件修改**
+**共 16 个文件修改，1 个文件删除**
 
 ---
 
@@ -183,22 +193,24 @@ OK
 - 异常处理精准化（不吞系统级错误）
 
 ### ✅ 代码质量提升
-- 删除 200+ 行死代码（AWBotHub 残留）
+- 删除 400+ 行死代码（AWBotHub 残留 + 重复 scheduler）
 - 插件与平台完全解耦（0 次引用旧 API）
 - 所有改动通过 51 个测试用例
 
 ### ⚠️ 兼容性影响
 - **无破坏性变更**：旧插件依赖 `ctx` API 继续工作
-- **scheduler 行为变化**：`custom_auto_reply` 通知目标改为任务配置的聊天（原为硬编码的 `BOT_MESSAGE_CHAT`）
-- **建议**：用户需在 WebUI 中重新配置 `custom_auto_reply` 的通知目标
+- **scheduler 变更**：`custom_auto_reply` scheduler 版本已删除，请使用插件版本（在 WebUI 插件管理中启用）
+- **建议**：如正在使用旧的 scheduler 版本，需迁移配置到插件版本
 
 ---
 
 ## 六、后续建议
 
-1. **删除 `app.py` 兼容垫片**（可选）
-   - 当前保留是为了让 `schedulers/universal/` 零改动运行
-   - 建议将 4 个 scheduler 完全迁移到插件系统后删除
+1. **将剩余 2 个 scheduler 迁移到插件系统**（可选）
+   - `auto_avatar` - 自动换头像
+   - `auto_changename` - 自动报时昵称
+   - 迁移后可删除 `app.py` 兼容垫片
+   - `log_cleaner` 作为平台级功能应保留在 scheduler
 
 2. **移除 `infra/config.py` 的 `state.toml` 持久化**（可选）
    - 当前只保存 AI 配置，可考虑合并到主配置文件
