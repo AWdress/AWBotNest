@@ -93,6 +93,7 @@ class PluginRegistry:
         self._bot_choice: dict[str, str] = {}  # 插件id -> bot id；空/缺失=跟随默认，"default"=内置 Bot
         self._scan_cache_signature: tuple[tuple[str, int, int], ...] | None = None
         self._scan_cache: list[PluginMeta] = []
+        self._meta_cache: dict[str, tuple[tuple[str, int, int], PluginMeta]] = {}
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -348,6 +349,7 @@ class PluginRegistry:
         with self._lock:
             self._scan_cache_signature = None
             self._scan_cache = []
+            self._meta_cache = {}
 
     def scan(self) -> list[PluginMeta]:
         """
@@ -393,10 +395,30 @@ class PluginRegistry:
 
     def get_meta(self, plugin_id: str) -> Optional[PluginMeta]:
         """读取单个插件元数据（单文件或文件夹形态）"""
-        entry = self.entry_file(plugin_id)
-        if entry is None:
-            return None
-        return self.parse_meta(entry, plugin_id)
+        with self._lock:
+            entry = self.entry_file(plugin_id)
+            if entry is None:
+                self._meta_cache.pop(plugin_id, None)
+                return None
+            try:
+                stat = entry.stat()
+                signature = (str(entry), stat.st_mtime_ns, stat.st_size)
+            except OSError:
+                self._meta_cache.pop(plugin_id, None)
+                return None
+
+            cached = self._meta_cache.get(plugin_id)
+            if cached is None or cached[0] != signature:
+                meta = self.parse_meta(entry, plugin_id)
+                self._meta_cache[plugin_id] = (signature, copy.deepcopy(meta))
+            else:
+                meta = copy.deepcopy(cached[1])
+
+            # These values can change without modifying the plugin source.
+            meta.enabled = self._enabled_state.get(plugin_id, meta.default_enabled)
+            meta.accounts = list(self._account_scope.get(plugin_id, []))
+            meta.bot = self._bot_choice.get(plugin_id, "") or ""
+            return meta
 
     def display_name(self, plugin_id: str) -> str:
         """插件展示名：优先中文元数据 name，取不到（文件已删/解析失败）回退 id。
