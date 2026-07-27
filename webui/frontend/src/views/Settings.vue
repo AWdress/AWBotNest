@@ -91,7 +91,7 @@ async function loadAiSettings() {
   try {
     const [configData, pluginData] = await Promise.all([
       api.getAiSettings(),
-      api.listPlugins(),
+      api.listAiPlugins(),
     ])
     ai.value = configData.settings
     aiStatus.value = configData.status || {}
@@ -1589,7 +1589,7 @@ onBeforeRouteLeave(async () => {
           <div class="card" style="margin-top:16px">
             <div class="card-title">插件 AI 设置</div>
             <div class="hint muted">可以控制插件使用哪些 AI 能力，并由平台为每种能力指定模型；留空则跟随平台默认。</div>
-            <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无已安装插件</div>
+            <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无使用平台 AI 的插件</div>
             <div v-else class="ai-permission-list">
               <div v-for="plugin in aiPlugins" :key="plugin.id" class="ai-permission-row">
                 <div class="ai-permission-head">

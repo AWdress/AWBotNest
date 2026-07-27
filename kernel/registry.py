@@ -94,6 +94,7 @@ class PluginRegistry:
         self._scan_cache_signature: tuple[tuple[str, int, int], ...] | None = None
         self._scan_cache: list[PluginMeta] = []
         self._meta_cache: dict[str, tuple[tuple[str, int, int], PluginMeta]] = {}
+        self._ai_usage_cache: dict[str, tuple[tuple[tuple[str, int, int], ...], bool]] = {}
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         self._load_state()
@@ -350,6 +351,71 @@ class PluginRegistry:
             self._scan_cache_signature = None
             self._scan_cache = []
             self._meta_cache = {}
+            self._ai_usage_cache = {}
+
+    def uses_platform_ai(self, plugin_id: str) -> bool:
+        """静态识别插件是否调用 ctx.ai，不导入或执行插件代码。"""
+        with self._lock:
+            entry = self.entry_file(plugin_id)
+            if entry is None:
+                self._ai_usage_cache.pop(plugin_id, None)
+                return False
+
+            if entry.name == "__init__.py":
+                source_files = sorted(
+                    path
+                    for path in entry.parent.rglob("*.py")
+                    if "__pycache__" not in path.parts
+                )
+            else:
+                source_files = [entry]
+
+            signature: list[tuple[str, int, int]] = []
+            for path in source_files:
+                try:
+                    stat = path.stat()
+                    signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+                except OSError:
+                    continue
+            cache_key = tuple(signature)
+            cached = self._ai_usage_cache.get(plugin_id)
+            if cached is not None and cached[0] == cache_key:
+                return cached[1]
+
+            uses_ai = any(self._source_uses_platform_ai(path) for path in source_files)
+            self._ai_usage_cache[plugin_id] = (cache_key, uses_ai)
+            return uses_ai
+
+    @staticmethod
+    def _source_uses_platform_ai(path: Path) -> bool:
+        try:
+            source = path.read_text(encoding="utf-8")
+            # 大多数插件不含平台 AI 调用，先做无损快速排除，避免全部进入 AST 解析。
+            if "ctx" not in source or "ai" not in source:
+                return False
+            tree = ast.parse(source, filename=str(path))
+        except (OSError, SyntaxError, UnicodeError):
+            return False
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and node.attr == "ai":
+                owner = node.value
+                if isinstance(owner, ast.Name) and owner.id == "ctx":
+                    return True
+                if isinstance(owner, ast.Attribute) and owner.attr == "ctx":
+                    return True
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr"
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "ctx"
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == "ai"
+            ):
+                return True
+        return False
 
     def scan(self) -> list[PluginMeta]:
         """

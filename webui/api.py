@@ -1070,6 +1070,16 @@ async def get_ai_settings(user=Depends(_auth)):
     }
 
 
+@app.get("/api/ai/plugins")
+async def get_ai_plugins(user=Depends(_auth)):
+    plugins = [
+        {"id": meta.id, "name": meta.name}
+        for meta in registry.scan()
+        if not meta.error and registry.uses_platform_ai(meta.id)
+    ]
+    return {"plugins": plugins}
+
+
 @app.put("/api/ai/settings")
 async def put_ai_settings(body: Dict[str, Any], user=Depends(_auth_pwc)):
     try:
