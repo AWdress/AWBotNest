@@ -54,6 +54,7 @@ DEFAULT_AI_SETTINGS: dict[str, Any] = {
         for capability in AI_CAPABILITIES
     },
     "timeout_seconds": 60,
+    "image_timeout_seconds": 300,
     "max_concurrency": 3,
     "plugin_permissions": {},
 }
@@ -111,6 +112,9 @@ def normalize_ai_settings(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     result = copy.deepcopy(DEFAULT_AI_SETTINGS)
     result["timeout_seconds"] = _bounded_int(raw.get("timeout_seconds"), 60, 5, 300)
+    result["image_timeout_seconds"] = _bounded_int(
+        raw.get("image_timeout_seconds"), 300, 30, 300,
+    )
     result["max_concurrency"] = _bounded_int(raw.get("max_concurrency"), 3, 1, 20)
 
     providers: list[dict[str, Any]] = []
@@ -186,9 +190,21 @@ def normalize_ai_settings(value: Any) -> dict[str, Any]:
             allowed = _capability_list(
                 permission.get("capabilities"), AI_CAPABILITIES,
             )
+            assigned = permission.get("models")
+            assigned = assigned if isinstance(assigned, dict) else {}
+            assigned_models: dict[str, str] = {}
+            for capability in AI_CAPABILITIES:
+                model_id = str(assigned.get(capability) or "").strip()
+                model = next((item for item in models if item["id"] == model_id), None)
+                assigned_models[capability] = (
+                    model_id
+                    if model and capability in model["capabilities"]
+                    else ""
+                )
             result["plugin_permissions"][str(plugin_id)] = {
                 "enabled": bool(permission.get("enabled", True)),
                 "capabilities": allowed,
+                "models": assigned_models,
             }
     return result
 
@@ -281,12 +297,13 @@ def _model_candidates(
     settings: dict[str, Any],
     capability: str,
     requested: str | None,
+    preferred: str | None = None,
 ) -> list[tuple[dict[str, Any], str, str]]:
     target = settings["capabilities"][capability]
     selected_ids = [requested] if requested else [
-        target["default_model"], target["fallback_model"],
+        preferred, target["default_model"], target["fallback_model"],
     ]
-    selected_ids = [item for item in selected_ids if item]
+    selected_ids = list(dict.fromkeys(item for item in selected_ids if item))
     if not selected_ids:
         raise AIServiceError(f"尚未配置 {capability} 模型")
     models_by_id = {item["id"]: item for item in settings["models"]}
@@ -316,6 +333,18 @@ def _model_candidates(
             raise provider_error
         raise AIServiceError(f"没有可用的 {capability} 模型")
     return candidates
+
+
+def _plugin_model(
+    settings: dict[str, Any],
+    plugin_id: str,
+    capability: str,
+) -> str:
+    permission = settings["plugin_permissions"].get(plugin_id) or {}
+    models = permission.get("models")
+    if not isinstance(models, dict):
+        return ""
+    return str(models.get(capability) or "")
 
 
 async def list_provider_models(provider: dict[str, Any], timeout: int = 30) -> list[str]:
@@ -483,7 +512,8 @@ class PluginAI:
                 return False
             settings = load_ai_settings()
             _permission(settings, self.plugin_id, capability)
-            return bool(_model_candidates(settings, capability, None))
+            assigned = _plugin_model(settings, self.plugin_id, capability)
+            return bool(_model_candidates(settings, capability, None, assigned))
         except AIServiceError:
             return False
 
@@ -504,8 +534,13 @@ class PluginAI:
                 for item in settings["capabilities"].values()
                 if item.get("default_model")
             }
+            assigned = permission.get("models", {}) if permission else {}
+            defaults.update(item for item in assigned.values() if item)
         else:
-            default_id = settings["capabilities"][capability].get("default_model")
+            default_id = (
+                _plugin_model(settings, self.plugin_id, capability)
+                or settings["capabilities"][capability].get("default_model")
+            )
             defaults = {default_id} if default_id else set()
         usable_providers = {
             item["id"]
@@ -548,7 +583,10 @@ class PluginAI:
         image_items = list(images or [])
         capability = "vision" if image_items else "text"
         _permission(settings, self.plugin_id, capability)
-        candidates = _model_candidates(settings, capability, model)
+        assigned = _plugin_model(settings, self.plugin_id, capability)
+        candidates = _model_candidates(
+            settings, capability, None if assigned else model, assigned,
+        )
         content: Any = str(prompt)
         if image_items:
             content = [{"type": "text", "text": str(prompt)}]
@@ -572,7 +610,10 @@ class PluginAI:
     ) -> str:
         settings = load_ai_settings()
         _permission(settings, self.plugin_id, "vision")
-        candidates = _model_candidates(settings, "vision", model)
+        assigned = _plugin_model(settings, self.plugin_id, "vision")
+        candidates = _model_candidates(
+            settings, "vision", None if assigned else model, assigned,
+        )
         messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": str(system)})
@@ -635,8 +676,11 @@ class PluginAI:
     ) -> Path:
         settings = load_ai_settings()
         _permission(settings, self.plugin_id, "image")
-        candidates = _model_candidates(settings, "image", model)
-        timeout = settings["timeout_seconds"]
+        assigned = _plugin_model(settings, self.plugin_id, "image")
+        candidates = _model_candidates(
+            settings, "image", None if assigned else model, assigned,
+        )
+        timeout = settings["image_timeout_seconds"]
         semaphore = _semaphore_for(settings["max_concurrency"])
         last_error: Exception | None = None
         self.data_dir.mkdir(parents=True, exist_ok=True)

@@ -280,9 +280,9 @@ await client.send_photo(message.chat.id, str(generated_path))
 - `chat(prompt, system=None, images=None, model=None, temperature=None, max_tokens=None)` 返回文字。传 `images` 时自动使用图片识别模型和权限。
 - `vision(image, prompt=..., model=None, system=None)` 接受本地 `Path`、文件路径或图片字节，支持 PNG、JPEG、GIF、WebP，单张不超过 20MB。
 - `generate_image(prompt, model=None, size="1024x1024", quality=None)` 返回生成图片的 `Path`，文件自动放进当前插件的 `data/plugin_data/<id>/ai/`。
-- `model=` 填管理员在模型库中设置的“插件调用别名”，插件可以自主选择任意已启用且支持当前能力的模型；不传时使用平台默认模型。
+- `model=` 填管理员在模型库中设置的“插件调用别名”，插件可以自主选择任意已启用且支持当前能力的模型。管理员为插件指定模型后以平台设置为准；没有指定时才使用插件选择或平台默认模型。
 - 主模型调用失败时，平台会自动尝试备用模型；并发、超时、代理和错误记录都由平台统一处理。
-- 管理员可以关闭某个插件的全部 AI 权限，或只允许文字、识图、生图中的一部分。
+- 管理员可以关闭某个插件的全部 AI 权限、只允许部分能力，或分别指定该插件使用的文字、识图和生图模型；插件本身不需要为此修改代码。
 - 平台 AI 只提供调用能力，不注册 `/models` 等聊天命令，也不会自行监听或回复消息。
 
 ### 键值存储

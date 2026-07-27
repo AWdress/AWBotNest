@@ -62,6 +62,7 @@ _DEFAULTS: dict[str, Any] = {
             "image": {"default_model": "", "fallback_model": ""},
         },
         "timeout_seconds": 60,
+        "image_timeout_seconds": 300,
         "max_concurrency": 3,
         "plugin_permissions": {},
     },

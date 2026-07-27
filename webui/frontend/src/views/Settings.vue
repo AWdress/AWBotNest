@@ -368,8 +368,10 @@ function ensurePluginPermission(pluginId) {
     ai.value.plugin_permissions[pluginId] = {
       enabled: true,
       capabilities: AI_CAPABILITIES.map((item) => item.key),
+      models: { text: '', vision: '', image: '' },
     }
   }
+  ai.value.plugin_permissions[pluginId].models ||= { text: '', vision: '', image: '' }
   return ai.value.plugin_permissions[pluginId]
 }
 
@@ -383,6 +385,14 @@ function togglePluginAiCapability(pluginId, capability) {
   const index = permission.capabilities.indexOf(capability)
   if (index >= 0) permission.capabilities.splice(index, 1)
   else permission.capabilities.push(capability)
+}
+
+function pluginAiModel(pluginId, capability) {
+  return pluginPermission(pluginId)?.models?.[capability] || ''
+}
+
+function setPluginAiModel(pluginId, capability, modelId) {
+  ensurePluginPermission(pluginId).models[capability] = modelId
 }
 
 async function load(silent = false) {
@@ -1556,11 +1566,16 @@ onBeforeRouteLeave(async () => {
 
           <div class="card" style="margin-top:16px">
             <div class="card-title">调用保护</div>
-            <div class="grid2">
+            <div class="grid3">
               <div class="field">
-                <label>请求超时（秒）</label>
+                <label>文字与识图超时（秒）</label>
                 <input class="input" type="number" min="5" max="300"
                        v-model.number="ai.timeout_seconds" />
+              </div>
+              <div class="field">
+                <label>生图超时（秒）</label>
+                <input class="input" type="number" min="30" max="300"
+                       v-model.number="ai.image_timeout_seconds" />
               </div>
               <div class="field">
                 <label>最多同时调用</label>
@@ -1568,32 +1583,48 @@ onBeforeRouteLeave(async () => {
                        v-model.number="ai.max_concurrency" />
               </div>
             </div>
-            <div class="hint muted">超过并发数量的请求会自动排队，避免多个插件同时调用拖慢平台。</div>
+            <div class="hint muted">生图通常需要更长时间，默认等待 300 秒；超过并发数量的请求会自动排队。</div>
           </div>
 
           <div class="card" style="margin-top:16px">
-            <div class="card-title">插件 AI 权限</div>
-            <div class="hint muted">默认允许插件使用全部能力，也可以在这里单独关闭。</div>
+            <div class="card-title">插件 AI 设置</div>
+            <div class="hint muted">可以控制插件使用哪些 AI 能力，并由平台为每种能力指定模型；留空则跟随平台默认。</div>
             <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无已安装插件</div>
             <div v-else class="ai-permission-list">
               <div v-for="plugin in aiPlugins" :key="plugin.id" class="ai-permission-row">
-                <div class="ai-plugin-name">
-                  <strong>{{ plugin.name }}</strong>
-                  <span class="mono muted small">{{ plugin.id }}</span>
+                <div class="ai-permission-head">
+                  <div class="ai-plugin-name">
+                    <strong>{{ plugin.name }}</strong>
+                    <span class="mono muted small">{{ plugin.id }}</span>
+                  </div>
+                  <label class="ai-permission-switch">
+                    <input type="checkbox" :checked="pluginAiEnabled(plugin.id)"
+                           @change="togglePluginAi(plugin.id)" />
+                    <span>允许 AI</span>
+                  </label>
                 </div>
-                <label class="ai-permission-switch">
-                  <input type="checkbox" :checked="pluginAiEnabled(plugin.id)"
-                         @change="togglePluginAi(plugin.id)" />
-                  <span>允许 AI</span>
-                </label>
-                <label v-for="capability in AI_CAPABILITIES" :key="capability.key"
-                       class="ai-permission-cap" :class="{ disabled: !pluginAiEnabled(plugin.id) }">
-                  <input type="checkbox"
-                         :checked="pluginAiCapability(plugin.id, capability.key)"
-                         :disabled="!pluginAiEnabled(plugin.id)"
-                         @change="togglePluginAiCapability(plugin.id, capability.key)" />
-                  <span>{{ capability.label }}</span>
-                </label>
+                <div class="ai-plugin-model-grid">
+                  <div v-for="capability in AI_CAPABILITIES" :key="capability.key"
+                       class="ai-plugin-model" :class="{ disabled: !pluginAiEnabled(plugin.id) }">
+                    <label class="ai-permission-cap">
+                      <input type="checkbox"
+                             :checked="pluginAiCapability(plugin.id, capability.key)"
+                             :disabled="!pluginAiEnabled(plugin.id)"
+                             @change="togglePluginAiCapability(plugin.id, capability.key)" />
+                      <span>{{ capability.label }}</span>
+                    </label>
+                    <select class="select"
+                            :value="pluginAiModel(plugin.id, capability.key)"
+                            :disabled="!pluginAiEnabled(plugin.id) || !pluginAiCapability(plugin.id, capability.key)"
+                            @change="setPluginAiModel(plugin.id, capability.key, $event.target.value)">
+                      <option value="">跟随平台默认</option>
+                      <option v-for="model in availableAiModels(capability.key)"
+                              :key="model.id" :value="model.id">
+                        {{ model.name }}（{{ model.alias }}）
+                      </option>
+                    </select>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -2739,17 +2770,32 @@ onBeforeRouteLeave(async () => {
   overflow-y: auto;
 }
 .ai-permission-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 1fr) auto repeat(3, auto);
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: 9px;
   background: var(--bg-elevated);
 }
+.ai-permission-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
 .ai-plugin-name { display: flex; min-width: 0; flex-direction: column; }
 .ai-plugin-name .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-plugin-model-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+.ai-plugin-model {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 7px;
+}
+.ai-plugin-model.disabled { opacity: .42; }
 .ai-permission-switch,
 .ai-permission-cap {
   display: flex;
@@ -2768,7 +2814,8 @@ onBeforeRouteLeave(async () => {
   .bot-grid { grid-template-columns: 1fr; }
   .channel-grid { grid-template-columns: 1fr; }
   .ai-provider-grid,
-  .ai-capability-grid { grid-template-columns: 1fr; }
+  .ai-capability-grid,
+  .ai-plugin-model-grid { grid-template-columns: 1fr; }
   .ai-model-picker-head { align-items: stretch; flex-direction: column; }
   .ai-model-picker-head .row { justify-content: space-between; }
   .ai-fetched-models { grid-template-columns: 1fr; }
