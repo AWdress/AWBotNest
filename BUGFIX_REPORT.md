@@ -2,7 +2,7 @@
 
 ## 概述
 
-本次修复共解决 **20 个潜在 bug**，清理 **AWBotHub 遗留代码**，删除 **3 个重复的 scheduler**，修复 **日志文件命名问题**，所有改动通过 **51 个测试用例**验证。
+本次修复共解决 **20 个潜在 bug**，清理 **AWBotHub 遗留代码**，删除 **3 个重复的 scheduler**，删除 **3 个无用文件**，修复 **日志文件命名问题**，所有改动通过 **51 个测试用例**验证。
 
 ---
 
@@ -128,6 +128,14 @@
   - `schedulers/universal/log_cleaner.py`: 更新清理目标为 `app.log`
 - **影响**：新日志写入 `logs/app.log`，旧的 `logs/Mytgbot.log` 可手动删除
 
+#### 7. **删除无用的旧项目残留文件（3 个）**
+- **libs/command_tablepy.py** - HTML 表格转图片工具
+  - 全库零引用，依赖 imgkit 和 wkhtmltoimage
+- **libs/leaderboard_imge.py** - 排行榜图片生成
+  - 全库零引用，硬编码 Windows 路径，引用已删除的配置
+- **infra/scheduler.py** - 旧的调度器架构
+  - 全库零引用，与当前的 `schedulers/` 功能重复
+
 ---
 
 ## 三、验证结果
@@ -183,13 +191,16 @@ OK
  D schedulers/universal/auto_changename.py  # 删除重复的 scheduler 版本
  D schedulers/universal/custom_auto_reply.py # 删除重复的 scheduler 版本
  M schedulers/universal/log_cleaner.py      # 更新日志清理目标文件名
+ D infra/scheduler.py                       # 删除旧的调度器架构
+ D libs/command_tablepy.py                  # 删除无用的 HTML 转图片工具
+ D libs/leaderboard_imge.py                 # 删除无用的排行榜生成工具
  M webui/api.py                             # 添加插件 ID 校验
  M webui/backup.py                          # 添加 Zip bomb 检测
  M webui/github_import.py                   # 优化错误提示
  M webui/repo_sync.py                       # 添加版本读取日志
 ```
 
-**共 15 个文件修改，3 个文件删除**
+**共 15 个文件修改，6 个文件删除**
 
 ---
 
@@ -206,7 +217,7 @@ OK
 - 异常处理精准化（不吞系统级错误）
 
 ### ✅ 代码质量提升
-- 删除 880+ 行死代码（AWBotHub 残留 + 重复 scheduler）
+- 删除 1350+ 行死代码（AWBotHub 残留 + 重复 scheduler + 无用工具）
 - 插件与平台完全解耦（0 次引用旧 API）
 - 所有改动通过 51 个测试用例
 - 日志文件命名符合平台规范
