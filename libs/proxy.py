@@ -31,7 +31,8 @@ def proxy_url() -> str | None:
         if host and port:
             from urllib.parse import quote
             scheme = px.get("scheme", "http")
-            user, pwd = px.get("username", ""), px.get("password", "")
+            user = px.get("username") or ""
+            pwd = px.get("password") or ""
             # 用户名/密码可能含 @ : / # 等，需转义，否则拼进 URL 会破坏解析
             auth = f"{quote(str(user), safe='')}:{quote(str(pwd), safe='')}@" if user else ""
             return f"{scheme}://{auth}{host}:{port}"

@@ -558,9 +558,19 @@ class PlatformContext:
             raise ValueError("该消息没有可下载的媒体")
         import os
         target = self.data_dir / subdir if subdir else self.data_dir
+
+        # 路径安全检查：防止 subdir 包含 .. 越界
+        if subdir:
+            resolved = target.resolve()
+            base = self.data_dir.resolve()
+            if not str(resolved).startswith(str(base)):
+                raise ValueError(f"子目录路径非法：不能越出插件数据目录")
+
         target.mkdir(parents=True, exist_ok=True)
         # 末尾带分隔符 → Pyrogram 视为目录，文件名用 Telegram 提供的原名
         saved = await message.download(file_name=str(target) + os.sep)
+        if saved is None:
+            raise RuntimeError("媒体下载失败（可能是网络问题或文件过大）")
         return Path(saved)
 
     def _track(self, func: Callable) -> Callable:
@@ -665,7 +675,14 @@ class PlatformContext:
                 # 创建协程随即丢弃，造成连接/句柄静默泄漏 + "coroutine was never awaited"。
                 # 卸载在事件循环中进行，这里调度执行它。
                 if inspect.iscoroutine(result):
-                    asyncio.ensure_future(result)
+                    task = asyncio.create_task(result)
+                    # 添加回调记录异常，避免 "Task exception was never retrieved" 警告
+                    def _log_cleanup_error(t: asyncio.Task) -> None:
+                        try:
+                            t.result()
+                        except Exception as exc:
+                            _root_logger.warning("清理回调协程执行失败 [%s]: %r", self.plugin_id, exc)
+                    task.add_done_callback(_log_cleanup_error)
             except Exception as e:  # noqa: BLE001
                 _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, e)
         self._cleanups.clear()

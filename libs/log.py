@@ -128,9 +128,8 @@ def log_group_error(group_id, error_msg, extra_info=""):
         error_msg: 错误信息
         extra_info: 额外信息
     """
-    # 将群组ID转换为群组名称（如果可能）
-    group_name = get_group_name(group_id)
-    full_msg = f"群组错误 - ID: {group_id} ({group_name}) - {error_msg}"
+    # 直接使用群组 ID，不再尝试转换为名称
+    full_msg = f"群组错误 - ID: {group_id} - {error_msg}"
     if extra_info:
         full_msg += f" - 额外信息: {extra_info}"
 
@@ -138,52 +137,4 @@ def log_group_error(group_id, error_msg, extra_info=""):
     logger.error(full_msg)
 
 
-def get_group_name(group_id):
-    """
-    根据群组ID获取群组名称
-    优先从自定义群组名称 → PT_GROUP_ID 配置 → 返回群组ID
-    """
-    # 1. 尝试从自定义群组名称中获取
-    try:
-        from libs.state import state_manager
-        group_names_str = state_manager.get_item("AUTO_LOTTERY", "custom_group_names", "{}")
-        import json
-        group_names = json.loads(group_names_str)
-        if str(group_id) in group_names:
-            return group_names[str(group_id)]
-    except Exception:
-        pass
-
-    # 2. 尝试从配置文件中获取群组名称
-    try:
-        from config.config import PT_GROUP_ID
-        # 遍历 PT_GROUP_ID 字典，查找匹配的群组ID
-        for key, value in PT_GROUP_ID.items():
-            if value == group_id:
-                # 智能转换配置键为友好名称
-                # 例如: "ZHUQUE_ID" -> "朱雀", "SSD_ID" -> "SSD", "BOT_MESSAGE_CHAT" -> "Bot消息"
-                name = key.replace("_ID", "").replace("_CHAT", "")
-
-                # 特殊处理一些常见名称
-                name_mapping = {
-                    "BOT_MESSAGE": "Bot消息",
-                    "ZHUQUE": "朱雀",
-                    "HONGYE": "红叶",
-                    "AUDIENCES": "观众",
-                    "AZUSA": "Azusa",
-                    "DOLBY": "杜比",
-                    "PTVICOMO": "PTVicomo",
-                    "OPENCD": "OpenCD",
-                    "HDSKY": "HDSky",
-                    "MTEAM": "MTeam",
-                    "FRDS": "FRDS",
-                    "HDKYIN": "HDKyin",
-                }
-
-                # 如果有映射就用映射，否则直接用原名
-                return name_mapping.get(name, name)
-    except Exception:
-        pass
-
-    # 3. 如果都找不到，返回群组ID
-    return f"群组 {group_id}"
+# AWBotHub 残留函数已删除：get_group_name() 无人调用

@@ -183,6 +183,13 @@ def inspect_backup_archive(archive_path: Path) -> BackupInspection:
                     continue
                 if info.file_size < 0 or info.compress_size < 0:
                     raise BackupError(f"备份包条目大小非法: {info.filename}")
+                # 防止 Zip bomb：检查压缩比，超过 100:1 视为恶意
+                if info.file_size > 0 and info.compress_size > 0:
+                    ratio = info.file_size / info.compress_size
+                    if ratio > 100:
+                        raise BackupError(
+                            f"备份包条目压缩比过高（{ratio:.1f}:1），疑似 Zip bomb: {info.filename}"
+                        )
                 expanded_bytes += info.file_size
                 if expanded_bytes > MAX_EXPANDED_BYTES:
                     raise BackupError("备份包解压后超过 4 GiB 限制")

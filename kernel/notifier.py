@@ -144,7 +144,8 @@ def _plugin_channel_ids(plugin_id: str) -> list[str]:
     """返回插件选择的渠道列表；没有单独选择时使用默认渠道或旧默认 Bot。"""
     raw = _plugin_bot_id(plugin_id)
     ids = list(dict.fromkeys(item.strip() for item in raw.split(",") if item.strip()))
-    return ids or [""]
+    # 返回空列表表示"无配置，使用默认"；空字符串 "" 用于旧 Bot 回退逻辑
+    return ids if ids else [""]
 
 
 async def _send_to_channel(accounts: Any, channel_id: str, body: str,

@@ -286,7 +286,8 @@ class PluginRegistry:
                 if isinstance(target, ast.Name) and target.id == "__plugin__":
                     try:
                         return ast.literal_eval(node.value)
-                    except Exception:  # noqa: BLE001 - 畸形字面量(含 TypeError/RecursionError 等)不应崩 scan
+                    except (ValueError, SyntaxError, TypeError, RecursionError):
+                        # 只捕获 literal_eval 预期的异常，不吞掉 MemoryError 等严重问题
                         return None
         return None
 

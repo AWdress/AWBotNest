@@ -16,7 +16,6 @@ async def custom_auto_reply_action(task_id: str):
         task_id: 任务ID，用于区分不同的定时回复任务
     """
     from app import get_user_apps, get_bot_app
-    from config.config import PT_GROUP_ID
 
     user_apps = get_user_apps()
     bot_app = get_bot_app()
@@ -100,9 +99,11 @@ async def custom_auto_reply_action(task_id: str):
                 logger.info(f"任务 {task_id}: [{acct}] 定时回复成功，消息ID: {sent_message.id}")
             except Exception as send_error:  # noqa: BLE001
                 logger.error(f"任务 {task_id}: [{acct}] 定时回复失败: {send_error}")
+                # 发送失败通知（使用平台通知系统）
                 try:
-                    await bot_app.send_message(
-                        PT_GROUP_ID.get("BOT_MESSAGE_CHAT"),
+                    from kernel.notifier import notify
+                    await notify(
+                        None,  # accounts 由 notify 内部获取
                         f"**定时回复失败**\n\n账号：{acct}\n任务：{task_name}\n目标：{target_chat_id}\n错误：{send_error}",
                     )
                 except Exception:
@@ -140,7 +141,7 @@ async def custom_auto_reply_action(task_id: str):
 
             try:
                 await bot_app.send_message(
-                    PT_GROUP_ID.get("BOT_MESSAGE_CHAT"),
+                    target_chat_id,  # 发送到目标聊天（而非硬编码的通知频道）
                     notification,
                     disable_web_page_preview=True
                 )
@@ -151,12 +152,12 @@ async def custom_auto_reply_action(task_id: str):
         trac = "\n".join(traceback.format_exception(e))
         logger.error(f"任务 {task_id}: 定时回复失败! \n{trac}")
 
-        # 发送失败通知
+        # 发送失败通知（使用平台通知系统）
         try:
-            from config.config import PT_GROUP_ID
+            from kernel.notifier import notify
             task_name = state_manager.get_item(f"CUSTOM_AUTO_REPLY_{task_id.upper()}", "task_name", task_id)
             error_msg = f"**定时回复失败**\n\n任务：{task_name}\n错误信息：\n{str(e)}"
-            await bot_app.send_message(PT_GROUP_ID.get("BOT_MESSAGE_CHAT"), error_msg)
+            await notify(None, error_msg)
         except Exception:
             pass
 

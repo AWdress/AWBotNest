@@ -107,9 +107,10 @@ def _ensure_cloakbrowser_sync() -> None:
     #    PYTHONPATH 必须带上 plugin_deps，否则子进程找不到刚 --target 装的 cloakbrowser。
     try:
         env = _subprocess_env()
+        logger.info("正在下载 CloakBrowser 内核，可能需要几分钟…")
         proc = subprocess.run(
             [sys.executable, "-m", "cloakbrowser", "install"],
-            capture_output=True, text=True, timeout=1800, env=env,
+            capture_output=True, text=True, timeout=600, env=env,  # 降至 10 分钟
         )
         if proc.returncode == 0:
             _cloak_kernel_ready = True
@@ -117,6 +118,8 @@ def _ensure_cloakbrowser_sync() -> None:
         else:
             tail = ((proc.stderr or proc.stdout) or "")[-300:]
             logger.warning("CloakBrowser 内核下载失败，浏览器将回退 Playwright：%s", tail)
+    except subprocess.TimeoutExpired:
+        logger.warning("CloakBrowser 内核下载超时（10 分钟），浏览器将回退 Playwright")
     except Exception as e:  # noqa: BLE001
         logger.warning("CloakBrowser 内核下载异常，浏览器将回退 Playwright：%r", e)
 

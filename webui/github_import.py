@@ -267,7 +267,12 @@ async def _list_dir_files(client, owner, repo, branch, dir_path) -> list[dict]:
         r.raise_for_status()
         payload = r.json()
         if payload.get("truncated"):
-            raise RuntimeError("GitHub 返回的仓库文件列表不完整，请稍后重试")
+            # GitHub Trees API 在仓库文件数超过 ~100K 时会截断。
+            # 大型插件包建议打包后手动上传，或通过 manifest.json 指定子目录。
+            raise RuntimeError(
+                "仓库文件过多，GitHub API 返回不完整。"
+                "建议直接上传插件压缩包，或在 manifest.json 中指定插件所在子目录。"
+            )
         tree = payload.get("tree") or []
         _TREE_CACHE[cache_key] = (now, tree)
 

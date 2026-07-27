@@ -1340,21 +1340,26 @@ async def restart_platform(user=Depends(_auth_pwc)):
     import os as _os
     import sys as _sys
 
-    current_task = getattr(app.state, "restart_task", None)
-    if current_task is not None and not current_task.done():
-        return {"status": "success", "message": "平台已经在重启"}
+    # 用锁保护重启任务创建，避免多人同时点击时创建多个任务
+    if not hasattr(app.state, "restart_lock"):
+        app.state.restart_lock = _aio.Lock()
 
-    async def _delayed_exit():
-        await _aio.sleep(1.0)  # 让本次 HTTP 响应完整返回给前端。
-        logger.info("收到管理员重启请求，正在重新启动平台…")
-        try:
-            _os.execv(_sys.executable, [_sys.executable, *_sys.argv])
-        except Exception:  # noqa: BLE001
-            logger.exception("重新执行平台进程失败，改为退出并交给容器或守护进程拉起")
-            _os._exit(1)
+    async with app.state.restart_lock:
+        current_task = getattr(app.state, "restart_task", None)
+        if current_task is not None and not current_task.done():
+            return {"status": "success", "message": "平台已经在重启"}
 
-    app.state.restart_task = _aio.create_task(_delayed_exit())
-    return {"status": "success", "message": "平台正在重启，请稍候刷新页面"}
+        async def _delayed_exit():
+            await _aio.sleep(1.0)  # 让本次 HTTP 响应完整返回给前端。
+            logger.info("收到管理员重启请求，正在重新启动平台…")
+            try:
+                _os.execv(_sys.executable, [_sys.executable, *_sys.argv])
+            except Exception:  # noqa: BLE001
+                logger.exception("重新执行平台进程失败，改为退出并交给容器或守护进程拉起")
+                _os._exit(1)
+
+        app.state.restart_task = _aio.create_task(_delayed_exit())
+        return {"status": "success", "message": "平台正在重启，请稍候刷新页面"}
 
 
 # ──────────────────────────────────────────────

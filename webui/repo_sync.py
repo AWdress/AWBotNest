@@ -81,8 +81,10 @@ def _read_local_version(plugin_id: str) -> str:
         if folder_init.exists():
             content = folder_init.read_text(encoding="utf-8")
             return _extract_version_from_content(content)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001
+        # 记录读取失败日志，便于排查问题
+        from core import logger
+        logger.debug("读取插件 [%s] 本地版本失败: %r", plugin_id, e)
     return ""
 
 

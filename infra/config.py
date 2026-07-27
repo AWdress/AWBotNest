@@ -142,10 +142,6 @@ class AppSettings(BaseSettings):
 
         # 只保存允许通过 WebUI 修改的字段
         state_data = {
-            "prize_list": self.prize_list,
-            "lottery_target_groups": self.lottery_target_groups,
-            "prize_match_rules": self.prize_match_rules,
-            "trap_lottery_detection": self.trap_lottery_detection,
             "ai": self.ai.model_dump(exclude={"api_key"}),
         }
 
@@ -156,28 +152,12 @@ class AppSettings(BaseSettings):
         except Exception as e:
             logger.error(f"保存 state.toml 失败: {e}")
 
-    # 群组配置
-    pt_group_id: dict[str, int] = Field(default_factory=dict)
-    notify_chat_id: int = 0          # BOT_MESSAGE_CHAT
-
-    # 抽奖配置
-    lottery_target_groups: list[int] = Field(default_factory=list)
-    prize_list: dict[str, list[str]] = Field(default_factory=dict)
-
-    # 奖品匹配规则
-    prize_match_rules: dict[str, Any] = Field(default_factory=lambda: {"case_sensitive": False})
-
-    # 陷阱检测配置
-    trap_lottery_detection: dict[str, Any] = Field(default_factory=dict)
+    # AI 配置
+    ai: AiSettings = Field(default_factory=AiSettings)
 
     @model_validator(mode="after")
-    def _resolve_notify_chat(self) -> "AppSettings":
-        """从 pt_group_id 中解析通知频道 ID"""
-        if not self.notify_chat_id and self.pt_group_id:
-            self.notify_chat_id = self.pt_group_id.get(
-                "BOT_MESSAGE_CHAT",
-                self.telegram.my_tgid,
-            )
+    def _validate_settings(self) -> "AppSettings":
+        """验证配置项"""
         return self
 
 
@@ -212,15 +192,11 @@ def _load_state_toml(settings: AppSettings) -> None:
             state_data = toml.load(f)
 
         # 覆盖可变字段
-        for key in ["prize_list", "lottery_target_groups", "prize_match_rules", "trap_lottery_detection", "ai"]:
-            if key in state_data:
-                if key == "ai" and isinstance(state_data[key], dict):
-                    # AI 配置是嵌套模型，需合并
-                    current_ai = settings.ai.model_dump()
-                    current_ai.update(state_data[key])
-                    settings.ai = AiSettings(**current_ai)
-                else:
-                    setattr(settings, key, state_data[key])
+        if "ai" in state_data and isinstance(state_data["ai"], dict):
+            # AI 配置是嵌套模型，需合并
+            current_ai = settings.ai.model_dump()
+            current_ai.update(state_data["ai"])
+            settings.ai = AiSettings(**current_ai)
         logger.info(f"已从 {state_path} 加载持久化配置")
     except Exception as e:
         logger.error(f"加载 state.toml 失败: {e}")
@@ -297,13 +273,6 @@ def _load_legacy_config(settings: AppSettings) -> None:
             ],
         )
 
-        # 群组
-        pt_group_id: dict = getattr(cfg, "PT_GROUP_ID", {})
-        settings.pt_group_id = {k: int(v) for k, v in pt_group_id.items()}
-        settings.notify_chat_id = pt_group_id.get(
-            "BOT_MESSAGE_CHAT", settings.telegram.my_tgid
-        )
-
         # 数据库
         db_info: dict = getattr(cfg, "DB_INFO", {})
         if db_info:
@@ -327,23 +296,6 @@ def _load_legacy_config(settings: AppSettings) -> None:
                 port=int(px.get("port", 7890)),
                 proxy_url=proxy_set.get("PROXY_URL", ""),
             )
-
-        # 奖品列表 - 处理变量 Key 兼容性
-        prize_list: dict = getattr(cfg, "PRIZE_LIST", {})
-        processed_prize_list = {}
-        for k, v in prize_list.items():
-            # 如果 key 在 PT_GROUP_ID 中，则使用对应的值作为 key
-            actual_key = str(pt_group_id.get(k, k))
-            processed_prize_list[actual_key] = v
-        settings.prize_list = processed_prize_list
-
-        # 抽奖群组
-        lottery_groups: list = getattr(cfg, "LOTTERY_TARGET_GROUP", [])
-        settings.lottery_target_groups = [int(g) for g in lottery_groups]
-
-        # 新增：匹配规则与陷阱检测
-        settings.prize_match_rules = getattr(cfg, "PRIZE_MATCH_RULES", {"case_sensitive": False})
-        settings.trap_lottery_detection = getattr(cfg, "TRAP_LOTTERY_DETECTION", {})
 
         # AI 配置
         ai_info: dict = getattr(cfg, "AI_INFO", {})

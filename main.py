@@ -90,8 +90,9 @@ from kernel import state as kernel_state
 from schedulers import scheduler, start_scheduler
 
 # 全局内核实例（供 Web UI 引用）
-accounts: AccountManager = None
-runtime: PluginRuntime = None
+# 启动时赋值，启动前为 None
+accounts: AccountManager | None = None
+runtime: PluginRuntime | None = None
 
 
 async def start_platform() -> None:

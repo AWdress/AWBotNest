@@ -269,7 +269,12 @@ class AccountManager:
             for bot_id, spec in new_specs.items():
                 existing = self.bot_apps.get(bot_id)
                 old_spec = old_specs.get(bot_id)
-                token_changed = old_spec is None or old_spec["token"] != spec["token"]
+                # Token 变化判定：新增、token 改变、或新 token 为空（空 token 的 bot 应移除）
+                token_changed = (
+                    old_spec is None
+                    or old_spec["token"] != spec["token"]
+                    or not spec["token"]
+                )
                 self._bot_names[bot_id] = spec["name"]
                 if existing is not None and not token_changed:
                     continue
@@ -381,20 +386,6 @@ class AccountManager:
                 self.user_apps.append(self._build_user_client(name))
         if not accounts:
             logger.info("配置中无用户账号，等待前端登录")
-
-        # 设置有效群组（PT_GROUP_ID 属业务数据，已移出平台 config；
-        # 若某插件在运行时注入了它则沿用，否则为空——平台不依赖它，空则跳过不打日志）
-        try:
-            import config.config as _cfg
-            pt_group = getattr(_cfg, "PT_GROUP_ID", {}) or {}
-            valid_group_ids = list(pt_group.values())
-            if valid_group_ids:
-                for app in self.user_apps:
-                    app.set_valid_group_ids(valid_group_ids)
-                for bot in self.bot_apps.values():
-                    bot.set_valid_group_ids(valid_group_ids)
-        except Exception as e:  # noqa: BLE001
-            logger.warning("设置有效群组失败: %r", e)
 
         # 暂停列表
         paused: set[str] = set()
@@ -529,7 +520,9 @@ class AccountManager:
                 await app.start()
             except Exception as e:  # noqa: BLE001
                 # session 失效（AUTH_KEY_UNREGISTERED 等）→ 清理并提示重新登录
-                self.user_apps = [a for a in self.user_apps if a.name != session_name]
+                # 在锁内安全移除：先找到要移除的 app，再统一更新列表
+                if app in self.user_apps:
+                    self.user_apps.remove(app)
                 msg = str(e)
                 if "AUTH_KEY_UNREGISTERED" in msg or "Unauthorized" in type(e).__name__:
                     raise RuntimeError(f"账号 [{session_name}] 的登录已失效，请删除后重新登录")

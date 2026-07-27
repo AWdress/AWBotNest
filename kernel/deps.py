@@ -153,8 +153,11 @@ def _pip_install(specs: list[str]) -> tuple[bool, str]:
             cmd += ["--proxy", proxy]
     cmd += specs
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    except Exception as e:  # noqa: BLE001 - 超时/找不到 pip 等
+        # 降低超时到 180 秒（3 分钟），网络不佳时避免长时间阻塞插件启用
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return False, "pip 安装超时（3 分钟），请检查网络或稍后重试"
+    except Exception as e:  # noqa: BLE001 - 找不到 pip 等
         return False, f"pip 调用失败: {e!r}"
     out = (proc.stdout or "") + (proc.stderr or "")
     return proc.returncode == 0, out
