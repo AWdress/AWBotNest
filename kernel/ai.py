@@ -528,19 +528,21 @@ class PluginAI:
         allowed_capabilities = set(
             permission["capabilities"] if permission else AI_CAPABILITIES
         )
+        def effective_default(name: str) -> str:
+            assigned = _plugin_model(settings, self.plugin_id, name)
+            try:
+                return _model_candidates(settings, name, None, assigned)[0][2]
+            except AIServiceError:
+                return ""
+
         if capability is None:
             defaults = {
-                item["default_model"]
-                for item in settings["capabilities"].values()
-                if item.get("default_model")
+                model_id
+                for name in allowed_capabilities
+                if (model_id := effective_default(name))
             }
-            assigned = permission.get("models", {}) if permission else {}
-            defaults.update(item for item in assigned.values() if item)
         else:
-            default_id = (
-                _plugin_model(settings, self.plugin_id, capability)
-                or settings["capabilities"][capability].get("default_model")
-            )
+            default_id = effective_default(capability)
             defaults = {default_id} if default_id else set()
         usable_providers = {
             item["id"]
