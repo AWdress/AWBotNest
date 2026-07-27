@@ -79,7 +79,7 @@ logging.getLogger("pyrogram.dispatcher").setLevel(logging.CRITICAL)
 # 创建日志目录
 log_dir = Path("logs")
 log_dir.mkdir(exist_ok=True)
-log_file = log_dir / "Mytgbot.log"
+log_file = log_dir / "app.log"
 
 # 控制台处理器
 ch = logging.StreamHandler(sys.stdout)

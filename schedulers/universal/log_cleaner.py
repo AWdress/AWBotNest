@@ -66,7 +66,7 @@ async def log_cleaner_action():
 
         # 日志文件列表
         log_files = [
-            'logs/Mytgbot.log',
+            'logs/app.log',
         ]
 
         cleaned_count = 0

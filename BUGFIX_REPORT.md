@@ -109,14 +109,17 @@
   - 通知改用平台的 `kernel.notifier.notify()` API
   - 成功通知发送到目标聊天（而非硬编码的 `BOT_MESSAGE_CHAT`）
 
-#### 5. **删除重复的 `schedulers/universal/custom_auto_reply.py`**
-- **原因**：与 `plugins/custom_auto_reply.py` 功能重复
+#### 5. **删除重复的 scheduler 版本（3 个）**
+- **已删除**：
+  - `schedulers/universal/custom_auto_reply.py` → 插件版本 v1.0.11
+  - `schedulers/universal/auto_avatar.py` → 插件版本 v1.0.4
+  - `schedulers/universal/auto_changename.py` → 插件版本 v1.0.4
 - **对比**：
-  - **Scheduler 版本**（已删除）：依赖 `PT_GROUP_ID`、无可视化配置、使用旧 API
-  - **Plugin 版本**（保留）：v1.0.11、WebUI 可视化配置、使用 `ctx` API、功能更完善
-- **保留的 schedulers**：
-  - `auto_avatar` / `auto_changename` - 暂无插件版本
-  - `log_cleaner` - 平台级功能（清理平台日志 + 插件日志）
+  - **Scheduler 版本**：依赖 `app.py` 兼容垫片、配置在 `state.toml`、无可视化界面
+  - **Plugin 版本**：使用 `ctx` API、WebUI 可视化配置、功能更完善
+- **保留的 scheduler**：
+  - `log_cleaner` - 平台级功能（清理平台日志 + 插件日志），无插件版本
+- **现状**：`schedulers/universal/` 仅剩 `log_cleaner.py`，`schedulers/__init__.py` 仅负责启动日志清理
 
 ---
 
