@@ -2,7 +2,7 @@
 
 ## 概述
 
-本次修复共解决 **20 个潜在 bug**，清理 **AWBotHub 遗留代码**，所有改动通过 **51 个测试用例**验证。
+本次修复共解决 **20 个潜在 bug**，清理 **AWBotHub 遗留代码**，删除 **3 个重复的 scheduler**，修复 **日志文件命名问题**，所有改动通过 **51 个测试用例**验证。
 
 ---
 
@@ -121,6 +121,13 @@
   - `log_cleaner` - 平台级功能（清理平台日志 + 插件日志），无插件版本
 - **现状**：`schedulers/universal/` 仅剩 `log_cleaner.py`，`schedulers/__init__.py` 仅负责启动日志清理
 
+#### 6. **修复 AWBotHub 遗留的日志文件名**
+- **问题**：`logs/Mytgbot.log` 是 AWBotHub 的命名习惯，不符合 AWBotNest 规范
+- **修复**：
+  - `libs/log.py`: `Mytgbot.log` → `app.log`
+  - `schedulers/universal/log_cleaner.py`: 更新清理目标为 `app.log`
+- **影响**：新日志写入 `logs/app.log`，旧的 `logs/Mytgbot.log` 可手动删除
+
 ---
 
 ## 三、验证结果
@@ -168,18 +175,21 @@ OK
  M kernel/deps.py                           # 添加下载校验 + 精准异常
  M kernel/notifier.py                       # 添加重试 + 精准异常
  M kernel/registry.py                       # 精准异常处理
- M libs/log.py                              # 删除 get_group_name()
+ M libs/log.py                              # 删除 get_group_name() + 修复日志文件名
  M libs/proxy.py                            # 修复空值判断
  M main.py                                  # 修复类型标注
- M schedulers/__init__.py                   # 移除 custom_auto_reply 注册
+ M schedulers/__init__.py                   # 移除业务任务注册，仅保留 log_cleaner
+ D schedulers/universal/auto_avatar.py      # 删除重复的 scheduler 版本
+ D schedulers/universal/auto_changename.py  # 删除重复的 scheduler 版本
  D schedulers/universal/custom_auto_reply.py # 删除重复的 scheduler 版本
+ M schedulers/universal/log_cleaner.py      # 更新日志清理目标文件名
  M webui/api.py                             # 添加插件 ID 校验
  M webui/backup.py                          # 添加 Zip bomb 检测
  M webui/github_import.py                   # 优化错误提示
  M webui/repo_sync.py                       # 添加版本读取日志
 ```
 
-**共 16 个文件修改，1 个文件删除**
+**共 15 个文件修改，3 个文件删除**
 
 ---
 
@@ -196,24 +206,24 @@ OK
 - 异常处理精准化（不吞系统级错误）
 
 ### ✅ 代码质量提升
-- 删除 400+ 行死代码（AWBotHub 残留 + 重复 scheduler）
+- 删除 880+ 行死代码（AWBotHub 残留 + 重复 scheduler）
 - 插件与平台完全解耦（0 次引用旧 API）
 - 所有改动通过 51 个测试用例
+- 日志文件命名符合平台规范
 
 ### ⚠️ 兼容性影响
 - **无破坏性变更**：旧插件依赖 `ctx` API 继续工作
-- **scheduler 变更**：`custom_auto_reply` scheduler 版本已删除，请使用插件版本（在 WebUI 插件管理中启用）
+- **scheduler 变更**：3 个业务 scheduler 已删除，请使用插件版本（在 WebUI 插件管理中启用）
+- **日志文件变更**：新日志写入 `logs/app.log`，旧的 `logs/Mytgbot.log` 不再使用
 - **建议**：如正在使用旧的 scheduler 版本，需迁移配置到插件版本
 
 ---
 
 ## 六、后续建议
 
-1. **将剩余 2 个 scheduler 迁移到插件系统**（可选）
-   - `auto_avatar` - 自动换头像
-   - `auto_changename` - 自动报时昵称
-   - 迁移后可删除 `app.py` 兼容垫片
-   - `log_cleaner` 作为平台级功能应保留在 scheduler
+1. **清理旧日志文件**（可选）
+   - 删除 `logs/Mytgbot.log`（已不再使用）
+   - 平台现在使用 `logs/app.log`
 
 2. **移除 `infra/config.py` 的 `state.toml` 持久化**（可选）
    - 当前只保存 AI 配置，可考虑合并到主配置文件
