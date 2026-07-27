@@ -75,7 +75,6 @@ class Manager:
                 session_string=session_string,
                 workdir=str(self.workdir.resolve()),
                 proxy=self.proxy,
-                plugins=dict(root="plugins/user"),
             )
 
             if target is not None:
@@ -99,7 +98,6 @@ class Manager:
                 bot_token=config.telegram.bot_token.get_secret_value(),
                 workdir=str(self.workdir.resolve()),
                 proxy=self.proxy,
-                plugins=dict(root="plugins/bot"),
             )
         return self.bot_app
 
