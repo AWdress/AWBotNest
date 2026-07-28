@@ -1158,15 +1158,12 @@ async def get_ai_status(user=Depends(_auth)):
     }
 
 
-# 安全考虑：禁用通过 API 修改系统设置
-# @app.put("/api/settings")
-async def put_settings_api_disabled(body: Dict[str, Any], user=Depends(_auth_pwc)):
+@app.put("/api/settings")
+async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
     """
-    [已禁用] 保存平台设置到 config.json。打码值（未改动）保留原值。
+    保存平台设置到 config.json。打码值（未改动）保留原值。
     敏感凭据变更需重启平台生效，返回 restart_required。
-    出于安全考虑，此端点已被禁用。请通过 Web UI 或直接编辑配置文件修改设置。
     """
-    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
     import config.config as cfg
     incoming = body.get("settings") or body
     if not isinstance(incoming, dict):
@@ -1177,6 +1174,9 @@ async def put_settings_api_disabled(body: Dict[str, Any], user=Depends(_auth_pwc
 
     for k, v in incoming.items():
         if k not in cfg.ALLOWED_KEYS:
+            continue
+        # AI 服务包含独立密钥和模型校验，只允许通过 /api/ai/settings 修改。
+        if k == "AI_SERVICES":
             continue
         # 顶层敏感字段：打码值则跳过（保留原值）
         if k in _SECRET_FIELDS and (v == _MASK or (isinstance(v, str) and _MASK in v)):
