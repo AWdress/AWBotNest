@@ -294,6 +294,8 @@ def _load_legacy_config(settings: AppSettings) -> None:
                 scheme=px.get("scheme", "http"),
                 hostname=px.get("hostname", ""),
                 port=int(px.get("port", 7890)),
+                username=str(px.get("username", "") or ""),
+                password=SecretStr(str(px.get("password", "") or "")),
                 proxy_url=proxy_set.get("PROXY_URL", ""),
             )
 

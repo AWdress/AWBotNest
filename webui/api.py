@@ -1462,17 +1462,16 @@ async def clean_logs_now(user=Depends(_auth)):
         raise HTTPException(status_code=500, detail=f"清理失败: {e}") from e
 
 
-# 安全考虑：禁用代理测试 API
-# @app.post("/api/settings/test_proxy")
-async def test_proxy_disabled(body: Dict[str, Any], user=Depends(_auth)):
-    """[已禁用] 用提交的 proxy_set 试连一次外网。返回 {ok, message}，不抛异常（失败也是 200）。
-    出于安全考虑，此端点已被禁用。请通过 Web UI 或配置文件测试代理。"""
-    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
+@app.post("/api/settings/test_proxy")
+async def test_proxy(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    """使用后台表单中的代理连接 Telegram，仅供已改密的管理员测试。"""
+    from urllib.parse import quote, urlsplit
+
     import config.config as cfg
+
     ps = (body or {}).get("proxy_set") or body or {}
     cur = cfg.load()
     px = dict(ps.get("proxy") or {})
-    # 打码密码回落已保存值
     if px.get("password") == _MASK:
         px["password"] = cur.get("proxy_set", {}).get("proxy", {}).get("password", "")
 
@@ -1481,31 +1480,61 @@ async def test_proxy_disabled(body: Dict[str, Any], user=Depends(_auth)):
         host, port = px.get("hostname"), px.get("port")
         if not (host and port):
             return {"ok": False, "message": "未填写代理主机/端口"}
-        from urllib.parse import quote
-        scheme = px.get("scheme", "http")
+        scheme = str(px.get("scheme", "http")).lower()
+        if scheme not in {"http", "https", "socks4", "socks5"}:
+            return {"ok": False, "message": "代理协议不支持"}
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            return {"ok": False, "message": "代理端口格式不正确"}
+        if not 1 <= port <= 65535:
+            return {"ok": False, "message": "代理端口必须在 1 到 65535 之间"}
+        host = str(host).strip()
+        if not host or any(char.isspace() for char in host):
+            return {"ok": False, "message": "代理主机格式不正确"}
         uname, pwd = px.get("username", ""), px.get("password", "")
-        # 用户名/密码可能含特殊字符，转义后再拼进 URL
         auth = f"{quote(str(uname), safe='')}:{quote(str(pwd), safe='')}@" if uname else ""
         url = f"{scheme}://{auth}{host}:{port}"
+    else:
+        try:
+            parsed = urlsplit(url)
+        except ValueError:
+            return {"ok": False, "message": "代理 URL 格式不正确"}
+        if parsed.scheme.lower() not in {"http", "https", "socks4", "socks5"}:
+            return {"ok": False, "message": "代理 URL 协议不支持"}
+        try:
+            parsed_port = parsed.port
+        except ValueError:
+            return {"ok": False, "message": "代理 URL 端口格式不正确"}
+        if not parsed.hostname or parsed_port is None:
+            return {"ok": False, "message": "代理 URL 缺少主机或端口"}
 
     import httpx
     try:
         async with httpx.AsyncClient(proxy=url, timeout=8, trust_env=False) as client:
             r = await client.get("https://api.telegram.org")
         return {"ok": True, "message": f"代理可用（可达 api.telegram.org，HTTP {r.status_code}）"}
+    except httpx.TimeoutException:
+        message = "连接代理超时，请检查地址、端口和局域网访问权限"
+    except httpx.ProxyError:
+        message = "代理服务器拒绝了请求，请检查协议、账号和密码"
+    except httpx.ConnectError:
+        message = "无法连接代理，请检查代理是否启动并允许局域网访问"
+    except ImportError:
+        message = "当前环境缺少 SOCKS 支持，请重新构建或更新平台"
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "message": f"代理连接失败：{e.__class__.__name__}: {e}"}
+        message = f"代理测试失败（{e.__class__.__name__}）"
+    logger.info("管理员测试代理失败: %s", message)
+    return {"ok": False, "message": message}
 
 
-# 安全考虑：禁用数据库测试 API
-# @app.post("/api/settings/test_db")
-async def test_db_disabled(body: Dict[str, Any], user=Depends(_auth)):
-    """[已禁用] 用提交的 DB_INFO 试连一次数据库。返回 {ok, message}，不抛异常（失败也是 200）。
-    出于安全考虑，此端点已被禁用。请通过 Web UI 或配置文件测试数据库连接。"""
-    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
+@app.post("/api/settings/test_db")
+async def test_db(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    """使用后台表单中的配置测试数据库连接，仅供已改密的管理员使用。"""
     import asyncio as _aio
-    from urllib.parse import quote_plus
+
     import config.config as cfg
+
     db = (body or {}).get("DB_INFO") or body or {}
     cur = cfg.load()
     db = dict(db)
@@ -1514,32 +1543,60 @@ async def test_db_disabled(body: Dict[str, Any], user=Depends(_auth)):
 
     dbset = db.get("dbset", "SQLite")
     if dbset == "SQLite":
-        return {"ok": True, "message": "SQLite 为本地文件，无需测试连接"}
+        return {"ok": True, "message": "SQLite 为本地数据库，无需远程连接"}
 
-    pwd = quote_plus(str(db.get("password", "")))
-    user_, addr, port, name = db.get("user"), db.get("address"), db.get("port"), db.get("db_name")
-    if dbset == "mySQL":
-        dsn = f"mysql+aiomysql://{user_}:{pwd}@{addr}:{port}/{name}"
-    elif dbset == "PostgreSQL":
-        dsn = f"postgresql+asyncpg://{user_}:{pwd}@{addr}:{port}/{name}"
-    else:
-        return {"ok": False, "message": f"未知数据库类型：{dbset}"}
+    if dbset not in {"mySQL", "PostgreSQL"}:
+        return {"ok": False, "message": f"不支持的数据库类型：{dbset}"}
 
+    user_ = str(db.get("user") or "").strip()
+    addr = str(db.get("address") or "").strip()
+    name = str(db.get("db_name") or "").strip()
+    if not user_ or not addr or not name:
+        return {"ok": False, "message": "请填写数据库地址、用户名和库名"}
+    if any(char.isspace() for char in addr):
+        return {"ok": False, "message": "数据库地址格式不正确"}
+    try:
+        port = int(db.get("port"))
+    except (TypeError, ValueError):
+        return {"ok": False, "message": "数据库端口格式不正确"}
+    if not 1 <= port <= 65535:
+        return {"ok": False, "message": "数据库端口必须在 1 到 65535 之间"}
+
+    from sqlalchemy import URL, text as _text
     from sqlalchemy.ext.asyncio import create_async_engine
-    from sqlalchemy import text as _text
-    engine = create_async_engine(dsn)
+
+    if dbset == "mySQL":
+        driver = "mysql+aiomysql"
+    else:
+        driver = "postgresql+asyncpg"
+    dsn = URL.create(
+        drivername=driver,
+        username=user_,
+        password=str(db.get("password") or ""),
+        host=addr,
+        port=port,
+        database=name,
+    )
+
+    try:
+        engine = create_async_engine(dsn, pool_pre_ping=True)
+    except (ImportError, ModuleNotFoundError):
+        return {"ok": False, "message": "当前环境缺少对应的数据库驱动，请重新构建或更新平台"}
     try:
         async def _probe():
             async with engine.connect() as conn:
                 await conn.execute(_text("SELECT 1"))
+
         await _aio.wait_for(_probe(), timeout=8)
         return {"ok": True, "message": "数据库连接成功"}
     except _aio.TimeoutError:
-        return {"ok": False, "message": "连接超时（检查地址/端口/网络）"}
+        message = "数据库连接超时，请检查地址、端口和网络"
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "message": f"连接失败：{e.__class__.__name__}: {e}"}
+        message = f"数据库连接失败（{e.__class__.__name__}），请检查账号、密码和库名"
     finally:
         await engine.dispose()
+    logger.info("管理员测试数据库失败: %s", message)
+    return {"ok": False, "message": message}
 
 
 # ──────────────────────────────────────────────
@@ -1869,46 +1926,6 @@ async def api_get_plugin_source(plugin_id: str, user=Depends(_api_key)):
     except Exception as e:
         logger.exception("读取插件源代码失败: %s", plugin_id)
         raise HTTPException(status_code=500, detail=f"读取失败：{e}") from e
-
-
-# 安全考虑：禁用通过 API 修改插件源码
-# @app.put("/api/v1/plugins/{plugin_id}/source")
-async def api_update_plugin_source_disabled(plugin_id: str, body: Dict[str, Any], user=Depends(_api_key)):
-    """[已禁用] 更新插件源代码并自动重载
-    出于安全考虑，此端点已被禁用。修改插件源码相当于远程代码执行。
-    请通过 Web UI 或直接编辑插件文件修改代码。"""
-    raise HTTPException(status_code=403, detail="此 API 端点已因安全原因被禁用")
-    meta = registry.get_meta(plugin_id)
-    if meta is None:
-        raise HTTPException(status_code=404, detail="插件不存在")
-
-    source = body.get("source", "")
-    if not source:
-        raise HTTPException(status_code=400, detail="source 字段不能为空")
-
-    source_path = PLUGINS_DIR / f"{plugin_id}.py"
-    if not source_path.exists():
-        source_path = PLUGINS_DIR / plugin_id / "__init__.py"
-
-    if not source_path.exists():
-        raise HTTPException(status_code=404, detail="插件源代码文件不存在")
-
-    try:
-        # 写入新代码
-        source_path.write_text(source, encoding="utf-8")
-
-        # 如果插件已加载，重载它
-        runtime = _get_runtime()
-        if runtime.is_loaded(plugin_id):
-            await runtime.reload(plugin_id)
-            logger.info("插件代码已更新并重载: %s", plugin_id)
-            return {"ok": True, "message": "插件代码已更新并重载", "reloaded": True}
-        else:
-            logger.info("插件代码已更新（未加载，未重载）: %s", plugin_id)
-            return {"ok": True, "message": "插件代码已更新（未加载）", "reloaded": False}
-    except Exception as e:
-        logger.exception("更新插件源代码失败: %s", plugin_id)
-        raise HTTPException(status_code=500, detail=f"更新失败：{e}") from e
 
 
 @app.post("/api/v1/plugins/{plugin_id}/enable")

@@ -387,8 +387,11 @@ async def discover_and_add_repos() -> dict[str, Any]:
         return {"ok": False, "added": added, "errors": errors}
 
     try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            from webui.github_import import _headers, _proxy
+        from webui.github_import import _headers, _proxy
+
+        async with httpx.AsyncClient(
+            timeout=30, follow_redirects=True, proxy=_proxy(),
+        ) as client:
 
             # 方式1：列出官方仓库的所有 forks
             try:

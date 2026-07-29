@@ -31,7 +31,7 @@ APScheduler==3.11.2
 # --- 网络 / HTTP ---
 aiohttp==3.13.5
 httpx[socks]==0.28.1
-requests==2.33.1
+requests[socks]==2.33.1
 
 # --- 解析 ---
 beautifulsoup4==4.14.3

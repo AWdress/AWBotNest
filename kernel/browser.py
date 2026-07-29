@@ -269,6 +269,9 @@ class BrowserHelper:
                           ua: Optional[str] = None, headless: bool = True,
                           timeout: int = 60, proxy: Optional[Any] = None) -> str:
         """打开 url 并返回渲染后的 HTML 源码。"""
+        if proxy is None:
+            from libs.proxy import proxy_url
+            proxy = proxy_url()
         return await asyncio.to_thread(
             _with_page_sync, url, lambda p: p.content(),
             cookies=cookies, user_agent=ua, headless=headless, timeout=timeout, proxy=proxy,
@@ -284,6 +287,9 @@ class BrowserHelper:
                 return page.inner_text("#result")
             text = await ctx.browser.run(url, grab)
         """
+        if proxy is None:
+            from libs.proxy import proxy_url
+            proxy = proxy_url()
         return await asyncio.to_thread(
             _with_page_sync, url, action,
             cookies=cookies, user_agent=ua, headless=headless, timeout=timeout, proxy=proxy,
