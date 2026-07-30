@@ -49,6 +49,12 @@ app = FastAPI(title="AWBotNest Platform API")
 _VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 APP_VERSION = _VERSION_FILE.read_text(encoding="utf-8").strip() if _VERSION_FILE.exists() else "unknown"
 _CHANGELOG_FILE = Path(__file__).parent.parent / "CHANGELOG.md"
+_RELEASES_URL = "https://api.github.com/repos/AWdress/AWBotNest/releases"
+_RELEASES_CACHE: dict[str, Any] = {
+    "versions": [],
+    "source": "local",
+    "expires_at": 0.0,
+}
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -2040,11 +2046,14 @@ async def recent_logs(user=Depends(_auth)):
     return {"logs": list(reversed(log_stream.recent_logs()))}
 
 
-def _version_history(limit: int = 30) -> list[dict[str, Any]]:
+def _local_changelog() -> str:
     try:
-        content = _CHANGELOG_FILE.read_text(encoding="utf-8")
+        return _CHANGELOG_FILE.read_text(encoding="utf-8")
     except OSError:
-        return []
+        return ""
+
+
+def _version_history(content: str, limit: int = 30) -> list[dict[str, Any]]:
     headings = list(re.finditer(r"^##\s+(v?\d+(?:\.\d+)+)\s*$", content, re.MULTILINE))
     versions = []
     for index, match in enumerate(headings[:limit]):
@@ -2058,6 +2067,66 @@ def _version_history(limit: int = 30) -> list[dict[str, Any]]:
     return versions
 
 
+async def _release_history() -> tuple[list[dict[str, Any]], str]:
+    now = time.monotonic()
+    if _RELEASES_CACHE["versions"] and _RELEASES_CACHE["expires_at"] > now:
+        return _RELEASES_CACHE["versions"], _RELEASES_CACHE["source"]
+
+    try:
+        import httpx
+        from libs.proxy import proxy_url
+
+        async with httpx.AsyncClient(
+            proxy=proxy_url(),
+            timeout=8,
+            follow_redirects=True,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": f"AWBotNest/{APP_VERSION}",
+            },
+        ) as client:
+            response = await client.get(_RELEASES_URL, params={"per_page": 30})
+            response.raise_for_status()
+        if len(response.content) > 2 * 1024 * 1024:
+            raise ValueError("release list is too large")
+        releases = response.json()
+        if not isinstance(releases, list):
+            raise ValueError("invalid release list")
+        versions = []
+        for release in releases:
+            if not isinstance(release, dict) or release.get("draft"):
+                continue
+            tag = str(release.get("tag_name") or "")
+            match = re.fullmatch(r"v?(\d+(?:\.\d+)+)", tag, re.IGNORECASE)
+            if not match:
+                continue
+            version = match.group(1)
+            versions.append({
+                "version": version,
+                "current": version == APP_VERSION.lstrip("vV"),
+                "notes": str(release.get("body") or "").strip()[:12000],
+                "url": str(release.get("html_url") or ""),
+                "published_at": release.get("published_at"),
+            })
+        if not versions:
+            raise ValueError("release list is empty")
+        _RELEASES_CACHE.update({
+            "versions": versions,
+            "source": "github",
+            "expires_at": now + 1800,
+        })
+        return versions, "github"
+    except Exception:  # noqa: BLE001
+        versions = _version_history(_local_changelog())
+        _RELEASES_CACHE.update({
+            "versions": versions,
+            "source": "local",
+            "expires_at": now + 300,
+        })
+        return versions, "local"
+
+
 @app.get("/api/ui/about")
 async def ui_about(user=Depends(_auth)):
     import platform as _platform
@@ -2066,6 +2135,7 @@ async def ui_about(user=Depends(_auth)):
     from kernel import state as kernel_state
 
     started = getattr(kernel_state, "started_at", None)
+    versions, version_source = await _release_history()
     return {
         "name": "AWBotNest",
         "version": APP_VERSION,
@@ -2075,9 +2145,11 @@ async def ui_about(user=Depends(_auth)):
         "repository": "https://github.com/AWdress/AWBotNest",
         "issues": "https://github.com/AWdress/AWBotNest/issues",
         "docs": "https://github.com/AWdress/AWBotNest#readme",
+        "latest_version": versions[0]["version"] if versions else APP_VERSION.lstrip("vV"),
+        "version_source": version_source,
         "versions": [
             {"version": item["version"], "current": item["current"]}
-            for item in _version_history()
+            for item in versions
         ],
     }
 
@@ -2086,7 +2158,8 @@ async def ui_about(user=Depends(_auth)):
 async def ui_about_version(version: str, user=Depends(_auth)):
     if not re.fullmatch(r"\d+(?:\.\d+)+", version):
         raise HTTPException(status_code=400, detail="版本号格式不正确")
-    item = next((entry for entry in _version_history() if entry["version"] == version), None)
+    versions, _ = await _release_history()
+    item = next((entry for entry in versions if entry["version"] == version), None)
     if item is None:
         raise HTTPException(status_code=404, detail="没有找到这个版本的更新记录")
     return item

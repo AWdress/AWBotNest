@@ -466,11 +466,17 @@ onUnmounted(() => {
             </section>
 
             <section class="about-section">
-              <h3>版本历史</h3>
+              <div class="version-heading">
+                <h3>版本历史</h3>
+                <span :class="['version-source', about.version_source]">
+                  {{ about.version_source === 'github' ? 'GitHub Releases' : '本地记录' }}
+                </span>
+              </div>
               <div class="version-list">
                 <div v-for="item in about.versions" :key="item.version" class="version-row">
                   <div>
                     <strong>v{{ item.version }}</strong>
+                    <span v-if="item.version === about.latest_version" class="latest-badge">最新版本</span>
                     <span v-if="item.current" class="current-badge">当前版本</span>
                   </div>
                   <button class="btn" @click="openVersion(item)">查看更新内容</button>
@@ -624,9 +630,14 @@ onUnmounted(() => {
 .about-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .about-links a { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); color: var(--accent); text-align: center; }
 .about-links a:hover { border-color: var(--accent); background: var(--accent-dim); }
+.version-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.version-heading h3 { margin: 0; padding: 0; border: 0; }
+.version-source { padding: 3px 8px; border-radius: 99px; background: var(--bg-elevated); color: var(--text-muted); font-size: 10px; }
+.version-source.github { background: var(--accent-dim); color: var(--accent); }
 .version-list { display: grid; gap: 8px; max-height: 330px; overflow-y: auto; }
 .version-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); }
 .version-row > div { display: flex; align-items: center; gap: 9px; }
+.latest-badge { padding: 3px 7px; border-radius: 99px; background: var(--accent-dim); color: var(--accent); font-size: 10px; }
 .current-badge { padding: 3px 7px; border-radius: 99px; background: rgba(16,176,128,.14); color: var(--success); font-size: 10px; }
 .release-note-mask { position: fixed; z-index: 340; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(2,4,8,.72); }
 .release-note { width: min(680px, 92vw); max-height: 76vh; overflow: hidden; border: 1px solid var(--border-light); border-radius: 15px; background: var(--bg-card); box-shadow: var(--shadow-float); }
