@@ -162,7 +162,10 @@ class TelegramChannel(NotificationChannel):
 
 
 # 企业微信 access_token 全局缓存（corpid+secret → {token, expires_at}）
-_wechat_token_cache: dict = {}
+# 使用 LRU 机制限制缓存大小，防止内存泄漏
+from collections import OrderedDict
+_wechat_token_cache: OrderedDict = OrderedDict()
+_WECHAT_CACHE_MAX_SIZE = 100
 
 
 class WeChatWorkChannel(NotificationChannel):
@@ -188,6 +191,8 @@ class WeChatWorkChannel(NotificationChannel):
         key = self._cache_key()
         cached = _wechat_token_cache.get(key)
         if cached and cached["expires_at"] > time.time() + 60:
+            # 移到最后（LRU）
+            _wechat_token_cache.move_to_end(key)
             return cached["token"]
 
         try:
@@ -206,6 +211,10 @@ class WeChatWorkChannel(NotificationChannel):
                         "token": token,
                         "expires_at": time.time() + expires_in,
                     }
+                    _wechat_token_cache.move_to_end(key)
+                    # LRU 淘汰：超过最大缓存大小时删除最旧的
+                    if len(_wechat_token_cache) > _WECHAT_CACHE_MAX_SIZE:
+                        _wechat_token_cache.popitem(last=False)
                     return token
                 else:
                     logger.error(f"获取企业微信access_token失败: {data}")

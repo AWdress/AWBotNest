@@ -656,7 +656,9 @@ class PluginAI:
                     if max_tokens is not None:
                         kwargs["max_tokens"] = int(max_tokens)
                     response = await client.chat.completions.create(**kwargs)
-                    text = response.choices[0].message.content if response.choices else ""
+                    if not response.choices:
+                        raise AIServiceError("模型没有返回有效响应")
+                    text = response.choices[0].message.content or ""
                     if not text:
                         raise AIServiceError("模型没有返回文字内容")
                     return str(text)
