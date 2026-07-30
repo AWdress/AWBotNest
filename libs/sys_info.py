@@ -1,4 +1,5 @@
 # 标准库
+import datetime
 import os
 import sys
 import platform
@@ -33,6 +34,6 @@ async def system_version_get():
         f"├ Python: `{python_info}`\n"
         f"└ Pyrogram: `{pyrogram_info}`\n\n"
         f"**状态**: 运行正常\n"
-        f"**启动时间**: {__import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        f"**启动时间**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
     return project_name, tgbot_sate

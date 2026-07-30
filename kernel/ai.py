@@ -14,6 +14,7 @@ import logging
 import mimetypes
 import re
 import socket
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -76,6 +77,7 @@ class AIStatus:
 _status = AIStatus()
 _semaphore: asyncio.Semaphore | None = None
 _semaphore_size = 0
+_semaphore_lock = threading.Lock()
 
 
 def _config_module():
@@ -277,10 +279,11 @@ def _client(provider: dict[str, Any], timeout: int) -> AsyncOpenAI:
 
 def _semaphore_for(size: int) -> asyncio.Semaphore:
     global _semaphore, _semaphore_size
-    if _semaphore is None or _semaphore_size != size:
-        _semaphore = asyncio.Semaphore(size)
-        _semaphore_size = size
-    return _semaphore
+    with _semaphore_lock:
+        if _semaphore is None or _semaphore_size != size:
+            _semaphore = asyncio.Semaphore(size)
+            _semaphore_size = size
+        return _semaphore
 
 
 def _permission(settings: dict[str, Any], plugin_id: str, capability: str) -> None:
@@ -531,8 +534,9 @@ class PluginAI:
         def effective_default(name: str) -> str:
             assigned = _plugin_model(settings, self.plugin_id, name)
             try:
-                return _model_candidates(settings, name, None, assigned)[0][2]
-            except AIServiceError:
+                candidates = _model_candidates(settings, name, None, assigned)
+                return candidates[0][2] if candidates else ""
+            except (AIServiceError, IndexError):
                 return ""
 
         if capability is None:
