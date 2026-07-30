@@ -28,6 +28,9 @@ const healthBusy = ref(false)
 const network = ref([])
 const networkBusy = ref({})
 const jobs = ref([])
+const about = ref(null)
+const aboutBusy = ref(false)
+const selectedVersion = ref(null)
 let logsWs = null
 let logsReconnect = null
 let noticeTimer = null
@@ -39,6 +42,7 @@ const modalTitle = computed(() => ({
   network: '网络测试',
   health: '系统健康检查',
   services: '定时服务',
+  about: '关于 AWBotNest',
 }[modal.value] || ''))
 
 const filteredLogs = computed(() => logs.value.filter(item => {
@@ -120,6 +124,7 @@ function openModal(name) {
   }
   if (name === 'network') loadNetwork()
   if (name === 'health') loadHealth()
+  if (name === 'about') loadAbout()
   if (name === 'services') {
     loadJobs()
     clearInterval(jobsTimer)
@@ -133,6 +138,7 @@ function closeModal() {
     clearInterval(jobsTimer)
     jobsTimer = null
   }
+  selectedVersion.value = null
   modal.value = ''
 }
 
@@ -192,6 +198,37 @@ async function loadHealth() {
     toast.error(`健康检查失败：${error.message}`)
   } finally {
     healthBusy.value = false
+  }
+}
+
+async function loadAbout() {
+  aboutBusy.value = true
+  selectedVersion.value = null
+  try {
+    about.value = await api.getAbout()
+  } catch (error) {
+    toast.error(`关于信息加载失败：${error.message}`)
+  } finally {
+    aboutBusy.value = false
+  }
+}
+
+function formatUptime(seconds) {
+  const total = Math.max(0, Number(seconds) || 0)
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  return [days ? `${days}天` : '', hours ? `${hours}小时` : '', `${minutes}分钟`]
+    .filter(Boolean).join(' ')
+}
+
+async function openVersion(item) {
+  selectedVersion.value = { ...item, notes: '', loading: true }
+  try {
+    const result = await api.getAboutVersion(item.version)
+    selectedVersion.value = { ...result, loading: false }
+  } catch (error) {
+    selectedVersion.value = { ...item, notes: `读取失败：${error.message}`, loading: false }
   }
 }
 
@@ -337,8 +374,8 @@ onUnmounted(() => {
         <div><small>管理员</small><strong>{{ profile.username }}</strong></div>
       </div>
       <div class="user-menu">
-        <button @click="goSettings">系统设置</button>
-        <button @click.stop="openModal('health')">系统健康检查</button>
+        <button @click="goSettings">个人信息</button>
+        <button @click.stop="openModal('about')">关于 AWBotNest</button>
         <button :disabled="restarting" @click="panel=''; emit('restart')">{{ restarting ? '重启中…' : '重启平台' }}</button>
         <button class="danger" @click="emit('logout')">退出登录</button>
       </div>
@@ -399,7 +436,60 @@ onUnmounted(() => {
             <button class="btn" :disabled="job.running" @click="runJob(job)">{{ job.running ? '运行中' : '执行' }}</button>
           </div>
         </div>
+
+        <div v-else-if="modal === 'about'" class="modal-body about-modal">
+          <div v-if="aboutBusy" class="empty">正在读取平台信息…</div>
+          <template v-else-if="about">
+            <section class="about-hero">
+              <div class="about-mark">AW</div>
+              <div>
+                <h2>{{ about.name }}</h2>
+                <p>插件化机器人平台</p>
+              </div>
+              <span class="about-current">v{{ about.version }}</span>
+            </section>
+
+            <section class="about-info-grid">
+              <div><span>平台版本</span><strong>v{{ about.version }}</strong></div>
+              <div><span>Python</span><strong>{{ about.python }}</strong></div>
+              <div><span>运行系统</span><strong>{{ about.platform }}</strong></div>
+              <div><span>已运行</span><strong>{{ formatUptime(about.uptime_seconds) }}</strong></div>
+            </section>
+
+            <section class="about-section">
+              <h3>支持</h3>
+              <div class="about-links">
+                <a :href="about.repository" target="_blank" rel="noopener noreferrer">项目仓库</a>
+                <a :href="about.issues" target="_blank" rel="noopener noreferrer">问题反馈</a>
+                <a :href="about.docs" target="_blank" rel="noopener noreferrer">使用文档</a>
+              </div>
+            </section>
+
+            <section class="about-section">
+              <h3>版本历史</h3>
+              <div class="version-list">
+                <div v-for="item in about.versions" :key="item.version" class="version-row">
+                  <div>
+                    <strong>v{{ item.version }}</strong>
+                    <span v-if="item.current" class="current-badge">当前版本</span>
+                  </div>
+                  <button class="btn" @click="openVersion(item)">查看更新内容</button>
+                </div>
+              </div>
+            </section>
+          </template>
+        </div>
       </section>
+
+      <div v-if="selectedVersion" class="release-note-mask" @click.self="selectedVersion = null">
+        <article class="release-note">
+          <header>
+            <strong>v{{ selectedVersion.version }} 更新内容</strong>
+            <button @click="selectedVersion = null">×</button>
+          </header>
+          <pre>{{ selectedVersion.loading ? '正在读取更新内容…' : (selectedVersion.notes || '这个版本暂时没有更新说明。') }}</pre>
+        </article>
+      </div>
     </div>
   </Teleport>
 </template>
@@ -476,6 +566,7 @@ onUnmounted(() => {
 }
 .control-modal {
   width: min(1040px, 94vw); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column;
+  position: relative;
   border: 1px solid var(--border-light); border-radius: 16px; background: var(--bg-card); box-shadow: var(--shadow-float);
 }
 .control-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); }
@@ -510,6 +601,38 @@ onUnmounted(() => {
 .job-row small, .job-row strong { display: block; }
 .job-row small { color: var(--text-muted); }
 .job-row code { color: var(--text-secondary); }
+.about-modal { display: flex; flex-direction: column; gap: 24px; }
+.about-hero {
+  display: flex; align-items: center; gap: 14px; padding: 18px;
+  border: 1px solid var(--border); border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent-dim), var(--bg-elevated) 58%, rgba(16,176,128,.08));
+}
+.about-mark {
+  width: 58px; height: 58px; flex: 0 0 58px; display: grid; place-items: center;
+  border-radius: 16px; background: linear-gradient(145deg, var(--accent), var(--accent-2));
+  color: #fff; font-size: 18px; font-weight: 800; box-shadow: 0 10px 24px rgba(47,128,237,.22);
+}
+.about-hero h2 { margin: 0; font-size: 22px; }
+.about-hero p { margin: 4px 0 0; color: var(--text-secondary); }
+.about-current { margin-left: auto; padding: 6px 11px; border-radius: 99px; background: var(--accent-dim); color: var(--accent); font-weight: 700; }
+.about-info-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.about-info-grid > div { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--bg-elevated); }
+.about-info-grid span, .about-info-grid strong { display: block; }
+.about-info-grid span { color: var(--text-muted); font-size: 11px; }
+.about-info-grid strong { margin-top: 6px; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
+.about-section h3 { margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 17px; }
+.about-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.about-links a { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); color: var(--accent); text-align: center; }
+.about-links a:hover { border-color: var(--accent); background: var(--accent-dim); }
+.version-list { display: grid; gap: 8px; max-height: 330px; overflow-y: auto; }
+.version-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); }
+.version-row > div { display: flex; align-items: center; gap: 9px; }
+.current-badge { padding: 3px 7px; border-radius: 99px; background: rgba(16,176,128,.14); color: var(--success); font-size: 10px; }
+.release-note-mask { position: fixed; z-index: 340; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(2,4,8,.72); }
+.release-note { width: min(680px, 92vw); max-height: 76vh; overflow: hidden; border: 1px solid var(--border-light); border-radius: 15px; background: var(--bg-card); box-shadow: var(--shadow-float); }
+.release-note header { display: flex; align-items: center; justify-content: space-between; padding: 17px 20px; border-bottom: 1px solid var(--border); }
+.release-note header button { width: 32px; height: 32px; border: 0; background: transparent; color: var(--text-secondary); font-size: 22px; cursor: pointer; }
+.release-note pre { max-height: calc(76vh - 68px); margin: 0; padding: 20px; overflow: auto; color: var(--text-secondary); font: inherit; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
 @media (max-width: 768px) {
   .control-center { gap: 3px; }
   .control-btn, .avatar-btn { width: 34px; height: 34px; }
@@ -524,5 +647,11 @@ onUnmounted(() => {
   .check-grid { grid-template-columns: 1fr; }
   .job-row { grid-template-columns: 1fr auto; }
   .job-row code { grid-column: 1; }
+  .about-info-grid { grid-template-columns: 1fr 1fr; }
+  .about-links { grid-template-columns: 1fr; }
+  .about-hero { align-items: flex-start; flex-wrap: wrap; }
+  .about-current { margin-left: 0; }
+  .version-row { align-items: flex-start; flex-direction: column; }
+  .version-row .btn { width: 100%; }
 }
 </style>

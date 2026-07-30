@@ -117,6 +117,8 @@ export const api = {
 
   // 顶部控制中心
   getUiProfile: () => request('GET', '/api/ui/profile'),
+  getAbout: () => request('GET', '/api/ui/about'),
+  getAboutVersion: (version) => request('GET', `/api/ui/about/versions/${encodeURIComponent(version)}`),
   uploadAvatar: async (file) => {
     const form = new FormData()
     form.append('file', file)

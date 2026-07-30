@@ -48,6 +48,7 @@ app = FastAPI(title="AWBotNest Platform API")
 # 从 VERSION 文件读取版本号（单一真值源）
 _VERSION_FILE = Path(__file__).parent.parent / "VERSION"
 APP_VERSION = _VERSION_FILE.read_text(encoding="utf-8").strip() if _VERSION_FILE.exists() else "unknown"
+_CHANGELOG_FILE = Path(__file__).parent.parent / "CHANGELOG.md"
 
 # 前端构建产物目录（Vue 构建后输出到 webui/static）
 STATIC_DIR = Path(__file__).parent / "static"
@@ -2037,6 +2038,58 @@ async def recent_logs(user=Depends(_auth)):
     """返回最近若干条历史日志"""
     from webui import log_stream
     return {"logs": list(reversed(log_stream.recent_logs()))}
+
+
+def _version_history(limit: int = 30) -> list[dict[str, Any]]:
+    try:
+        content = _CHANGELOG_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    headings = list(re.finditer(r"^##\s+(v?\d+(?:\.\d+)+)\s*$", content, re.MULTILINE))
+    versions = []
+    for index, match in enumerate(headings[:limit]):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(content)
+        version = match.group(1).lstrip("vV")
+        versions.append({
+            "version": version,
+            "current": version == APP_VERSION.lstrip("vV"),
+            "notes": content[match.end():end].strip()[:12000],
+        })
+    return versions
+
+
+@app.get("/api/ui/about")
+async def ui_about(user=Depends(_auth)):
+    import platform as _platform
+    import sys as _sys
+    import time as _time
+    from kernel import state as kernel_state
+
+    started = getattr(kernel_state, "started_at", None)
+    return {
+        "name": "AWBotNest",
+        "version": APP_VERSION,
+        "python": _sys.version.split()[0],
+        "platform": f"{_platform.system()} {_platform.release()}",
+        "uptime_seconds": max(0, int(_time.time() - started)) if started else 0,
+        "repository": "https://github.com/AWdress/AWBotNest",
+        "issues": "https://github.com/AWdress/AWBotNest/issues",
+        "docs": "https://github.com/AWdress/AWBotNest#readme",
+        "versions": [
+            {"version": item["version"], "current": item["current"]}
+            for item in _version_history()
+        ],
+    }
+
+
+@app.get("/api/ui/about/versions/{version}")
+async def ui_about_version(version: str, user=Depends(_auth)):
+    if not re.fullmatch(r"\d+(?:\.\d+)+", version):
+        raise HTTPException(status_code=400, detail="版本号格式不正确")
+    item = next((entry for entry in _version_history() if entry["version"] == version), None)
+    if item is None:
+        raise HTTPException(status_code=404, detail="没有找到这个版本的更新记录")
+    return item
 
 
 @app.get("/api/ui/health")
