@@ -15,6 +15,9 @@ import sqlite3
 import tempfile
 import copy
 import base64
+import json
+import re
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -51,6 +54,97 @@ STATIC_DIR = Path(__file__).parent / "static"
 STATIC_DIR.mkdir(parents=True, exist_ok=True)
 
 PLUGINS_DIR = Path("plugins")
+WEBUI_DATA_DIR = Path("data") / "webui"
+AVATAR_DIR = WEBUI_DATA_DIR / "avatar"
+NOTIFICATION_STATE_FILE = WEBUI_DATA_DIR / "notification_state.json"
+_SCHEDULER_JOBS_PENDING: set[str] = set()
+_SCHEDULER_JOBS_RUNNING: set[str] = set()
+_SCHEDULER_LISTENER_INSTALLED = False
+
+
+def _avatar_path() -> Optional[Path]:
+    for suffix in (".png", ".jpg", ".webp", ".gif"):
+        candidate = AVATAR_DIR / f"admin{suffix}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _read_notification_state() -> dict:
+    try:
+        value = json.loads(NOTIFICATION_STATE_FILE.read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_notification_state(value: dict) -> None:
+    WEBUI_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = NOTIFICATION_STATE_FILE.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp_path, NOTIFICATION_STATE_FILE)
+
+
+def _notification_read_at() -> float:
+    try:
+        return float(_read_notification_state().get("read_at") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _scheduler_job_running(scheduler, job) -> bool:
+    if job.id in _SCHEDULER_JOBS_PENDING or job.id in _SCHEDULER_JOBS_RUNNING:
+        return True
+    try:
+        executor = scheduler._lookup_executor(job.executor)
+        return bool(getattr(executor, "_instances", {}).get(job.id, 0))
+    except Exception:  # noqa: BLE001 - APScheduler 版本差异时退回事件状态
+        return False
+
+
+def _ensure_scheduler_listener(scheduler) -> None:
+    global _SCHEDULER_LISTENER_INSTALLED
+    if _SCHEDULER_LISTENER_INSTALLED:
+        return
+    from apscheduler.events import (
+        EVENT_JOB_ERROR,
+        EVENT_JOB_EXECUTED,
+        EVENT_JOB_MAX_INSTANCES,
+        EVENT_JOB_MISSED,
+        EVENT_JOB_REMOVED,
+        EVENT_JOB_SUBMITTED,
+    )
+
+    def on_job_event(event) -> None:
+        job_id = str(getattr(event, "job_id", "") or "")
+        if not job_id:
+            return
+        if event.code == EVENT_JOB_SUBMITTED:
+            _SCHEDULER_JOBS_PENDING.discard(job_id)
+            _SCHEDULER_JOBS_RUNNING.add(job_id)
+        else:
+            _SCHEDULER_JOBS_PENDING.discard(job_id)
+            _SCHEDULER_JOBS_RUNNING.discard(job_id)
+
+    scheduler.add_listener(
+        on_job_event,
+        EVENT_JOB_SUBMITTED | EVENT_JOB_EXECUTED | EVENT_JOB_ERROR
+        | EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES | EVENT_JOB_REMOVED,
+    )
+    _SCHEDULER_LISTENER_INSTALLED = True
+
+
+def _mask_notification_text(value: Any) -> str:
+    """通知中心不展示常见 Token、API Key 和 URL 中的凭据。"""
+    text = str(value or "")
+    text = re.sub(r"\b\d{6,12}:[A-Za-z0-9_-]{20,}\b", "******", text)
+    text = re.sub(
+        r"(?i)\b(api[_ -]?key|token|secret|password)\s*[:=]\s*\S+",
+        lambda match: f"{match.group(1)}: ******",
+        text,
+    )
+    text = re.sub(r"(?i)(https?://)([^/@\s:]+):([^/@\s]+)@", r"\1******:******@", text)
+    return text
 
 
 def _assert_safe_plugin_id(plugin_id: str) -> str:
@@ -104,6 +198,112 @@ async def auth_change_credentials(body: Dict[str, Any], user=Depends(_auth)):
     )
     logger.info("Web 控制台登录凭据已修改")
     return {"status": "success", "username": _authmod.get_username()}
+
+
+# ──────────────────────────────────────────────
+# 控制台个人资料 / 通知中心
+# ──────────────────────────────────────────────
+@app.get("/api/ui/profile")
+async def ui_profile(user=Depends(_auth)):
+    avatar = _avatar_path()
+    version = int(avatar.stat().st_mtime_ns) if avatar else 0
+    return {
+        "username": _authmod.get_username(),
+        "avatar_url": f"/api/ui/avatar?v={version}" if avatar else "",
+    }
+
+
+@app.get("/api/ui/avatar")
+async def ui_avatar():
+    avatar = _avatar_path()
+    if not avatar:
+        raise HTTPException(status_code=404, detail="尚未设置头像")
+    media_types = {
+        ".png": "image/png", ".jpg": "image/jpeg",
+        ".webp": "image/webp", ".gif": "image/gif",
+    }
+    return FileResponse(
+        str(avatar), media_type=media_types[avatar.suffix],
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.post("/api/ui/avatar")
+async def upload_ui_avatar(file: UploadFile = File(...), user=Depends(_auth_pwc)):
+    from io import BytesIO
+    from PIL import Image, UnidentifiedImageError
+
+    content = await file.read(2 * 1024 * 1024 + 1)
+    if not content or len(content) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="头像大小不能超过 2 MB")
+    signatures = (
+        (".png", lambda b: b.startswith(b"\x89PNG\r\n\x1a\n")),
+        (".jpg", lambda b: b.startswith(b"\xff\xd8\xff")),
+        (".webp", lambda b: len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WEBP"),
+        (".gif", lambda b: b.startswith((b"GIF87a", b"GIF89a"))),
+    )
+    suffix = next((ext for ext, check in signatures if check(content)), "")
+    if not suffix:
+        raise HTTPException(status_code=400, detail="头像只支持 PNG、JPG、WebP 或 GIF 图片")
+    try:
+        with Image.open(BytesIO(content)) as image:
+            width, height = image.size
+            if width < 1 or height < 1 or width > 4096 or height > 4096:
+                raise HTTPException(status_code=400, detail="头像尺寸必须在 1 到 4096 像素之间")
+            image.verify()
+    except HTTPException:
+        raise
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="头像图片已损坏或格式不正确") from exc
+    AVATAR_DIR.mkdir(parents=True, exist_ok=True)
+    fd, temp_name = tempfile.mkstemp(prefix=".avatar-", suffix=".tmp", dir=str(AVATAR_DIR))
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+    target = AVATAR_DIR / f"admin{suffix}"
+    os.replace(temp_path, target)
+    for old_suffix in (".png", ".jpg", ".webp", ".gif"):
+        old = AVATAR_DIR / f"admin{old_suffix}"
+        if old != target:
+            old.unlink(missing_ok=True)
+    return {"status": "success", "avatar_url": f"/api/ui/avatar?v={target.stat().st_mtime_ns}"}
+
+
+@app.get("/api/ui/notifications")
+async def ui_notifications(user=Depends(_auth)):
+    from kernel import notifier
+    values = [dict(item) for item in notifier.history()]
+    read_at = _notification_read_at()
+    for item in values:
+        item["text"] = _mask_notification_text(item.get("text"))
+        item["category"] = _mask_notification_text(item.get("category"))
+        item["account"] = _mask_notification_text(item.get("account"))
+        try:
+            item["unread"] = float(item.get("t") or 0) > read_at
+        except (TypeError, ValueError):
+            item["unread"] = False
+    return {"notifications": values, "unread": sum(1 for item in values if item["unread"])}
+
+
+@app.post("/api/ui/notifications/read")
+async def read_ui_notifications(user=Depends(_auth_pwc)):
+    _write_notification_state({"read_at": time.time()})
+    return {"status": "success"}
+
+
+@app.delete("/api/ui/notifications")
+async def clear_ui_notifications(user=Depends(_auth_pwc)):
+    from kernel import notifier
+    notifier.clear_history()
+    _write_notification_state({"read_at": time.time()})
+    return {"status": "success"}
 
 
 def _get_runtime():
@@ -1773,6 +1973,8 @@ async def system_status(user=Depends(_auth)):
         # 状态接口只读取已经启动的调度器，不能为了展示数据加载整套任务模块。
         sched_module = _sys.modules.get("schedulers")
         active_scheduler = getattr(sched_module, "scheduler", None)
+        if active_scheduler:
+            _ensure_scheduler_listener(active_scheduler)
         for j in active_scheduler.get_jobs() if active_scheduler else ():
             nxt = getattr(j, "next_run_time", None)
             # job id 形如 "<插件id>::<名称>"，据此归属到插件
@@ -1793,6 +1995,7 @@ async def system_status(user=Depends(_auth)):
                 "plugin": plugin_label,
                 "trigger": str(getattr(j, "trigger", "")),
                 "next": nxt.strftime("%m-%d %H:%M:%S") if nxt else None,
+                "running": _scheduler_job_running(active_scheduler, j),
             })
     except Exception:  # noqa: BLE001
         pass
@@ -1833,7 +2036,142 @@ async def system_status(user=Depends(_auth)):
 async def recent_logs(user=Depends(_auth)):
     """返回最近若干条历史日志"""
     from webui import log_stream
-    return {"logs": log_stream.recent_logs()}
+    return {"logs": list(reversed(log_stream.recent_logs()))}
+
+
+@app.get("/api/ui/health")
+async def ui_health(user=Depends(_auth)):
+    import config.config as cfg
+    from kernel import state as kernel_state
+    from schedulers import scheduler
+
+    cfg.reload()
+    accounts = kernel_state.accounts
+    runtime = kernel_state.runtime
+    metas = registry.scan()
+    db_info = getattr(cfg, "DB_INFO", {}) or {}
+    db_ok = True
+    if db_info.get("dbset", "SQLite") == "SQLite":
+        db_ok = Path(str(db_info.get("path") or db_info.get("sqlite_path") or "db_file/SQLite/tgbot.db")).exists()
+    proxy_enabled = bool((getattr(cfg, "proxy_set", {}) or {}).get("proxy_enable"))
+    channels = [
+        item for item in (getattr(cfg, "NOTIFICATION_CHANNELS", []) or [])
+        if isinstance(item, dict)
+    ]
+    ai_settings = getattr(cfg, "AI_SERVICES", {}) or {}
+    ai_providers = [
+        item for item in (ai_settings.get("providers", []) or [])
+        if isinstance(item, dict)
+    ]
+    bot_connected = bool(
+        accounts and accounts.bot_app
+        and getattr(accounts.bot_app, "is_connected", False)
+    )
+    checks = [
+        {"id": "accounts", "name": "账号服务", "ok": accounts is not None,
+         "detail": f"{len(accounts.connected_user_apps) if accounts else 0} 个用户账号在线"},
+        {"id": "bots", "name": "Bot 服务", "ok": bot_connected,
+         "detail": "已连接" if bot_connected else "未连接"},
+        {"id": "plugins", "name": "插件系统", "ok": runtime is not None,
+         "detail": f"{sum(1 for meta in metas if meta.enabled)} 个插件已启用"},
+        {"id": "database", "name": "数据库", "ok": db_ok, "detail": str(db_info.get("dbset") or "SQLite")},
+        {"id": "proxy", "name": "运行代理", "ok": True,
+         "detail": "已启用" if proxy_enabled else "未启用"},
+        {"id": "notifications", "name": "通知渠道", "ok": True,
+         "detail": f"{sum(1 for item in channels if item.get('enabled'))} 个渠道已启用"},
+        {"id": "ai", "name": "平台 AI", "ok": True,
+         "detail": f"{sum(1 for item in ai_providers if item.get('enabled'))} 个服务商已启用"},
+        {"id": "browser", "name": "浏览器服务", "ok": True, "detail": "按需启动"},
+        {"id": "scheduler", "name": "定时服务", "ok": True,
+         "detail": f"{len(scheduler.get_jobs())} 个任务"},
+    ]
+    return {"checks": checks, "ok": all(item["ok"] for item in checks)}
+
+
+def _build_network_targets() -> list[dict[str, str]]:
+    import config.config as cfg
+    from webui.repo_sync import _get_repos
+
+    cfg.reload()
+    targets = [
+        {"id": "telegram", "name": "Telegram API", "url": "https://api.telegram.org"},
+        {"id": "github", "name": "GitHub", "url": "https://api.github.com"},
+    ]
+    for index, repo in enumerate(_get_repos()):
+        owner_repo = str(repo.get("url") or "")
+        if owner_repo:
+            targets.append({
+                "id": f"repo-{index}", "name": repo.get("name") or owner_repo,
+                "url": f"https://api.github.com/repos/{owner_repo}",
+            })
+    ai_settings = getattr(cfg, "AI_SERVICES", {}) or {}
+    providers = [
+        item for item in (ai_settings.get("providers", []) or [])
+        if isinstance(item, dict)
+    ]
+    for index, provider in enumerate(providers):
+        base_url = str(provider.get("base_url") or "").strip()
+        if provider.get("enabled") and base_url:
+            targets.append({
+                "id": f"ai-{provider.get('id') or 'provider'}-{index}",
+                "name": provider.get("name") or f"AI 服务 {index + 1}",
+                "url": base_url,
+            })
+    if (getattr(cfg, "proxy_set", {}) or {}).get("proxy_enable"):
+        targets.append({"id": "proxy", "name": "当前代理", "url": "https://www.cloudflare.com/cdn-cgi/trace"})
+    return targets
+
+
+@app.get("/api/ui/network-targets")
+async def ui_network_targets(user=Depends(_auth)):
+    # URL 留在后端，前端只拿显示名和固定 ID，避免配置中的凭据意外暴露。
+    return {"targets": [{"id": item["id"], "name": item["name"]} for item in _build_network_targets()]}
+
+
+@app.post("/api/ui/network-test")
+async def ui_network_test(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    import httpx
+    from libs.proxy import proxy_url
+
+    known = {item["id"]: item for item in _build_network_targets()}
+    target_id = str((body or {}).get("id") or "")
+    target = known.get(target_id)
+    if not target:
+        raise HTTPException(status_code=400, detail="未知的网络测试目标")
+    started = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(proxy=proxy_url(), timeout=10, follow_redirects=True) as client:
+            response = await client.get(target["url"])
+        ok = response.status_code < 500
+        detail = f"HTTP {response.status_code}"
+    except Exception as exc:  # noqa: BLE001
+        ok = False
+        detail = exc.__class__.__name__
+    return {
+        "id": target_id, "ok": ok, "detail": detail,
+        "latency_ms": round((time.perf_counter() - started) * 1000),
+    }
+@app.post("/api/ui/scheduler/{job_id:path}/run")
+async def run_scheduler_job(job_id: str, user=Depends(_auth_pwc)):
+    from datetime import datetime
+    from schedulers import scheduler
+
+    if not scheduler.running:
+        raise HTTPException(status_code=503, detail="定时服务尚未启动")
+    _ensure_scheduler_listener(scheduler)
+    job = scheduler.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="定时任务不存在或已经移除")
+    if _scheduler_job_running(scheduler, job):
+        raise HTTPException(status_code=409, detail="该任务正在执行，请勿重复运行")
+    _SCHEDULER_JOBS_PENDING.add(job_id)
+    try:
+        scheduler.modify_job(job_id, next_run_time=datetime.now(scheduler.timezone))
+        scheduler.wakeup()
+    except Exception:
+        _SCHEDULER_JOBS_PENDING.discard(job_id)
+        raise
+    return {"status": "scheduled", "id": job_id}
 
 
 # ──────────────────────────────────────────────

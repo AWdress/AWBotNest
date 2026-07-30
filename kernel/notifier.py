@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import time
 import threading
+import json
+import os
 from collections import deque
+from pathlib import Path
 from typing import Any, Optional
 
 from core import logger
@@ -24,9 +27,44 @@ _LEVEL_CN = {
     "error": "错误",
 }
 
-# 通知中心历史环形缓冲（最近 200 条），供将来 UI / 排查用
-_HISTORY: deque[dict] = deque(maxlen=200)
+# 通知中心历史保存在 data 卷中，容器更新后仍可恢复。
+_HISTORY_LIMIT = 100
+_HISTORY_MAX_AGE = 30 * 24 * 3600
+_HISTORY_FILE = Path("data") / "webui" / "notifications.json"
+_HISTORY: deque[dict] = deque(maxlen=_HISTORY_LIMIT)
 _HISTORY_LOCK = threading.Lock()  # append(事件循环线程) 与 history()(Web 线程) 跨线程互斥
+_HISTORY_LOADED = False
+
+
+def _load_history_locked() -> None:
+    global _HISTORY_LOADED
+    if _HISTORY_LOADED:
+        return
+    _HISTORY_LOADED = True
+    try:
+        values = json.loads(_HISTORY_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(values, list):
+        return
+    cutoff = time.time() - _HISTORY_MAX_AGE
+    for item in values[-_HISTORY_LIMIT:]:
+        if not isinstance(item, dict):
+            continue
+        try:
+            created_at = float(item.get("t") or 0)
+        except (TypeError, ValueError):
+            continue
+        if created_at >= cutoff:
+            _HISTORY.append(item)
+
+
+def _save_history_locked() -> None:
+    _HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = _HISTORY_FILE.with_suffix(".tmp")
+    payload = json.dumps(list(_HISTORY), ensure_ascii=False, separators=(",", ":"))
+    temp_path.write_text(payload, encoding="utf-8")
+    os.replace(temp_path, _HISTORY_FILE)
 
 
 def _account_label(account: Any) -> Optional[str]:
@@ -90,13 +128,20 @@ async def submit(
     返回投递结果；无可用账号时抛 RuntimeError。
     """
     level = level if level in _LEVEL_CN else "info"
+    plugin_id = str(plugin_id or "")
+    plugin_name = str(plugin_name or plugin_id or "平台")
+    text = str(text or "")
+    category = str(category).strip() if category is not None else None
     account_label = _account_label(account)
     body = _format(plugin_name, text, level, category, account_label)
 
     # 记入通知中心历史
     with _HISTORY_LOCK:
+        _load_history_locked()
+        now = time.time()
         _HISTORY.append({
-            "t": time.time(),
+            "id": str(time.time_ns()),
+            "t": now,
             "plugin_id": plugin_id,
             "plugin_name": plugin_name,
             "level": level,
@@ -104,6 +149,10 @@ async def submit(
             "account": account_label,
             "text": text,
         })
+        try:
+            _save_history_locked()
+        except OSError:
+            pass
     # 同时进运行日志（前端日志页可见，带插件名 + 账号）
     acc_tag = f"[{account_label}]" if account_label else ""
     logger.info("[通知][%s]%s %s%s", plugin_name, acc_tag, f"({category}) " if category else "", text)
@@ -280,4 +329,16 @@ def _bot_chat_id(bot_id: str) -> Any:
 def history() -> list[dict]:
     """返回通知中心历史（最近在前）。"""
     with _HISTORY_LOCK:
+        _load_history_locked()
         return list(reversed(_HISTORY))
+
+
+def clear_history() -> None:
+    """清空内存与持久化通知历史。"""
+    with _HISTORY_LOCK:
+        _load_history_locked()
+        _HISTORY.clear()
+        try:
+            _save_history_locked()
+        except OSError:
+            pass

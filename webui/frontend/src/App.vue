@@ -5,6 +5,7 @@ import { api, getToken, setToken, setUnauthorizedHandler } from './api'
 import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import Toast from './components/Toast.vue'
+import TopbarControlCenter from './components/TopbarControlCenter.vue'
 import logoWhite from './assets/logo-white.png'
 import { confirm } from './composables/confirm'
 import { toast } from './composables/toast'
@@ -210,45 +211,46 @@ onMounted(async () => {
       </nav>
 
       <div class="sidebar-footer">
-        <div class="foot-row">
-          <span class="ver" v-if="version">
-            v{{ version }}
-            <span v-if="hasUpdate" class="update-wrap">
-              <a :href="RELEASE_URL" target="_blank" rel="noopener" class="update-arrow">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
-                     stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M12 19V5M5 12l7-7 7 7" />
-                </svg>
-              </a>
-              <div class="update-pop">
-                <div class="update-pop-head">
-                  <span class="update-pop-title">发现新版本</span>
-                  <span class="update-pop-ver">v{{ latestVersion }}</span>
+        <div class="footer-card">
+          <div class="foot-row">
+            <span class="ver" v-if="version">
+              <svg class="version-icon" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" stroke-width="1.8"
+                   stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 5h13a1 1 0 0 1 1 1v12H6a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1Z" />
+                <path d="M6 15h13" />
+              </svg>
+              v{{ version }}
+              <span v-if="hasUpdate" class="update-wrap">
+                <a :href="RELEASE_URL" target="_blank" rel="noopener" class="update-arrow"
+                   title="发现新版本">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
+                       stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 19V5M5 12l7-7 7 7" />
+                  </svg>
+                </a>
+                <div class="update-pop">
+                  <div class="update-pop-head">
+                    <span class="update-pop-title">发现新版本</span>
+                    <span class="update-pop-ver">v{{ latestVersion }}</span>
+                  </div>
+                  <div class="update-pop-note" v-if="latestNote">{{ latestNote }}</div>
                 </div>
-                <div class="update-pop-note" v-if="latestNote">{{ latestNote }}</div>
-              </div>
+              </span>
             </span>
-          </span>
-          <div class="footer-status">
-            <div class="status-dot" :class="{ online }"></div>
-            <span class="muted">{{ online ? '在线' : '连接中…' }}</span>
+            <div class="footer-status" :class="{ online }">
+              <span>{{ online ? '连接正常' : '连接中…' }}</span>
+              <div class="status-dot" :class="{ online }"></div>
+            </div>
           </div>
+          <a class="footer-repo" href="https://github.com/AWdress/AWBotNest"
+             target="_blank" rel="noopener" title="打开 AWBotNest 项目主页">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 .8a11.4 11.4 0 0 0-3.6 22.2c.6.1.8-.2.8-.5v-2.2c-3.3.7-4-1.4-4-1.4-.5-1.4-1.3-1.8-1.3-1.8-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1.1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.8-1.6-2.7-.3-5.5-1.3-5.5-5.9 0-1.3.5-2.4 1.2-3.2-.1-.3-.5-1.6.1-3.2 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0c2.3-1.5 3.3-1.2 3.3-1.2.6 1.6.2 2.9.1 3.2.8.8 1.2 1.9 1.2 3.2 0 4.6-2.8 5.6-5.5 5.9.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5A11.4 11.4 0 0 0 12 .8Z" />
+            </svg>
+            <span>AWdress/AWBotNest</span>
+          </a>
         </div>
-        <button class="restart-btn" @click="restart" :disabled="restarting">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round" class="logout-icon">
-            <path d="M23 4v6h-6M1 20v-6h6" />
-            <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-          </svg>
-          {{ restarting ? '重启中…' : '重启平台' }}
-        </button>
-        <button class="logout-btn" @click="logout">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" stroke-linejoin="round" class="logout-icon">
-            <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
-          </svg>
-          退出登录
-        </button>
       </div>
     </aside>
 
@@ -257,21 +259,13 @@ onMounted(async () => {
       <header class="topbar">
         <img :src="logoWhite" class="topbar-logo" alt="" />
         <h1>{{ route.meta.title || '控制台' }}</h1>
-        <div class="topbar-actions">
-          <button class="icon-btn" @click="restart" :disabled="restarting" title="重启平台">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round">
-              <path d="M23 4v6h-6M1 20v-6h6" />
-              <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
-            </svg>
-          </button>
-          <button class="icon-btn" @click="logout" title="退出登录">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round">
-              <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" />
-            </svg>
-          </button>
-        </div>
+        <TopbarControlCenter
+          :online="online"
+          :version="version"
+          :restarting="restarting"
+          @restart="restart"
+          @logout="logout"
+        />
       </header>
       <div class="content">
         <RouterView />
@@ -341,21 +335,40 @@ onMounted(async () => {
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
 .sidebar-footer {
-  display: flex; flex-direction: column; gap: 10px;
-  padding: 14px 6px 4px;
+  padding: 14px 4px 2px;
   border-top: 1px solid var(--border);
   font-size: 12px;
 }
-.foot-row { display: flex; align-items: center; justify-content: space-between; padding: 0 6px; }
-.footer-status { display: flex; align-items: center; gap: 8px; }
-.ver { color: var(--text-muted); font-size: 11px; font-family: monospace; display: inline-flex; align-items: center; gap: 6px; }
+.footer-card {
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: linear-gradient(145deg, rgba(19, 22, 31, .96), rgba(15, 17, 24, .94));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
+}
+.foot-row {
+  min-height: 48px;
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 0 13px;
+}
+.footer-status {
+  display: flex; align-items: center; gap: 7px;
+  color: var(--text-muted); white-space: nowrap;
+}
+.footer-status.online { color: var(--success); }
+.ver {
+  min-width: 0;
+  color: var(--text-muted); font-size: 11px; font-family: monospace;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.version-icon { width: 16px; height: 16px; flex: 0 0 16px; }
 .update-arrow {
-  display: inline-flex; align-items: center; gap: 3px; text-decoration: none;
-  color: var(--success); font-size: 10px; font-weight: 600;
+  width: 16px; height: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; color: var(--accent); background: var(--accent-dim);
   animation: update-pulse 2s ease-in-out infinite;
 }
-.update-arrow svg { width: 13px; height: 13px; }
-.update-arrow:hover { opacity: 0.8; }
+.update-arrow svg { width: 10px; height: 10px; }
+.update-arrow:hover { color: var(--accent-hover); }
 @keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .update-wrap { position: relative; display: inline-flex; align-items: center; }
 .update-pop {
@@ -379,27 +392,28 @@ onMounted(async () => {
   border-radius: 6px; padding: 1px 7px; white-space: nowrap;
 }
 .update-pop-note { margin-top: 6px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
-.logout-btn {
+.footer-repo {
+  min-height: 42px; padding: 0 12px;
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  width: 100%; padding: 9px; cursor: pointer;
-  background: transparent; border: 1px solid var(--border-light); border-radius: var(--radius-sm);
-  color: var(--text-secondary); font-size: 13px; transition: all 0.15s ease;
+  color: var(--text-muted); border-top: 1px solid var(--border);
+  border-radius: 0 0 10px 10px;
+  font-family: monospace; font-size: 11px;
+  transition: color .16s ease, background .16s ease;
 }
-.restart-btn {
-  display: flex; align-items: center; justify-content: center; gap: 8px;
-  width: 100%; padding: 9px; margin-bottom: 8px; cursor: pointer;
-  background: transparent; border: 1px solid var(--border-light); border-radius: var(--radius-sm);
-  color: var(--text-secondary); font-size: 13px; transition: all 0.15s ease;
-}
-.restart-btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
-.restart-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.logout-btn:hover { color: var(--danger); border-color: var(--danger); background: var(--danger-dim); }
-.logout-icon { width: 16px; height: 16px; }
+.footer-repo:hover { color: var(--text-primary); background: var(--bg-hover); }
+.footer-repo svg { width: 16px; height: 16px; flex: 0 0 16px; }
+.footer-repo span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .status-dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--text-muted);
 }
-.status-dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.status-dot.online {
+  background: var(--success); box-shadow: 0 0 8px var(--success);
+  animation: status-breathe 2.4s ease-in-out infinite;
+}
+@keyframes status-breathe {
+  50% { opacity: .55; box-shadow: 0 0 4px rgba(16, 176, 128, .35); }
+}
 
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
@@ -408,23 +422,16 @@ onMounted(async () => {
   padding: 0 32px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  position: relative;
+  z-index: 40;
   background: rgba(10, 14, 23, .62);
   backdrop-filter: blur(18px);
 }
 .topbar h1 { font-size: 18px; font-weight: 700; letter-spacing: .2px; }
 .content { flex: 1; overflow-y: auto; padding: 32px; position: relative; }
 
-/* 顶栏 logo / 操作按钮：默认(桌面)隐藏，手机显示 */
+/* 顶栏 logo 默认仅在手机显示，控制中心在桌面和手机均显示。 */
 .topbar-logo { display: none; width: 28px; height: 28px; object-fit: contain; }
-.topbar-actions { display: none; gap: 8px; margin-left: auto; }
-.icon-btn {
-  display: flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px; border-radius: var(--radius-sm);
-  background: transparent; border: 1px solid var(--border-light);
-  color: var(--text-secondary); cursor: pointer;
-}
-.icon-btn svg { width: 18px; height: 18px; }
-.icon-btn:disabled { opacity: 0.5; }
 
 /* 手机底部标签栏：默认隐藏 */
 .tabbar { display: none; }
@@ -443,7 +450,6 @@ onMounted(async () => {
   }
   .topbar-logo { display: block; }
   .topbar h1 { font-size: 16px; }
-  .topbar-actions { display: flex; }
   /* 内容区留出底部悬浮标签栏高度，避免被遮 */
   .content { padding: 16px 14px calc(86px + env(safe-area-inset-bottom)); }
   /* 底部标签栏：悬浮胶囊，居中不拉满 */

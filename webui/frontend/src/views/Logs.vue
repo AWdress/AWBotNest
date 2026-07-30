@@ -11,6 +11,7 @@ const paused = ref(false)
 let ws = null
 let reconnectTimer = null
 const logBox = ref(null)
+const seenLogs = new Set()
 
 const levels = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR']
 
@@ -36,15 +37,25 @@ function wsUrl() {
 }
 
 function connect() {
+  disconnect()
   ws = new WebSocket(wsUrl())
   ws.onopen = () => { connected.value = true }
   ws.onmessage = (e) => {
     if (paused.value) return
     try {
       const item = JSON.parse(e.data)
-      logs.value.push(item)
-      if (logs.value.length > 1000) logs.value.splice(0, logs.value.length - 1000)
-      if (autoScroll.value) nextTick(scrollToBottom)
+      const key = item.id || `${item.timestamp}|${item.level}|${item.source}|${item.msg}`
+      if (seenLogs.has(key)) return
+      seenLogs.add(key)
+      logs.value.unshift(item)
+      if (logs.value.length > 1000) logs.value.length = 1000
+      if (seenLogs.size > 1500) {
+        seenLogs.clear()
+        logs.value.forEach(entry => seenLogs.add(
+          entry.id || `${entry.timestamp}|${entry.level}|${entry.source}|${entry.msg}`,
+        ))
+      }
+      if (autoScroll.value) nextTick(scrollToLatest)
     } catch {}
   }
   ws.onclose = () => {
@@ -54,16 +65,34 @@ function connect() {
   ws.onerror = () => { ws?.close() }
 }
 
-function scrollToBottom() {
-  if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
+function disconnect() {
+  clearTimeout(reconnectTimer)
+  if (ws) {
+    ws.onclose = null
+    ws.close()
+    ws = null
+  }
+  connected.value = false
 }
 
-function clear() { logs.value = [] }
+function togglePaused() {
+  paused.value = !paused.value
+  if (paused.value) disconnect()
+  else connect()
+}
+
+function scrollToLatest() {
+  if (logBox.value) logBox.value.scrollTop = 0
+}
+
+function clear() {
+  logs.value = []
+  seenLogs.clear()
+}
 
 onMounted(connect)
 onUnmounted(() => {
-  clearTimeout(reconnectTimer)
-  if (ws) { ws.onclose = null; ws.close() }
+  disconnect()
 })
 </script>
 
@@ -80,8 +109,8 @@ onUnmounted(() => {
         <input class="input sm" v-model="search" placeholder="搜索插件名/内容…" />
       </div>
       <div class="row gap">
-        <label class="chk"><input type="checkbox" v-model="autoScroll" /> 自动滚动</label>
-        <button class="btn sm" :class="{ 'btn-primary': paused }" @click="paused = !paused">
+        <label class="chk"><input type="checkbox" v-model="autoScroll" /> 跟随最新</label>
+        <button class="btn sm" :class="{ 'btn-primary': paused }" @click="togglePaused">
           {{ paused ? '已暂停' : '暂停' }}
         </button>
         <button class="btn sm" @click="clear">清空</button>
@@ -90,7 +119,7 @@ onUnmounted(() => {
 
     <div class="log-box card" ref="logBox">
       <div v-if="filtered.length === 0" class="muted center">暂无日志</div>
-      <div v-for="(l, i) in filtered" :key="i" class="log-line">
+      <div v-for="(l, i) in filtered" :key="l.id || `${l.timestamp}-${i}`" class="log-line">
         <span class="time">{{ logTime(l) }}</span>
         <span class="level" :class="levelClass(l.level)">{{ l.level }}</span>
         <span class="msg">{{ l.msg }}</span>

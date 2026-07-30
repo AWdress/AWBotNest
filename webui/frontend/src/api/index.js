@@ -37,9 +37,9 @@ let statusRequest = null
 let statusCache = null
 let statusCacheAt = 0
 
-async function getStatus() {
+async function getStatus(force = false) {
   const now = Date.now()
-  if (statusCache && now - statusCacheAt < 1000) return statusCache
+  if (!force && statusCache && now - statusCacheAt < 1000) return statusCache
   if (statusRequest) return statusRequest
   statusRequest = request('GET', '/api/status')
     .then((data) => {
@@ -114,6 +114,34 @@ export const api = {
 
   // 运行日志
   recentLogs: () => request('GET', '/api/logs/recent'),
+
+  // 顶部控制中心
+  getUiProfile: () => request('GET', '/api/ui/profile'),
+  uploadAvatar: async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const headers = authHeaders()
+    delete headers['Content-Type']
+    const res = await fetch('/api/ui/avatar', { method: 'POST', headers, body: form })
+    if (res.status === 401) {
+      setToken('')
+      if (onUnauthorized) onUnauthorized()
+      throw new Error('未登录或登录已过期')
+    }
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json()).detail || detail } catch {}
+      throw new Error(detail)
+    }
+    return res.json()
+  },
+  getNotifications: () => request('GET', '/api/ui/notifications'),
+  readNotifications: () => request('POST', '/api/ui/notifications/read'),
+  clearNotifications: () => request('DELETE', '/api/ui/notifications'),
+  getHealth: () => request('GET', '/api/ui/health'),
+  getNetworkTargets: () => request('GET', '/api/ui/network-targets'),
+  testNetworkTarget: (id) => request('POST', '/api/ui/network-test', { id }),
+  runSchedulerJob: (id) => request('POST', `/api/ui/scheduler/${encodeURIComponent(id)}/run`),
 
   // 账号
   listAccounts: () => request('GET', '/api/accounts'),

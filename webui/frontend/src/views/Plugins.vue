@@ -94,6 +94,13 @@ function toggleMenu(p, ev) {
   })
 }
 function closeMenu() { menuFor.value = null }
+function useFallbackPluginIcon(event) {
+  const image = event?.currentTarget
+  if (!image || image.dataset.fallbackApplied === '1') return
+  image.dataset.fallbackApplied = '1'
+  image.src = logo
+  image.classList.add('config-plugin-icon-fallback')
+}
 function closePageDropdowns() {
   closeMenu()
   filterOpen.value = false
@@ -424,6 +431,7 @@ const logsConnected = ref(false)
 const logsBox = ref(null)
 let logsWs = null
 let logsReconnect = null
+const logsSeen = new Set()
 
 const logLevelClass = (lv) => ({
   DEBUG: 'lv-debug', INFO: 'lv-info', WARNING: 'lv-warn',
@@ -437,8 +445,8 @@ function matchesPlugin(item, id) {
   return item.source === id || (item.msg && item.msg.startsWith(`[${id}]`))
 }
 
-function logsScrollBottom() {
-  if (logsBox.value) logsBox.value.scrollTop = logsBox.value.scrollHeight
+function logsScrollLatest() {
+  if (logsBox.value) logsBox.value.scrollTop = 0
 }
 
 function logsWsUrl() {
@@ -453,9 +461,18 @@ function logsConnect() {
     try {
       const item = JSON.parse(e.data)
       if (logsTarget.value && matchesPlugin(item, logsTarget.value.id)) {
-        logsList.value.push(item)
-        if (logsList.value.length > 1000) logsList.value.splice(0, logsList.value.length - 1000)
-        nextTick(logsScrollBottom)
+        const key = item.id || `${item.timestamp}|${item.level}|${item.source}|${item.msg}`
+        if (logsSeen.has(key)) return
+        logsSeen.add(key)
+        logsList.value.unshift(item)
+        if (logsList.value.length > 1000) logsList.value.length = 1000
+        if (logsSeen.size > 1500) {
+          logsSeen.clear()
+          logsList.value.forEach(entry => logsSeen.add(
+            entry.id || `${entry.timestamp}|${entry.level}|${entry.source}|${entry.msg}`,
+          ))
+        }
+        nextTick(logsScrollLatest)
       }
     } catch {}
   }
@@ -472,18 +489,14 @@ function logsDisconnect() {
   logsConnected.value = false
 }
 
-async function openLogs(p) {
+function openLogs(p) {
   closeMenu()
   logsDisconnect()          // 先断旧连接，避免日志弹窗重复打开时泄漏 WebSocket
   logsTarget.value = p
   logsList.value = []
+  logsSeen.clear()
   logsOpen.value = true
-  // 先拉历史，过滤出当前插件
-  try {
-    const d = await api.recentLogs()
-    logsList.value = (d.logs || []).filter((it) => matchesPlugin(it, p.id))
-  } catch (e) { error.value = e.message }
-  nextTick(logsScrollBottom)
+  // WebSocket 建连后会先发送历史快照，再继续发送新增日志。
   logsConnect()
 }
 
@@ -1335,7 +1348,14 @@ onUnmounted(() => {
     <div v-if="configOpen" class="modal-mask" @click.self="configOpen=false">
       <div class="modal card modal-wide">
         <div class="modal-head">
-          <h2>{{ configTarget?.name }} · 配置</h2>
+          <div class="config-modal-title">
+            <img :src="configTarget?.icon || logo"
+                 class="config-plugin-icon"
+                 :class="{ 'config-plugin-icon-fallback': !configTarget?.icon }"
+                 :alt="configTarget?.name || '插件图标'"
+                 @error="useFallbackPluginIcon" />
+            <h2>{{ configTarget?.name }} · 配置</h2>
+          </div>
           <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
         </div>
         <RemotePluginConfig v-if="configRenderMode === 'vue'"
@@ -1465,7 +1485,7 @@ onUnmounted(() => {
         </div>
         <div class="log-box" ref="logsBox">
           <div v-if="logsList.length === 0" class="muted center">该插件暂无日志</div>
-          <div v-for="(l, i) in logsList" :key="i" class="log-line">
+          <div v-for="(l, i) in logsList" :key="l.id || `${l.timestamp}-${i}`" class="log-line">
             <span class="time">{{ pluginLogTime(l) }}</span>
             <span class="level" :class="logLevelClass(l.level)">{{ l.level }}</span>
             <span class="msg">{{ l.msg }}</span>
@@ -2017,6 +2037,13 @@ onUnmounted(() => {
 .modal-wide { width: 1000px; max-width: 92vw; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-head h2 { font-size: 16px; }
+.config-modal-title { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.config-plugin-icon {
+  width: 40px; height: 40px; flex: 0 0 40px;
+  border-radius: 11px; object-fit: contain;
+  background: var(--bg-elevated);
+}
+.config-plugin-icon-fallback { padding: 6px; }
 .modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
 .modal-head .close .x-ico { width: 20px; height: 20px; }
 .modal-foot {

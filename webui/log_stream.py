@@ -15,6 +15,8 @@ import json
 import logging
 import os
 import threading
+import time
+from itertools import count
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +31,7 @@ _BUFFER: deque[dict] = deque(maxlen=_BUFFER_LIMIT)
 _HISTORY_LOCK = threading.RLock()
 _HISTORY_LOADED = False
 _WRITES_SINCE_COMPACT = 0
+_ID_COUNTER = count()
 # 订阅者队列集合（每个 WebSocket 一个）
 _SUBSCRIBERS: set[asyncio.Queue] = set()
 # Web 服务的事件循环（启动时设置）
@@ -45,6 +48,7 @@ def _record_to_dict(record: logging.LogRecord) -> dict:
     occurred = datetime.fromtimestamp(record.created).astimezone()
     source = getattr(record, "plugin", None) or record.module
     return {
+        "id": f"{time.time_ns()}-{next(_ID_COUNTER)}",
         "timestamp": occurred.isoformat(timespec="seconds"),
         "date": occurred.strftime("%Y-%m-%d"),
         "time": occurred.strftime("%H:%M:%S"),
@@ -95,12 +99,16 @@ def _load_history() -> None:
         try:
             with _HISTORY_FILE.open("r", encoding="utf-8", errors="replace") as stream:
                 recent_lines = deque(stream, maxlen=_BUFFER_LIMIT)
-            for line in recent_lines:
+            for index, line in enumerate(recent_lines):
                 try:
                     item = json.loads(line)
                 except (json.JSONDecodeError, TypeError):
                     continue
                 if _is_history_item(item):
+                    item.setdefault(
+                        "id",
+                        f"legacy-{index}-{item.get('date', '')}-{item.get('time', '')}",
+                    )
                     _BUFFER.append(item)
             if _HISTORY_FILE.stat().st_size > _HISTORY_MAX_BYTES:
                 _compact_history_locked()
