@@ -537,17 +537,18 @@ onUnmounted(() => {
 .shortcut-grid strong, .shortcut-grid small { display: block; }
 .shortcut-grid small { margin-top: 3px; color: var(--text-muted); font-size: 11px; }
 .notifications-pop { width: 420px; }
-.notice-list { max-height: 520px; overflow-y: auto; padding: 8px; }
+.notice-list { max-height: 520px; overflow-y: auto; padding: 10px 14px 14px; scrollbar-gutter: stable; }
 .notice-item {
-  width: 100%; display: grid; grid-template-columns: 38px 1fr; gap: 11px; padding: 12px;
+  width: 100%; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; padding: 12px;
   border: 0; border-radius: 11px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer;
 }
 .notice-item:hover { background: var(--bg-hover); }
 .notice-item.unread { background: var(--accent-dim); }
 .notice-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: var(--bg-elevated); color: var(--accent); font-weight: 700; }
+.notice-body { min-width: 0; padding-right: 4px; }
 .notice-body strong, .notice-body small, .notice-text { display: block; }
 .notice-text { margin: 4px 0; color: var(--text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.notice-item.expanded .notice-text { white-space: pre-wrap; overflow: visible; word-break: break-word; }
+.notice-item.expanded .notice-text { white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; word-break: break-word; }
 .notice-body small { color: var(--text-muted); }
 .user-pop { width: 280px; }
 .user-profile { display: flex; align-items: center; gap: 12px; padding: 18px; border-bottom: 1px solid var(--border); }
