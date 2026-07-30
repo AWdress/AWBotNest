@@ -107,7 +107,8 @@ async def start_log_cleaner():
             "cron",
             hour=clean_hour,
             minute=clean_minute,
-            id="log_cleaner"
+            id="log_cleaner",
+            name="日志清理",
         )
         logger.info(f"日志清理定时任务已启动（每天 {clean_hour}:{str(clean_minute).zfill(2)} 执行）")
     else:

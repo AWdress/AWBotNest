@@ -67,6 +67,9 @@ NOTIFICATION_STATE_FILE = WEBUI_DATA_DIR / "notification_state.json"
 _SCHEDULER_JOBS_PENDING: set[str] = set()
 _SCHEDULER_JOBS_RUNNING: set[str] = set()
 _SCHEDULER_LISTENER_INSTALLED = False
+_SYSTEM_SCHEDULER_JOB_NAMES = {
+    "log_cleaner": "日志清理",
+}
 
 
 def _avatar_path() -> Optional[Path]:
@@ -1994,7 +1997,7 @@ async def system_status(user=Depends(_auth)):
             else:
                 plugin_id = None
                 plugin_label = "平台"
-                job_label = jid
+                job_label = _SYSTEM_SCHEDULER_JOB_NAMES.get(jid, jid)
             sched_jobs.append({
                 "id": jid,
                 "name": job_label,
