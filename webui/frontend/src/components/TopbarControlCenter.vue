@@ -3,10 +3,13 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, getToken } from '../api'
 import { toast } from '../composables/toast'
+import logoWhite from '../assets/logo-white.png'
 
 const props = defineProps({
   online: Boolean,
   version: { type: String, default: '' },
+  latestVersion: { type: String, default: '' },
+  checkReleases: { type: Function, default: null },
   restarting: Boolean,
 })
 const emit = defineEmits(['restart', 'logout'])
@@ -31,6 +34,7 @@ const jobs = ref([])
 const about = ref(null)
 const aboutBusy = ref(false)
 const selectedVersion = ref(null)
+const releaseNoteHtml = ref('')
 let logsWs = null
 let logsReconnect = null
 let noticeTimer = null
@@ -205,7 +209,19 @@ async function loadAbout() {
   aboutBusy.value = true
   selectedVersion.value = null
   try {
-    about.value = await api.getAbout()
+    const [info, releases] = await Promise.all([
+      api.getAbout(),
+      props.checkReleases?.(true),
+    ])
+    if (Array.isArray(releases) && releases.length) {
+      info.versions = releases.map(item => ({
+        ...item,
+        current: item.version === String(info.version || '').replace(/^v/i, ''),
+      }))
+      info.latest_version = releases[0].version
+      info.version_source = 'github'
+    }
+    about.value = info
   } catch (error) {
     toast.error(`关于信息加载失败：${error.message}`)
   } finally {
@@ -223,9 +239,19 @@ function formatUptime(seconds) {
 }
 
 async function openVersion(item) {
+  releaseNoteHtml.value = ''
   selectedVersion.value = { ...item, notes: '', loading: true }
   try {
-    const result = await api.getAboutVersion(item.version)
+    const result = Object.prototype.hasOwnProperty.call(item, 'notes')
+      ? item
+      : await api.getAboutVersion(item.version)
+    const [{ marked }, { default: DOMPurify }] = await Promise.all([
+      import('marked'),
+      import('dompurify'),
+    ])
+    releaseNoteHtml.value = DOMPurify.sanitize(
+      marked.parse(result.notes || '', { gfm: true, breaks: false }),
+    )
     selectedVersion.value = { ...result, loading: false }
   } catch (error) {
     selectedVersion.value = { ...item, notes: `读取失败：${error.message}`, loading: false }
@@ -441,7 +467,9 @@ onUnmounted(() => {
           <div v-if="aboutBusy" class="empty">正在读取平台信息…</div>
           <template v-else-if="about">
             <section class="about-hero">
-              <div class="about-mark">AW</div>
+              <div class="about-mark">
+                <img :src="logoWhite" alt="AWBotNest Logo">
+              </div>
               <div>
                 <h2>{{ about.name }}</h2>
                 <p>插件化机器人平台</p>
@@ -476,7 +504,7 @@ onUnmounted(() => {
                 <div v-for="item in about.versions" :key="item.version" class="version-row">
                   <div>
                     <strong>v{{ item.version }}</strong>
-                    <span v-if="item.version === about.latest_version" class="latest-badge">最新版本</span>
+                    <span v-if="item.version === (latestVersion || about.latest_version)" class="latest-badge">最新版本</span>
                     <span v-if="item.current" class="current-badge">当前版本</span>
                   </div>
                   <button class="btn" @click="openVersion(item)">查看更新内容</button>
@@ -493,7 +521,9 @@ onUnmounted(() => {
             <strong>v{{ selectedVersion.version }} 更新内容</strong>
             <button @click="selectedVersion = null">×</button>
           </header>
-          <pre>{{ selectedVersion.loading ? '正在读取更新内容…' : (selectedVersion.notes || '这个版本暂时没有更新说明。') }}</pre>
+          <div v-if="selectedVersion.loading" class="release-note-state">正在读取更新内容…</div>
+          <div v-else-if="selectedVersion.notes" class="release-note-content" v-html="releaseNoteHtml"></div>
+          <div v-else class="release-note-state">这个版本暂时没有更新说明。</div>
         </article>
       </div>
     </div>
@@ -617,8 +647,9 @@ onUnmounted(() => {
 .about-mark {
   width: 58px; height: 58px; flex: 0 0 58px; display: grid; place-items: center;
   border-radius: 16px; background: linear-gradient(145deg, var(--accent), var(--accent-2));
-  color: #fff; font-size: 18px; font-weight: 800; box-shadow: 0 10px 24px rgba(47,128,237,.22);
+  overflow: hidden; box-shadow: 0 10px 24px rgba(47,128,237,.22);
 }
+.about-mark img { width: 46px; height: 46px; object-fit: contain; }
 .about-hero h2 { margin: 0; font-size: 22px; }
 .about-hero p { margin: 4px 0 0; color: var(--text-secondary); }
 .about-current { margin-left: auto; padding: 6px 11px; border-radius: 99px; background: var(--accent-dim); color: var(--accent); font-weight: 700; }
@@ -644,7 +675,31 @@ onUnmounted(() => {
 .release-note { width: min(680px, 92vw); max-height: 76vh; overflow: hidden; border: 1px solid var(--border-light); border-radius: 15px; background: var(--bg-card); box-shadow: var(--shadow-float); }
 .release-note header { display: flex; align-items: center; justify-content: space-between; padding: 17px 20px; border-bottom: 1px solid var(--border); }
 .release-note header button { width: 32px; height: 32px; border: 0; background: transparent; color: var(--text-secondary); font-size: 22px; cursor: pointer; }
-.release-note pre { max-height: calc(76vh - 68px); margin: 0; padding: 20px; overflow: auto; color: var(--text-secondary); font: inherit; line-height: 1.75; white-space: pre-wrap; word-break: break-word; }
+.release-note-state, .release-note-content { max-height: calc(76vh - 68px); padding: 20px 22px; overflow: auto; color: var(--text-secondary); line-height: 1.75; }
+.release-note-state { min-height: 110px; }
+.release-note-content { overflow-wrap: anywhere; }
+.release-note-content :deep(> :first-child) { margin-top: 0; }
+.release-note-content :deep(> :last-child) { margin-bottom: 0; }
+.release-note-content :deep(h1),
+.release-note-content :deep(h2),
+.release-note-content :deep(h3) { margin: 22px 0 10px; color: var(--text-primary); line-height: 1.35; }
+.release-note-content :deep(h1) { padding-bottom: 9px; border-bottom: 1px solid var(--border); font-size: 22px; }
+.release-note-content :deep(h2) { font-size: 18px; }
+.release-note-content :deep(h3) { font-size: 16px; }
+.release-note-content :deep(p) { margin: 10px 0; }
+.release-note-content :deep(ul),
+.release-note-content :deep(ol) { margin: 8px 0 16px; padding-left: 25px; }
+.release-note-content :deep(li) { margin: 5px 0; padding-left: 2px; }
+.release-note-content :deep(strong) { color: var(--text-primary); }
+.release-note-content :deep(a) { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+.release-note-content :deep(code) { padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font-family: var(--font-mono); font-size: .9em; }
+.release-note-content :deep(pre) { margin: 12px 0; padding: 13px 15px; overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-base); }
+.release-note-content :deep(pre code) { padding: 0; border: 0; background: transparent; }
+.release-note-content :deep(blockquote) { margin: 12px 0; padding: 4px 14px; border-left: 3px solid var(--accent); color: var(--text-muted); }
+.release-note-content :deep(hr) { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
+.release-note-content :deep(table) { width: 100%; margin: 12px 0; border-collapse: collapse; }
+.release-note-content :deep(th),
+.release-note-content :deep(td) { padding: 8px 10px; border: 1px solid var(--border); text-align: left; }
 @media (max-width: 768px) {
   .control-center { gap: 3px; }
   .control-btn, .avatar-btn { width: 34px; height: 34px; }

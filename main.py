@@ -64,18 +64,50 @@ def _acquire_instance_lock() -> None:
     _instance_lock_file = handle
 
 
-def _assert_web_port_available(host: str, port: int) -> None:
-    """启动账号和插件前确认 Web 端口可用，防止留下无界面的后台实例。"""
+def _web_port_available(host: str, port: int) -> bool:
+    """检查 Web 端口当前是否可以监听。"""
     import socket
 
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.bind((host, int(port)))
-    except OSError as exc:
-        raise RuntimeError(
-            f"Web 端口 {port} 已被占用，平台拒绝继续启动。"
-            "请先停止旧的 AWBotNest 进程，或在系统设置中明确修改端口。"
-        ) from exc
+        return True
+    except OSError:
+        return False
+
+
+async def _wait_for_web_port(
+    host: str,
+    port: int,
+    timeout: float = 120,
+    interval: float = 2,
+) -> None:
+    """等待旧进程释放 Web 端口，防止短暂占用导致重启失败。"""
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    deadline = started + max(0, timeout)
+    next_notice = started
+
+    while not _web_port_available(host, port):
+        now = loop.time()
+        remaining = deadline - now
+        if remaining <= 0:
+            raise RuntimeError(
+                f"Web 端口 {port} 等待 {int(timeout)} 秒后仍被占用，平台已停止启动。"
+                "请确认旧的 AWBotNest 进程已经退出，或在系统设置中修改端口。"
+            )
+        if now >= next_notice:
+            logger.warning(
+                "Web 端口 %s 暂时被占用，等待旧进程退出后自动重试（最多再等 %s 秒）",
+                port,
+                max(1, int(remaining)),
+            )
+            next_notice = now + 10
+        await asyncio.sleep(min(max(0.1, interval), remaining))
+
+    waited = loop.time() - started
+    if waited >= 0.1:
+        logger.info("Web 端口 %s 已释放，平台继续启动", port)
 
 
 if __name__ == "__main__":
@@ -210,7 +242,7 @@ async def start_platform() -> None:
 async def main() -> None:
     from webui.api import start_web_ui
 
-    _assert_web_port_available("0.0.0.0", config.telegram.web_ui_port)
+    await _wait_for_web_port("0.0.0.0", config.telegram.web_ui_port)
 
     # 用 task + FIRST_EXCEPTION：start_platform 末尾 idle() 永不返回，
     # 若 web_ui 崩溃，必须立即感知并退出，而非被 gather 卡死等不到的 idle。

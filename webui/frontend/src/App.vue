@@ -109,31 +109,54 @@ function isNewer(remote, local) {
 
 // 查 GitHub 最新发布版本，与当前对比（失败静默，不影响使用）
 // 注意：GitHub 未鉴权接口限流 60 次/小时/IP，必须低频调用，不能跟随心跳
-async function checkUpdate() {
+async function checkUpdate(includeHistory = false) {
   if (!version.value) {
     // 还没拿到本地版本就先取一次，避免 onMounted 时序导致跳过
     try { const s = await api.status(); version.value = s.version || '' } catch { return }
     if (!version.value) return
   }
   try {
-    const r = await fetch('https://api.github.com/repos/AWdress/AWBotNest/releases/latest', {
+    const url = includeHistory
+      ? 'https://api.github.com/repos/AWdress/AWBotNest/releases?per_page=30'
+      : 'https://api.github.com/repos/AWdress/AWBotNest/releases/latest'
+    const r = await fetch(url, {
       headers: { Accept: 'application/vnd.github+json' },
+      cache: 'no-store',
     })
-    if (!r.ok) return
+    if (!r.ok) return []
     const data = await r.json()
-    const tag = data.tag_name || ''
-    if (tag) {
-      latestVersion.value = tag.replace(/^v/i, '')
-      hasUpdate.value = isNewer(latestVersion.value, version.value)
-      // 取一句更新说明：优先 release 标题（非纯版本号），否则取正文首个非空行，去掉 markdown 记号
-      let note = (data.name || '').trim()
-      if (!note || /^v?[\d.]+$/i.test(note)) {
-        note = ((data.body || '').split(/\r?\n/).map(l => l.trim()).find(Boolean) || '')
-          .replace(/^[#>\-*\s]+/, '').replace(/\*\*/g, '').trim()
-      }
-      latestNote.value = note.slice(0, 80)
-    }
-  } catch { /* 离线/限流忽略 */ }
+    const releases = (Array.isArray(data) ? data : [data])
+      .filter(item => item && !item.draft)
+      .map(item => {
+        const match = String(item.tag_name || '').match(/^v?(\d+(?:\.\d+)+)$/i)
+        if (!match) return null
+        return {
+          version: match[1],
+          name: item.name || '',
+          notes: String(item.body || '').slice(0, 12000),
+          url: item.html_url || '',
+          published_at: item.published_at || null,
+        }
+      })
+      .filter(Boolean)
+    if (releases[0]) syncVersionCheck(releases[0])
+    return releases
+  } catch {
+    return []
+  }
+}
+
+function syncVersionCheck(result = {}) {
+  const remote = String(result.version || '').replace(/^v/i, '')
+  if (!remote) return
+  latestVersion.value = remote
+  hasUpdate.value = isNewer(remote, version.value)
+  let note = String(result.name || '').trim()
+  if (!note || /^v?[\d.]+$/i.test(note)) {
+    note = (String(result.notes || '').split(/\r?\n/).map(line => line.trim()).find(Boolean) || '')
+      .replace(/^[#>\-*\s]+/, '').replace(/\*\*/g, '').trim()
+  }
+  latestNote.value = note.slice(0, 80)
 }
 
 // 导航项：内联 SVG 图标 + 文字
@@ -262,6 +285,8 @@ onMounted(async () => {
         <TopbarControlCenter
           :online="online"
           :version="version"
+          :latest-version="latestVersion"
+          :check-releases="checkUpdate"
           :restarting="restarting"
           @restart="restart"
           @logout="logout"
