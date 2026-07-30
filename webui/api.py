@@ -2335,8 +2335,7 @@ async def _mount_static():
 
 
 async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):
-    """启动 Web UI 服务"""
-    import asyncio
+    """启动 Web UI 服务；监听失败时退出整个平台，禁止留下无界面的插件进程。"""
     import uvicorn
 
     try:
@@ -2345,10 +2344,6 @@ async def start_web_ui(host: str = "0.0.0.0", port: int = 8000):
         logger.info("本地 Web 服务启动于 http://%s:%s", host, port)
         await server.serve()
         if not getattr(server, "started", False):
-            logger.error("Web 服务启动失败: 端口 %s 可能被占用", port)
-            while True:
-                await asyncio.sleep(360)
+            raise RuntimeError(f"Web 服务未能监听端口 {port}")
     except OSError as e:
-        logger.error("Web 服务启动失败（端口 %s 可能被占用）：%s", port, e)
-        while True:
-            await asyncio.sleep(3600)
+        raise RuntimeError(f"Web 服务启动失败，端口 {port} 可能被占用") from e

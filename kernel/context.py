@@ -10,6 +10,7 @@ PlatformContext —— 平台传给每个插件的「能力上下文」。
 """
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -204,6 +205,12 @@ class PlatformContext:
 
         # 已注册的处理器句柄列表：(client, handler, group)
         self._handles: list[tuple[object, object, int]] = []
+        # Pyrogram 的 remove_handler 会异步等待 dispatcher 锁。停用时先关闭此门禁，
+        # 即使句柄尚未来得及从 dispatcher 删除，也不会再处理后续消息。
+        self._active = True
+        # 正在执行的异步消息处理任务。停用时取消，避免已发起的 AI/网络请求在插件
+        # 关闭后才返回并继续发送消息。
+        self._handler_tasks: set[asyncio.Task] = set()
         # teardown 时要调用的清理回调（如取消定时任务）
         self._cleanups: list[Callable[[], Any]] = []
         # webhook 处理器（ctx.on_webhook 注册；一个插件一个）。热卸载/重载时清空。
@@ -585,13 +592,24 @@ class PlatformContext:
         async def wrapper(client, update, *args, **kwargs):
             from kernel import activity
             import inspect
+            if not self._active:
+                return None
             token = activity.set_current(pid)
             try:
                 # 兼容同步 handler：直接 await 非协程会每次触发都抛 TypeError，
                 # 导致同步 handler 永不执行、同 group 后续 handler 被跳过。
                 result = func(client, update, *args, **kwargs)
                 if inspect.iscoroutine(result):
-                    return await result
+                    task = asyncio.create_task(result)
+                    self._handler_tasks.add(task)
+                    try:
+                        return await task
+                    except asyncio.CancelledError:
+                        if not self._active:
+                            return None
+                        raise
+                    finally:
+                        self._handler_tasks.discard(task)
                 return result
             finally:
                 activity.reset_current(token)
@@ -659,6 +677,11 @@ class PlatformContext:
     # ──────────────────────────────────────────────
     def _unregister_all(self) -> None:
         """注销本插件所有处理器并执行清理回调"""
+        self._active = False
+        for task in tuple(self._handler_tasks):
+            if not task.done():
+                task.cancel()
+        self._handler_tasks.clear()
         for client, handler, group in self._handles:
             try:
                 client.remove_handler(handler, group)
@@ -666,7 +689,6 @@ class PlatformContext:
                 _root_logger.warning("注销 handler 失败 [%s]: %r", self.plugin_id, e)
         self._handles.clear()
 
-        import asyncio
         import inspect
         for fn in self._cleanups:
             try:

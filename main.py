@@ -14,6 +14,72 @@ import sys
 import asyncio
 import os
 import json
+from pathlib import Path
+
+
+_PROJECT_ROOT = Path(__file__).resolve().parent
+os.chdir(_PROJECT_ROOT)
+_instance_lock_file = None
+
+
+def _acquire_instance_lock() -> None:
+    """同一份 data 目录只允许一个平台进程运行。"""
+    global _instance_lock_file
+    lock_path = _PROJECT_ROOT / "data" / "awbotnest.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    try:
+        handle.seek(0)
+        owner = handle.read().strip()
+    except OSError:
+        # Windows 对已锁定的首字节连读取也会拒绝；不影响后续非阻塞加锁判断。
+        owner = ""
+
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            if lock_path.stat().st_size == 0:
+                handle.write(" ")
+                handle.flush()
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError) as exc:
+        handle.close()
+        detail = f"（{owner}）" if owner else ""
+        raise RuntimeError(
+            f"检测到另一套 AWBotNest 正在运行{detail}，本次启动已停止。"
+            "请不要同时使用 uv、python、systemd 或多个容器重复启动。"
+        ) from exc
+
+    handle.seek(0)
+    handle.truncate()
+    handle.write(f"PID {os.getpid()}，启动命令：{' '.join(sys.argv)}")
+    handle.flush()
+    _instance_lock_file = handle
+
+
+def _assert_web_port_available(host: str, port: int) -> None:
+    """启动账号和插件前确认 Web 端口可用，防止留下无界面的后台实例。"""
+    import socket
+
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, int(port)))
+    except OSError as exc:
+        raise RuntimeError(
+            f"Web 端口 {port} 已被占用，平台拒绝继续启动。"
+            "请先停止旧的 AWBotNest 进程，或在系统设置中明确修改端口。"
+        ) from exc
+
+
+if __name__ == "__main__":
+    _acquire_instance_lock()
 
 # A restore is applied before config, databases, Telegram sessions, or plugins are opened.
 try:
@@ -24,7 +90,7 @@ try:
 except Exception as _restore_error:  # noqa: BLE001 - keep the rolled-back platform bootable
     print(f"[restore] 待恢复备份应用失败，已保留原数据: {_restore_error}")
 
-_base = os.getcwd()
+_base = str(_PROJECT_ROOT)
 os.makedirs(os.path.join(_base, "data"), exist_ok=True)
 
 # 插件运行时依赖目录（pip --target 装到这里，随 data/ 卷持久化，容器重建不丢）。
@@ -143,6 +209,8 @@ async def start_platform() -> None:
 
 async def main() -> None:
     from webui.api import start_web_ui
+
+    _assert_web_port_available("0.0.0.0", config.telegram.web_ui_port)
 
     # 用 task + FIRST_EXCEPTION：start_platform 末尾 idle() 永不返回，
     # 若 web_ui 崩溃，必须立即感知并退出，而非被 gather 卡死等不到的 idle。
