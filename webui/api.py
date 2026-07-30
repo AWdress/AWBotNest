@@ -766,7 +766,7 @@ async def get_chat_info(chat_id: str, session: str = "", user=Depends(_auth)):
     # 解析 chat_id：如果是纯数字字符串（含负号），转为 int；否则当作 username
     try:
         cid = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
-    except ValueError:
+    except (ValueError, OverflowError):
         cid = chat_id
 
     try:
@@ -2564,7 +2564,7 @@ async def api_get_chat_info(chat_id: str, session: str = "", user=Depends(_api_k
 
     try:
         cid = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
-    except ValueError:
+    except (ValueError, OverflowError):
         cid = chat_id
 
     try:

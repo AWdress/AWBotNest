@@ -703,8 +703,9 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .control-center { gap: 3px; }
   .control-btn, .avatar-btn { width: 34px; height: 34px; }
-  .control-pop { position: fixed; top: 56px; right: 8px; width: calc(100vw - 16px); max-height: calc(100dvh - 132px); }
-  .notifications-pop { width: calc(100vw - 16px); }
+  .control-pop { position: fixed; top: 56px; right: 8px; width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 132px); box-sizing: border-box; }
+  .notifications-pop { width: calc(100vw - 16px); max-width: calc(100vw - 16px); box-sizing: border-box; }
+  .notice-content { word-break: break-word; overflow-wrap: anywhere; }
   .control-modal-mask { padding: 0; }
   .control-modal { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
   .control-modal .modal-body { padding: 14px; }
