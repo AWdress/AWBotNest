@@ -18,8 +18,6 @@ const profile = ref({ username: '管理员', avatar_url: '' })
 const notices = ref([])
 const unread = ref(0)
 const expandedNotice = ref('')
-const avatarInput = ref(null)
-const avatarBusy = ref(false)
 const logs = ref([])
 const logLevel = ref('ALL')
 const logSearch = ref('')
@@ -62,20 +60,8 @@ async function loadProfile() {
   try { profile.value = await api.getUiProfile() } catch {}
 }
 
-async function changeAvatar(event) {
-  const file = event.target.files?.[0]
-  event.target.value = ''
-  if (!file) return
-  avatarBusy.value = true
-  try {
-    const result = await api.uploadAvatar(file)
-    profile.value.avatar_url = result.avatar_url
-    toast.success('头像已更新')
-  } catch (error) {
-    toast.error(`头像更新失败：${error.message}`)
-  } finally {
-    avatarBusy.value = false
-  }
+function syncProfile(event) {
+  if (event.detail) profile.value = event.detail
 }
 
 async function loadNotifications(markRead = false) {
@@ -276,6 +262,7 @@ onMounted(() => {
   noticeTimer = setInterval(loadNotifications, 30000)
   document.addEventListener('click', closePanels)
   document.addEventListener('keydown', onKeydown)
+  window.addEventListener('ui-profile-updated', syncProfile)
 })
 
 onUnmounted(() => {
@@ -284,6 +271,7 @@ onUnmounted(() => {
   disconnectLogs()
   document.removeEventListener('click', closePanels)
   document.removeEventListener('keydown', onKeydown)
+  window.removeEventListener('ui-profile-updated', syncProfile)
 })
 </script>
 
@@ -341,15 +329,12 @@ onUnmounted(() => {
 
     <div v-if="panel === 'user'" class="control-pop user-pop">
       <div class="user-profile">
-        <button class="avatar-large" :disabled="avatarBusy" title="修改头像" @click="avatarInput?.click()">
+        <div class="avatar-large">
           <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像"
                @error="profile.avatar_url = ''">
           <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
-          <i>{{ avatarBusy ? '上传中' : '修改' }}</i>
-        </button>
+        </div>
         <div><small>管理员</small><strong>{{ profile.username }}</strong></div>
-        <input ref="avatarInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif"
-               hidden @change="changeAvatar">
       </div>
       <div class="user-menu">
         <button @click="goSettings">系统设置</button>
@@ -470,8 +455,7 @@ onUnmounted(() => {
 .notice-body small { color: var(--text-muted); }
 .user-pop { width: 280px; }
 .user-profile { display: flex; align-items: center; gap: 12px; padding: 18px; border-bottom: 1px solid var(--border); }
-.avatar-large { width: 58px; height: 58px; position: relative; padding: 0; overflow: hidden; flex: 0 0 58px; border: 1px solid var(--accent); border-radius: 13px; background: linear-gradient(145deg, var(--accent), var(--accent-2)); color: #fff; cursor: pointer; }
-.avatar-large i { position: absolute; inset: auto 0 0; padding: 2px; background: rgba(0,0,0,.7); font-size: 9px; font-style: normal; }
+.avatar-large { width: 58px; height: 58px; display: grid; place-items: center; overflow: hidden; flex: 0 0 58px; border: 1px solid var(--accent); border-radius: 13px; background: linear-gradient(145deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; }
 .user-profile small, .user-profile strong { display: block; }
 .user-profile small { color: var(--accent); }
 .user-menu { display: grid; padding: 8px; }

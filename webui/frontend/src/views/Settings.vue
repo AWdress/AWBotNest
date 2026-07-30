@@ -21,6 +21,9 @@ const s = ref(null)
 const loading = ref(true)
 const saving = ref(false)
 const err = ref('')          // 仅用于加载失败（页面无数据时内联提示）
+const profile = ref({ username: '管理员', avatar_url: '' })
+const profileAvatarInput = ref(null)
+const profileAvatarBusy = ref(false)
 
 // 未保存改动检测：快照 vs 当前
 const savedSnap = ref('')
@@ -51,6 +54,33 @@ const notificationSettingKeys = [
   'NOTIFICATION_CHANNELS', 'BOT_TOKEN', 'BOT_NAME', 'BOTS',
   'DEFAULT_BOT_ID', 'DEFAULT_BOT_CHAT_ID',
 ]
+
+async function loadProfile() {
+  try {
+    profile.value = await api.getUiProfile()
+  } catch {
+    // 个人资料加载失败不影响其他系统设置。
+  }
+}
+
+async function changeProfileAvatar(event) {
+  const file = event.target.files?.[0]
+  event.target.value = ''
+  if (!file) return
+  profileAvatarBusy.value = true
+  try {
+    const result = await api.uploadAvatar(file)
+    profile.value.avatar_url = result.avatar_url
+    window.dispatchEvent(new CustomEvent('ui-profile-updated', {
+      detail: { ...profile.value },
+    }))
+    toast.success('头像已更新')
+  } catch (error) {
+    toast.error(`头像更新失败：${error.message}`)
+  } finally {
+    profileAvatarBusy.value = false
+  }
+}
 // 用户又开始改动时，隐藏“需重启”横幅（新改动得重新保存）
 watch(dirty, (d) => { if (d) restartHint.value = false })
 
@@ -1120,7 +1150,7 @@ async function refreshNotificationSync(change) {
 }
 
 onMounted(() => {
-  load(); loadUsername()
+  load(); loadUsername(); loadProfile()
   stopNotificationSync = subscribeNotificationSync(refreshNotificationSync)
 })
 onUnmounted(() => {
@@ -1188,6 +1218,31 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 控制台登录 -->
+      <div v-show="tab === 'login'" class="card profile-card">
+        <div class="card-title">个人信息</div>
+        <div class="profile-settings">
+          <div class="profile-avatar">
+            <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像"
+                 @error="profile.avatar_url = ''">
+            <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
+          </div>
+          <div class="profile-main">
+            <strong>{{ profile.username }}</strong>
+            <span class="muted">控制台管理员</span>
+            <div class="row gap profile-actions">
+              <button class="btn btn-primary" :disabled="profileAvatarBusy"
+                      @click="profileAvatarInput?.click()">
+                {{ profileAvatarBusy ? '上传中…' : '上传新头像' }}
+              </button>
+              <span class="hint muted">支持 JPG、PNG、GIF、WebP，最大 2 MB</span>
+            </div>
+            <input ref="profileAvatarInput" type="file"
+                   accept="image/png,image/jpeg,image/webp,image/gif"
+                   hidden @change="changeProfileAvatar">
+          </div>
+        </div>
+      </div>
+
       <div v-show="tab === 'login'" class="card">
         <div class="card-title">控制台登录</div>
         <div class="hint muted">修改登录本控制台的用户名和密码（默认 admin / password）。</div>
@@ -2032,6 +2087,18 @@ onBeforeRouteLeave(async () => {
 .alert.ok { background: var(--accent-2-dim); color: var(--accent-2); }
 .card { display: flex; flex-direction: column; gap: 14px; }
 .card-title { font-size: 14px; font-weight: 600; color: var(--accent); }
+.profile-card { margin-bottom: 16px; }
+.profile-settings { display: flex; align-items: center; gap: 18px; }
+.profile-avatar {
+  width: 82px; height: 82px; flex: 0 0 82px; overflow: hidden;
+  display: grid; place-items: center; border: 1px solid var(--border-light);
+  border-radius: 18px; background: linear-gradient(145deg, var(--accent), var(--accent-2));
+  color: #fff; font-size: 20px; font-weight: 700;
+}
+.profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.profile-main { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.profile-main > strong { font-size: 17px; }
+.profile-actions { margin-top: 8px; flex-wrap: wrap; }
 .hint { font-size: 12px; }
 .foot { margin-top: 16px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -2811,6 +2878,9 @@ onBeforeRouteLeave(async () => {
 
 @media (max-width: 600px) {
   .grid2 { grid-template-columns: 1fr; }
+  .profile-settings { align-items: flex-start; }
+  .profile-avatar { width: 68px; height: 68px; flex-basis: 68px; border-radius: 15px; }
+  .profile-actions { align-items: flex-start; flex-direction: column; }
   .bot-grid { grid-template-columns: 1fr; }
   .channel-grid { grid-template-columns: 1fr; }
   .ai-provider-grid,
