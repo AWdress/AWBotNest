@@ -33,7 +33,7 @@ const filtered = computed(() => {
 function wsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const token = getToken()
-  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(token)}`
+  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(token)}&batch_history=1`
 }
 
 function connect() {
@@ -44,6 +44,15 @@ function connect() {
     if (paused.value) return
     try {
       const item = JSON.parse(e.data)
+      if (item.type === 'history' && Array.isArray(item.logs)) {
+        logs.value = item.logs.slice(0, 1000)
+        seenLogs.clear()
+        logs.value.forEach(entry => seenLogs.add(
+          entry.id || `${entry.timestamp}|${entry.level}|${entry.source}|${entry.msg}`,
+        ))
+        nextTick(scrollToLatest)
+        return
+      }
       const key = item.id || `${item.timestamp}|${item.level}|${item.source}|${item.msg}`
       if (seenLogs.has(key)) return
       seenLogs.add(key)
@@ -145,7 +154,7 @@ onUnmounted(() => {
 .log-box {
   flex: 1; overflow-y: auto; padding: 14px 16px;
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12.5px;
-  line-height: 1.7; background: #07090f;
+  line-height: 1.7; background: #07090f; overflow-anchor: none;
 }
 .center { text-align: center; padding: 40px; }
 .log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }

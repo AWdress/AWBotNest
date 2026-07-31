@@ -451,7 +451,7 @@ function logsScrollLatest() {
 
 function logsWsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(getToken())}`
+  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(getToken())}&batch_history=1`
 }
 
 function logsConnect() {
@@ -460,6 +460,17 @@ function logsConnect() {
   logsWs.onmessage = (e) => {
     try {
       const item = JSON.parse(e.data)
+      if (item.type === 'history' && Array.isArray(item.logs)) {
+        logsList.value = logsTarget.value
+          ? item.logs.filter(entry => matchesPlugin(entry, logsTarget.value.id)).slice(0, 1000)
+          : []
+        logsSeen.clear()
+        logsList.value.forEach(entry => logsSeen.add(
+          entry.id || `${entry.timestamp}|${entry.level}|${entry.source}|${entry.msg}`,
+        ))
+        nextTick(logsScrollLatest)
+        return
+      }
       if (logsTarget.value && matchesPlugin(item, logsTarget.value.id)) {
         const key = item.id || `${item.timestamp}|${item.level}|${item.source}|${item.msg}`
         if (logsSeen.has(key)) return
@@ -2176,6 +2187,7 @@ onUnmounted(() => {
   flex: 1; min-height: 280px; max-height: 56vh; overflow-y: auto;
   padding: 12px 14px; border-radius: var(--radius-sm); background: #07090f;
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12px; line-height: 1.65;
+  overflow-anchor: none;
 }
 .logs-modal .log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }
 .logs-modal .log-line:hover { background: rgba(255,255,255,0.03); }

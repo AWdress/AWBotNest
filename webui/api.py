@@ -2694,8 +2694,11 @@ async def logs_ws(ws: WebSocket):
     history = log_stream.recent_logs()
     q = log_stream.subscribe()
     try:
-        for item in history:
-            await ws.send_json(item)
+        if ws.query_params.get("batch_history") == "1":
+            await ws.send_json({"type": "history", "logs": list(reversed(history))})
+        else:
+            for item in history:
+                await ws.send_json(item)
         # 再持续推送
         while True:
             item = await q.get()

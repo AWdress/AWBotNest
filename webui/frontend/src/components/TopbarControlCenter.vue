@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, getToken } from '../api'
 import { toast } from '../composables/toast'
@@ -40,6 +40,7 @@ let logsReconnect = null
 let noticeTimer = null
 let jobsTimer = null
 const seenLogs = new Set()
+const quickLogsBox = ref(null)
 
 const modalTitle = computed(() => ({
   logs: '实时日志',
@@ -148,7 +149,11 @@ function closeModal() {
 
 function logsWsUrl() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(getToken())}`
+  return `${proto}://${location.host}/api/logs/ws?token=${encodeURIComponent(getToken())}&batch_history=1`
+}
+
+function scrollQuickLogsToLatest() {
+  if (quickLogsBox.value) quickLogsBox.value.scrollTop = 0
 }
 
 function connectLogs() {
@@ -159,6 +164,15 @@ function connectLogs() {
     if (logPaused.value) return
     try {
       const item = JSON.parse(event.data)
+      if (item.type === 'history' && Array.isArray(item.logs)) {
+        logs.value = item.logs.slice(0, 1000)
+        seenLogs.clear()
+        logs.value.forEach(entry => seenLogs.add(
+          entry.id || `${entry.timestamp}|${entry.level}|${entry.source}|${entry.msg}`,
+        ))
+        nextTick(scrollQuickLogsToLatest)
+        return
+      }
       const key = item.id || `${item.timestamp}|${item.level}|${item.source}|${item.msg}`
       if (seenLogs.has(key)) return
       seenLogs.add(key)
@@ -170,6 +184,7 @@ function connectLogs() {
           entry.id || `${entry.timestamp}|${entry.level}|${entry.source}|${entry.msg}`,
         ))
       }
+      nextTick(scrollQuickLogsToLatest)
     } catch {}
   }
   logsWs.onclose = () => {
@@ -414,7 +429,7 @@ onUnmounted(() => {
       <section class="control-modal">
         <header><strong>{{ modalTitle }}</strong><button @click="closeModal">×</button></header>
 
-        <div v-if="modal === 'logs'" class="modal-body logs-modal">
+        <div v-if="modal === 'logs'" class="modal-body logs-modal" ref="quickLogsBox">
           <div class="log-toolbar">
             <span class="live-state" :class="{ on: logConnected }">
               {{ logPaused ? '已暂停' : (logConnected ? '实时' : '连接中') }}
@@ -611,6 +626,7 @@ onUnmounted(() => {
 .control-modal > header button { width: 34px; height: 34px; border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); font-size: 23px; cursor: pointer; }
 .control-modal > header button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .control-modal .modal-body { overflow-y: auto; padding: 18px 22px 22px; }
+.control-modal .logs-modal { overflow-anchor: none; }
 .log-toolbar { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
 .log-toolbar .select { width: 130px; }
 .log-toolbar .input { flex: 1; }
