@@ -16,15 +16,17 @@
 
 ## 安装运行（推荐 Docker）
 
-确保装好了 [Docker](https://docs.docker.com/get-docker/)，然后在项目目录执行：
+在 Linux 服务器执行下面这一条命令：
 
 ```bash
-docker compose up -d
+curl -fsSL https://raw.githubusercontent.com/AWdress/AWBotNest/main/install.sh | sudo bash
 ```
 
-启动后打开浏览器访问 **http://服务器IP:18001** 即可。
+运行后会直接询问安装位置和访问端口，直接按回车会使用默认目录 `/opt/AWBotNest` 和默认端口 `18001`。脚本会自动检查并安装 Docker、拉取最新镜像、创建持久化目录并启动平台。
 
-> 想换端口、用 MySQL 等，编辑 `docker-compose.yml`。运行数据都存在 `data/` 目录，删容器不丢数据。
+运行数据会保存在你选择的安装目录中。以后重新执行同一条命令并选择原来的目录，即可拉取最新镜像并更新容器，已有数据不会丢失。
+
+> 如果已经安装 Docker，脚本会直接使用，不会重复安装。需要调整代理、数据库或其他高级选项时，可以编辑所选安装目录里的 `docker-compose.yml`，然后在该目录执行 `docker compose up -d`。
 
 ## 第一次使用
 
