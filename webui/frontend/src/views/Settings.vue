@@ -4,6 +4,7 @@ import { onBeforeRouteLeave } from 'vue-router'
 import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
+import { applyUiProfile, uiProfile } from '../composables/uiProfile'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 
 const tab = ref('login')   // login | notify | ai | api | system | maint
@@ -21,7 +22,7 @@ const s = ref(null)
 const loading = ref(true)
 const saving = ref(false)
 const err = ref('')          // 仅用于加载失败（页面无数据时内联提示）
-const profile = ref({ username: '管理员', avatar_url: '' })
+const profile = uiProfile
 const profileAvatarInput = ref(null)
 const profileAvatarBusy = ref(false)
 
@@ -55,14 +56,6 @@ const notificationSettingKeys = [
   'DEFAULT_BOT_ID', 'DEFAULT_BOT_CHAT_ID',
 ]
 
-async function loadProfile() {
-  try {
-    profile.value = await api.getUiProfile()
-  } catch {
-    // 个人资料加载失败不影响其他系统设置。
-  }
-}
-
 async function changeProfileAvatar(event) {
   const file = event.target.files?.[0]
   event.target.value = ''
@@ -70,10 +63,7 @@ async function changeProfileAvatar(event) {
   profileAvatarBusy.value = true
   try {
     const result = await api.uploadAvatar(file)
-    profile.value.avatar_url = result.avatar_url
-    window.dispatchEvent(new CustomEvent('ui-profile-updated', {
-      detail: { ...profile.value },
-    }))
+    await applyUiProfile({ ...profile.value, avatar_url: result.avatar_url })
     toast.success('头像已更新')
   } catch (error) {
     toast.error(`头像更新失败：${error.message}`)
@@ -1110,20 +1100,25 @@ function goTab(k) {
 }
 
 // ── 登录凭据修改 ──
-const cred = ref({ old_password: '', new_username: '', new_password: '' })
+const cred = ref({
+  old_password: '',
+  new_username: profile.value.username,
+  new_password: '',
+})
 const credBusy = ref(false)
 const credMsg = ref('')
 const credErr = ref('')
-
-async function loadUsername() {
-  try { const st = await api.authStatus(); cred.value.new_username = st.username || '' } catch {}
-}
 
 async function saveCred() {
   credBusy.value = true; credMsg.value = ''; credErr.value = ''
   if (!cred.value.old_password) { credErr.value = '请输入当前密码'; credBusy.value = false; return }
   try {
-    await api.changeCredentials(cred.value.old_password, cred.value.new_username, cred.value.new_password)
+    const result = await api.changeCredentials(
+      cred.value.old_password,
+      cred.value.new_username,
+      cred.value.new_password,
+    )
+    await applyUiProfile({ ...profile.value, username: result.username })
     credMsg.value = '登录凭据已更新。下次登录用新账号密码。'
     cred.value.old_password = ''; cred.value.new_password = ''
   } catch (e) { credErr.value = e.message } finally { credBusy.value = false }
@@ -1150,7 +1145,7 @@ async function refreshNotificationSync(change) {
 }
 
 onMounted(() => {
-  load(); loadUsername(); loadProfile()
+  load()
   stopNotificationSync = subscribeNotificationSync(refreshNotificationSync)
 })
 onUnmounted(() => {
@@ -1222,8 +1217,7 @@ onBeforeRouteLeave(async () => {
         <div class="card-title">个人信息</div>
         <div class="profile-settings">
           <div class="profile-avatar">
-            <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像"
-                 @error="profile.avatar_url = ''">
+            <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像">
             <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
           </div>
           <div class="profile-main">

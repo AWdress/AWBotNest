@@ -9,6 +9,7 @@ import TopbarControlCenter from './components/TopbarControlCenter.vue'
 import logoWhite from './assets/logo-white.png'
 import { confirm } from './composables/confirm'
 import { toast } from './composables/toast'
+import { clearUiProfile, loadUiProfile } from './composables/uiProfile'
 
 const route = useRoute()
 const router = useRouter()
@@ -21,6 +22,7 @@ const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
+const restoringSession = ref(!!getToken())
 const mustChangePwd = ref(false)   // 仍是默认密码：强制改密后才放进主界面
 const npwd = ref('')
 const npwd2 = ref('')
@@ -28,15 +30,30 @@ const pwdBusy = ref(false)
 const pwdErr = ref('')
 
 async function onAuthed() {
-  authed.value = true
+  restoringSession.value = true
   api.ensureResourceToken().catch(() => {})   // 确保资源 Cookie 就绪（加载 vue 模式插件前端用）
   try {
-    const st = await api.authStatus()
+    const [st] = await Promise.all([
+      api.authStatus(),
+      loadUiProfile(true),
+    ])
     mustChangePwd.value = !!st.must_change_password
-  } catch { /* ignore */ }
-  ping().then(checkUpdate)
+    authed.value = true
+    ping().then(checkUpdate)
+  } catch (error) {
+    authed.value = false
+    if (getToken()) toast.error(`读取管理员资料失败：${error.message}`)
+  } finally {
+    restoringSession.value = false
+  }
 }
-function logout() { setToken(''); authed.value = false; mustChangePwd.value = false }
+function logout() {
+  setToken('')
+  clearUiProfile()
+  authed.value = false
+  restoringSession.value = false
+  mustChangePwd.value = false
+}
 
 async function submitNewPwd() {
   pwdErr.value = ''
@@ -48,6 +65,7 @@ async function submitNewPwd() {
     await api.changeCredentials('password', '', npwd.value)
     // 改密后令牌失效，需重新登录
     setToken('')
+    clearUiProfile()
     mustChangePwd.value = false
     authed.value = false
     toast.success('密码已修改，请用新密码重新登录')
@@ -79,12 +97,13 @@ async function restart() {
     restarting.value = false
   }
 }
-setUnauthorizedHandler(() => { authed.value = false })
+setUnauthorizedHandler(() => {
+  clearUiProfile()
+  authed.value = false
+  restoringSession.value = false
+})
 
-// 刷新后恢复登录态：localStorage 有令牌就乐观进主界面，
-// 令牌失效时 ping() 的受保护接口会返回 401，由上面的 unauthorized 回调踢回登录页。
-if (getToken()) { authed.value = true }
-
+// 刷新后先验证令牌并读取管理员资料，完成后再显示主界面。
 async function ping() {
   try {
     const s = await api.status()
@@ -179,7 +198,7 @@ const icons = {
 onMounted(async () => {
   // 恢复登录态（localStorage 令牌）后补种资源 Cookie，并补查强制改密状态——
   // 若这里不查 authStatus，刷新页面后 mustChangePwd 恒为 false，首次改密门会被直接绕过。
-  if (authed.value) {
+  if (getToken()) {
     await onAuthed()
   }
   setInterval(() => { if (authed.value) ping() }, 10000)
@@ -189,7 +208,15 @@ onMounted(async () => {
 </script>
 
 <template>
-  <Login v-if="!authed" @authed="onAuthed" />
+  <div v-if="restoringSession" class="force-bg">
+    <div class="force-card profile-loading-card">
+      <img :src="logoWhite" class="force-logo" alt="AWBotNest" />
+      <div class="force-title">正在读取管理资料</div>
+      <div class="force-sub">头像和用户名准备好后会直接进入控制台。</div>
+    </div>
+  </div>
+
+  <Login v-else-if="!authed" @authed="onAuthed" />
 
   <!-- 强制首次改密：仍是默认密码时，必须改密才能进主界面 -->
   <div v-else-if="mustChangePwd" class="force-bg">
@@ -520,4 +547,9 @@ onMounted(async () => {
 .force-btn:disabled { opacity: 0.6; cursor: not-allowed; }
 .force-foot { margin-top: 16px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
 .force-foot:hover { color: var(--danger); }
+.profile-loading-card::after { content: ''; width: 96px; height: 3px; border-radius: 999px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent);
+  animation: profile-loading 1.15s ease-in-out infinite; }
+@keyframes profile-loading { 0%, 100% { transform: scaleX(.35); opacity: .45; }
+  50% { transform: scaleX(1); opacity: 1; } }
 </style>

@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api, getToken } from '../api'
 import { toast } from '../composables/toast'
+import { uiProfile } from '../composables/uiProfile'
 import logoWhite from '../assets/logo-white.png'
 
 const props = defineProps({
@@ -17,7 +18,7 @@ const router = useRouter()
 
 const panel = ref('')
 const modal = ref('')
-const profile = ref({ username: '管理员', avatar_url: '' })
+const profile = uiProfile
 const notices = ref([])
 const unread = ref(0)
 const expandedNotice = ref('')
@@ -65,14 +66,6 @@ function togglePanel(name) {
 
 function closePanels(event) {
   if (!event?.target?.closest?.('.control-center')) panel.value = ''
-}
-
-async function loadProfile() {
-  try { profile.value = await api.getUiProfile() } catch {}
-}
-
-function syncProfile(event) {
-  if (event.detail) profile.value = event.detail
 }
 
 async function loadNotifications() {
@@ -356,12 +349,10 @@ function onKeydown(event) {
 }
 
 onMounted(() => {
-  loadProfile()
   loadNotifications()
   noticeTimer = setInterval(loadNotifications, 30000)
   document.addEventListener('click', closePanels)
   document.addEventListener('keydown', onKeydown)
-  window.addEventListener('ui-profile-updated', syncProfile)
 })
 
 onUnmounted(() => {
@@ -370,7 +361,6 @@ onUnmounted(() => {
   disconnectLogs()
   document.removeEventListener('click', closePanels)
   document.removeEventListener('keydown', onKeydown)
-  window.removeEventListener('ui-profile-updated', syncProfile)
 })
 </script>
 
@@ -391,8 +381,7 @@ onUnmounted(() => {
     </button>
     <button class="avatar-btn" :class="{ active: panel === 'user' }"
             title="管理员菜单" @click="togglePanel('user')">
-      <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像"
-           @error="profile.avatar_url = ''">
+      <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像">
       <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
     </button>
 
@@ -438,8 +427,7 @@ onUnmounted(() => {
     <div v-if="panel === 'user'" class="control-pop user-pop">
       <div class="user-profile">
         <div class="avatar-large">
-          <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像"
-               @error="profile.avatar_url = ''">
+          <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像">
           <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
         </div>
         <div><small>管理员</small><strong>{{ profile.username }}</strong></div>
