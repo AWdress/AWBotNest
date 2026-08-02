@@ -21,6 +21,7 @@ const profile = ref({ username: '管理员', avatar_url: '' })
 const notices = ref([])
 const unread = ref(0)
 const expandedNotice = ref('')
+const notificationAction = ref('')
 const logs = ref([])
 const logLevel = ref('ALL')
 const logSearch = ref('')
@@ -39,6 +40,7 @@ let logsWs = null
 let logsReconnect = null
 let noticeTimer = null
 let jobsTimer = null
+let notificationLoadVersion = 0
 const seenLogs = new Set()
 const quickLogsBox = ref(null)
 
@@ -58,7 +60,7 @@ const filteredLogs = computed(() => logs.value.filter(item => {
 
 function togglePanel(name) {
   panel.value = panel.value === name ? '' : name
-  if (panel.value === 'notifications') loadNotifications(true)
+  if (panel.value === 'notifications') loadNotifications()
 }
 
 function closePanels(event) {
@@ -73,36 +75,55 @@ function syncProfile(event) {
   if (event.detail) profile.value = event.detail
 }
 
-async function loadNotifications(markRead = false) {
+async function loadNotifications() {
+  const loadVersion = ++notificationLoadVersion
   try {
     const result = await api.getNotifications()
+    if (loadVersion !== notificationLoadVersion || notificationAction.value) return
     notices.value = result.notifications || []
     unread.value = result.unread || 0
-    if (markRead && unread.value) {
-      await api.readNotifications()
-      unread.value = 0
-      notices.value.forEach(item => { item.unread = false })
-    }
   } catch {}
 }
 
 async function markAllRead() {
+  if (notificationAction.value) return
+  if (!unread.value) {
+    toast.info('当前没有未读通知')
+    return
+  }
+  const count = unread.value
+  notificationAction.value = 'read'
+  notificationLoadVersion += 1
   try {
     await api.readNotifications()
     unread.value = 0
     notices.value.forEach(item => { item.unread = false })
+    toast.success(`已将 ${count} 条通知标记为已读`)
   } catch (error) {
-    toast.error(error.message)
+    toast.error(`标记已读失败：${error.message}`)
+  } finally {
+    notificationAction.value = ''
   }
 }
 
 async function clearNotifications() {
+  if (notificationAction.value) return
+  if (!notices.value.length) {
+    toast.info('通知中心已经是空的')
+    return
+  }
+  notificationAction.value = 'clear'
+  notificationLoadVersion += 1
   try {
     await api.clearNotifications()
     notices.value = []
     unread.value = 0
+    expandedNotice.value = ''
+    toast.success('通知已全部清空')
   } catch (error) {
-    toast.error(error.message)
+    toast.error(`清空通知失败：${error.message}`)
+  } finally {
+    notificationAction.value = ''
   }
 }
 
@@ -388,7 +409,16 @@ onUnmounted(() => {
     <div v-if="panel === 'notifications'" class="control-pop notifications-pop">
       <div class="pop-head">
         <strong>通知中心</strong>
-        <span><button title="全部已读" @click="markAllRead">✓</button><button title="清空" @click="clearNotifications">⌫</button></span>
+        <span class="notice-actions">
+          <button class="read-action" :class="{ busy: notificationAction === 'read' }"
+                  :disabled="Boolean(notificationAction)" title="全部标记为已读" @click.stop="markAllRead">
+            {{ notificationAction === 'read' ? '…' : '✓' }}
+          </button>
+          <button class="clear-action" :class="{ busy: notificationAction === 'clear' }"
+                  :disabled="Boolean(notificationAction)" title="清空全部通知" @click.stop="clearNotifications">
+            {{ notificationAction === 'clear' ? '…' : '⌫' }}
+          </button>
+        </span>
       </div>
       <div class="notice-list">
         <div v-if="!notices.length" class="empty">暂无通知</div>
@@ -570,7 +600,17 @@ onUnmounted(() => {
 @keyframes pop-in { from { opacity: 0; transform: translateY(-7px) scale(.98); } }
 .pop-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; border-bottom: 1px solid var(--border); }
 .pop-head strong { font-size: 16px; }
-.pop-head button { width: 30px; height: 30px; border: 0; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 18px; }
+.pop-head button {
+  width: 32px; height: 32px; display: grid; place-items: center; border: 1px solid transparent;
+  border-radius: 9px; background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: 18px; transition: color .16s ease, background .16s ease, border-color .16s ease, transform .1s ease;
+}
+.pop-head button:hover { color: var(--text-primary); border-color: var(--border-light); background: var(--bg-hover); }
+.pop-head button:active { transform: scale(.9); }
+.pop-head button:disabled { cursor: wait; opacity: .7; }
+.notice-actions { display: flex; align-items: center; gap: 5px; }
+.notice-actions .read-action:hover, .notice-actions .read-action.busy { color: var(--success); border-color: var(--success); background: rgba(16,185,129,.13); }
+.notice-actions .clear-action:hover, .notice-actions .clear-action.busy { color: var(--danger); border-color: var(--danger); background: rgba(239,68,68,.13); }
 .shortcut-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 13px; }
 .shortcut-grid > button {
   min-height: 86px; display: flex; align-items: center; gap: 11px; padding: 13px;
