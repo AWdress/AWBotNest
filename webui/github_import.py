@@ -168,6 +168,7 @@ async def _try_manifest(client, owner, repo, branch, subdir) -> Optional[list[di
                 "description": meta.get("description", ""),
                 "changelog": str(meta.get("changelog", "") or ""),
                 "icon": meta.get("icon", ""),
+                "scope": str(meta.get("scope", "") or ""),
                 "is_folder": is_folder,
                 "path": (base + path).strip("/") + ("/" if is_folder else ""),
                 "from_manifest": True,
@@ -196,7 +197,7 @@ async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
             if it.get("type") == "file" and nm.endswith(".py") and not nm.startswith("_"):
                 results.append({
                     "id": nm[:-3], "name": nm[:-3], "version": "", "author": "",
-                    "description": "", "changelog": "", "icon": "", "is_folder": False,
+                    "description": "", "changelog": "", "icon": "", "scope": "", "is_folder": False,
                     "path": it["path"], "download_url": it["download_url"],
                     "from_manifest": False, "owner": owner, "repo": repo, "branch": branch,
                 })
@@ -208,7 +209,7 @@ async def _list_contents(client, owner, repo, branch, subdir) -> list[dict]:
                 if rr.status_code == 200:
                     results.append({
                         "id": nm, "name": nm, "version": "", "author": "",
-                        "description": "", "changelog": "", "icon": "", "is_folder": True,
+                        "description": "", "changelog": "", "icon": "", "scope": "", "is_folder": True,
                         "path": it["path"] + "/",
                         "from_manifest": False, "owner": owner, "repo": repo, "branch": branch,
                     })

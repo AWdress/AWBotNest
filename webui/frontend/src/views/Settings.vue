@@ -538,7 +538,7 @@ async function save() {
       toast.error(`已保存，但这些 Bot 连接失败：${failedBots.map((bot) => bot.name).join('、')}`)
     } else {
       toast.success(needRestart
-        ? '已保存。基础凭据、代理或数据库等改动需重启平台生效。'
+        ? '已保存。基础凭据、代理或数据库等改动需重启后生效。'
         : (r.bot_sync ? '已保存，Bot 设置已立即生效。' : '已保存。'))
     }
     // Bot 列表可能变化 → 刷新推送路由的可选项
@@ -554,7 +554,7 @@ async function doRestart() {
   restarting.value = true
   try {
     await api.restartPlatform()
-    toast.success('平台正在重启，十几秒后自动刷新')
+    toast.success('正在重启，十几秒后自动刷新')
     restartHint.value = false
     let tries = 0
     if (restartTimer) clearInterval(restartTimer)
@@ -623,7 +623,7 @@ async function onRestoreFile(e) {
   if (!file) return
   const ok = await confirm({
     title: '导入恢复',
-    message: '恢复会覆盖平台中的 data、sessions、db_file、plugins 目录内容。建议先确认备份包来源可信。继续恢复？',
+    message: '恢复会覆盖现有的 data、sessions、db_file、plugins 目录内容。建议先确认备份包来源可信。继续恢复？',
     confirmText: '继续恢复',
     danger: true,
   })
@@ -641,7 +641,7 @@ async function onRestoreFile(e) {
         toast.error('恢复包已暂存，但恢复前快照下载失败：' + downloadError.message)
       }
     }
-    toast.success(`备份已校验，共 ${r.staged_files || 0} 个文件；重启平台后应用恢复`)
+    toast.success(`备份已校验，共 ${r.staged_files || 0} 个文件；重启后应用恢复`)
   } catch (err) {
     toast.error('恢复失败：' + err.message)
   } finally {
@@ -655,7 +655,7 @@ const cleaningLogs = ref(false)
 async function cleanLogsNow() {
   const ok = await confirm({
     title: '立即清理日志',
-    message: `将清理平台日志和所有插件日志，每个日志保留最近 ${s.value.LOG_CLEANER.keep_lines} 条。确认执行？`,
+    message: `将清理运行日志和所有插件日志，每个日志保留最近 ${s.value.LOG_CLEANER.keep_lines} 条。确认执行？`,
     confirmText: '确认清理',
   })
   if (!ok) return
@@ -687,7 +687,7 @@ function configuredDefaultBotName() {
   return s.value?.BOTS?.find((bot) => bot.id === s.value.DEFAULT_BOT_ID)?.name || '主要通知渠道'
 }
 
-// ── 平台 Webhook（密钥 + 随机按钮 + 地址展示） ──
+// ── Webhook（密钥 + 随机按钮 + 地址展示） ──
 function randomHex(bytesLen = 24) {
   const bytes = new Uint8Array(bytesLen)
   crypto.getRandomValues(bytes)
@@ -720,7 +720,7 @@ async function copyText(text) {
 }
 async function copyPlatformWebhook() {
   if (!platformWebhookUrl.value) return
-  if (await copyText(platformWebhookUrl.value)) toast.success('已复制平台 webhook 地址')
+  if (await copyText(platformWebhookUrl.value)) toast.success('已复制 webhook 地址')
   else toast.error('复制失败，请手动选择复制')
 }
 async function copyApiKey() {
@@ -907,7 +907,7 @@ async function saveNotificationChannels() {
     if (failedBots.length) {
       toast.error(`渠道已保存，但这些 Bot 连接失败：${failedBots.map(bot => bot.name).join('、')}`)
     } else {
-      toast.success(result.restart_required ? '渠道已保存，重启平台后完全生效。' : '通知渠道已保存。')
+      toast.success(result.restart_required ? '渠道已保存，重启后完全生效。' : '通知渠道已保存。')
     }
     return true
   } catch (error) {
@@ -1203,7 +1203,7 @@ onBeforeRouteLeave(async () => {
       <div v-if="err" class="alert err">{{ err }}</div>
       <!-- 保存后需重启：给一键重启入口 -->
       <div v-if="restartHint" class="restart-banner">
-        <span>部分改动需重启平台才生效。</span>
+        <span>部分改动需重启后才生效。</span>
         <div class="row gap">
           <button class="btn sm" @click="restartHint = false">稍后</button>
           <button class="btn sm btn-primary" @click="doRestart" :disabled="restarting">
@@ -1212,7 +1212,7 @@ onBeforeRouteLeave(async () => {
         </div>
       </div>
 
-      <!-- 控制台登录 -->
+      <!-- 登录设置 -->
       <div v-show="tab === 'login'" class="card profile-card">
         <div class="card-title">个人信息</div>
         <div class="profile-settings">
@@ -1222,7 +1222,7 @@ onBeforeRouteLeave(async () => {
           </div>
           <div class="profile-main">
             <strong>{{ profile.username }}</strong>
-            <span class="muted">控制台管理员</span>
+            <span class="muted">管理员</span>
             <div class="row gap profile-actions">
               <button class="btn btn-primary" :disabled="profileAvatarBusy"
                       @click="profileAvatarInput?.click()">
@@ -1238,8 +1238,8 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <div v-show="tab === 'login'" class="card">
-        <div class="card-title">控制台登录</div>
-        <div class="hint muted">修改登录本控制台的用户名和密码（默认 admin / password）。</div>
+        <div class="card-title">登录设置</div>
+        <div class="hint muted">修改登录用户名和密码。</div>
         <div v-if="credErr" class="alert err">{{ credErr }}</div>
         <div v-if="credMsg" class="alert ok">{{ credMsg }}</div>
         <div class="grid2">
@@ -1385,7 +1385,7 @@ onBeforeRouteLeave(async () => {
         </template>
       </div>
 
-      <!-- 平台 AI 服务 -->
+      <!-- AI 服务 -->
       <template v-if="tab === 'ai'">
         <div v-if="aiLoading" class="card center muted">正在读取 AI 设置…</div>
         <template v-else-if="ai">
@@ -1393,9 +1393,9 @@ onBeforeRouteLeave(async () => {
             <div class="ai-overview-main">
               <div class="ai-mark">AI</div>
               <div>
-                <div class="card-title">平台 AI 服务</div>
+                <div class="card-title">AI 服务</div>
                 <div class="hint muted">
-                  插件统一通过平台调用文字、图片识别和生图模型，不会接触服务商密钥。
+                  插件统一调用文字、图片识别和生图模型，不会接触服务商密钥。
                 </div>
               </div>
             </div>
@@ -1637,8 +1637,8 @@ onBeforeRouteLeave(async () => {
 
           <div class="card" style="margin-top:16px">
             <div class="card-title">插件 AI 设置</div>
-            <div class="hint muted">可以控制插件使用哪些 AI 能力，并由平台为每种能力指定模型；留空则跟随平台默认。</div>
-            <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无使用平台 AI 的插件</div>
+            <div class="hint muted">可以控制插件使用哪些 AI 能力，并为每种能力指定模型；留空则跟随默认设置。</div>
+            <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无使用 AI 的插件</div>
             <div v-else class="ai-permission-list">
               <div v-for="plugin in aiPlugins" :key="plugin.id" class="ai-permission-row">
                 <div class="ai-permission-head">
@@ -1666,7 +1666,7 @@ onBeforeRouteLeave(async () => {
                             :value="pluginAiModel(plugin.id, capability.key)"
                             :disabled="!pluginAiEnabled(plugin.id) || !pluginAiCapability(plugin.id, capability.key)"
                             @change="setPluginAiModel(plugin.id, capability.key, $event.target.value)">
-                      <option value="">跟随平台默认</option>
+                      <option value="">跟随默认设置</option>
                       <option v-for="model in availableAiModels(capability.key)"
                               :key="model.id" :value="model.id">
                         {{ model.name }}（{{ model.alias }}）
@@ -1680,12 +1680,12 @@ onBeforeRouteLeave(async () => {
         </template>
       </template>
 
-      <!-- 平台 Webhook -->
+      <!-- Webhook -->
       <div v-show="tab === 'api'" class="card">
         <div class="card-title">Webhook 入站</div>
         <div class="hint muted small" style="margin-bottom:12px">
           外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
-          平台会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
+          系统会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
         </div>
         <div class="row gap">
           <input class="input" style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
@@ -1700,11 +1700,11 @@ onBeforeRouteLeave(async () => {
         <button v-if="platformWebhookUrl" class="btn sm" style="margin-top:8px" @click="copyPlatformWebhook">复制地址</button>
       </div>
 
-      <!-- 开放平台 API -->
+      <!-- 开放 API -->
       <div v-show="tab === 'api'" class="card" style="margin-top:16px">
         <div class="card-title">REST API</div>
         <div class="hint muted small" style="margin-bottom:12px">
-          第三方工具（如 AI 助手、自动化脚本）可通过 API 远程管理平台和插件。
+          第三方工具（如 AI 助手、自动化脚本）可通过 API 远程管理 AWBotNest 和插件。
           请求时需携带此密钥验证身份。留空=关闭 API。改动随「保存设置」生效。
           <a href="https://github.com/AWdress/AWBotNest/blob/main/docs/API.md"
              target="_blank"
@@ -1728,9 +1728,9 @@ onBeforeRouteLeave(async () => {
         </div>
       </div>
 
-      <!-- Web 控制台 -->
+      <!-- 网页服务 -->
       <div v-show="tab === 'system'" class="card">
-        <div class="card-title">Web 控制台</div>
+        <div class="card-title">网页服务</div>
         <div class="grid2">
           <div class="field"><label>监听端口 (WEB_UI_PORT)</label>
             <input class="input" type="number" v-model.number="s.WEB_UI_PORT" /></div>
@@ -1812,8 +1812,8 @@ onBeforeRouteLeave(async () => {
       <div v-show="tab === 'maint'" class="card">
         <div class="card-title">维护</div>
         <div class="hint muted">
-          这里可以设置日志自动清理、导出当前平台快照，或从已有备份包恢复。备份会包含 data/、sessions/、db_file/、plugins/。
-          导入时会先校验并下载当前快照，重启平台后再应用恢复，避免损坏运行中的数据库。
+          这里可以设置日志自动清理、导出当前数据快照，或从已有备份包恢复。备份会包含 data/、sessions/、db_file/、plugins/。
+          导入时会先校验并下载当前快照，重启后再应用恢复，避免损坏运行中的数据库。
         </div>
 
         <div class="maint-box">
@@ -1821,7 +1821,7 @@ onBeforeRouteLeave(async () => {
             <div class="maint-heading">
               <div>
                 <div class="maint-name">日志清理</div>
-                <div class="maint-desc muted">定时清理平台运行日志和插件历史日志，避免长期占用磁盘空间。</div>
+                <div class="maint-desc muted">定时清理运行日志和插件历史日志，避免长期占用磁盘空间。</div>
               </div>
               <button type="button" class="toggle" :class="{ on: s.LOG_CLEANER.enabled }"
                       :aria-pressed="s.LOG_CLEANER.enabled" aria-label="启用日志清理"
@@ -1864,7 +1864,7 @@ onBeforeRouteLeave(async () => {
           <div class="maint-item">
             <div>
               <div class="maint-name">导入恢复</div>
-              <div class="maint-desc muted">导入平台生成的 zip 备份包；重启后完整替换平台运行数据。</div>
+              <div class="maint-desc muted">导入 AWBotNest 生成的 zip 备份包；重启后完整替换运行数据。</div>
             </div>
             <button class="btn" @click="openRestorePicker" :disabled="restoreBusy">
               {{ restoreBusy ? '恢复中…' : '选择备份包' }}
@@ -1921,7 +1921,7 @@ onBeforeRouteLeave(async () => {
             <input type="checkbox" v-model="channelForm.is_default" />
             <span>设为默认</span>
           </label>
-          <div class="hint muted small">默认渠道用于接收平台通知，只能有一个默认渠道</div>
+          <div class="hint muted small">默认渠道用于接收系统通知，只能有一个默认渠道</div>
         </div>
 
         <!-- 名称 -->
@@ -2203,7 +2203,7 @@ onBeforeRouteLeave(async () => {
 .time-fields { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 8px; }
 .time-fields span { color: var(--text-muted); font-weight: 700; }
 
-/* 平台 webhook 地址展示 */
+/* webhook 地址展示 */
 .row.gap { display: flex; align-items: center; gap: 8px; }
 .row.gap .input { flex: 1; }
 .webhook-url {
@@ -2579,7 +2579,7 @@ onBeforeRouteLeave(async () => {
   border-top: 1px solid var(--border);
 }
 
-/* 平台 AI 服务 */
+/* AI 服务 */
 .ai-overview {
   position: relative;
   display: flex;

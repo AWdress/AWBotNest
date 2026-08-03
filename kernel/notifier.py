@@ -2,7 +2,7 @@
 kernel/notifier.py
 平台通知中心 —— 插件不直接发通知，而是「提交」给平台；
 平台统一分类（按级别打标签 + 插件名 + 可选分类）、套统一格式，再通过 Bot
-发给平台管理员（Bot 不可用时回退主账号「收藏夹」）。
+发给管理员（Bot 不可用时回退主账号「收藏夹」）。
 
 为什么集中到平台：通知的「发给谁、什么格式、怎么投递」是平台策略，不该让每个
 插件各自实现。插件只提供「内容 + 级别 + 分类」，其余交给平台。
@@ -118,7 +118,7 @@ async def submit(
     **send_kwargs,
 ) -> Any:
     """
-    接收一条插件通知，分类 + 统一格式 + 投递给平台管理员。
+    接收一条插件通知，分类 + 统一格式 + 投递给管理员。
 
     accounts: AccountManager（取 bot_app / primary_user_app）
     level: info | success | warning | error（决定图标与中文标签）
@@ -129,7 +129,7 @@ async def submit(
     """
     level = level if level in _LEVEL_CN else "info"
     plugin_id = str(plugin_id or "")
-    plugin_name = str(plugin_name or plugin_id or "平台")
+    plugin_name = str(plugin_name or plugin_id or "系统")
     text = str(text or "")
     category = str(category).strip() if category is not None else None
     account_label = _account_label(account)

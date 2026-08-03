@@ -172,17 +172,31 @@ def _assert_safe_plugin_id(plugin_id: str) -> str:
 @app.get("/api/auth/status")
 async def auth_status():
     """前端启动时调用：是否免鉴权"""
+    needs_setup = _authmod.is_default_password()
     return {"dev_no_auth": _authmod.DEV_NO_AUTH, "username": _authmod.get_username(),
-            "version": APP_VERSION, "must_change_password": _authmod.is_default_password()}
+            "version": APP_VERSION, "needs_setup": needs_setup,
+            "must_change_password": needs_setup}
 
 
 @app.post("/api/auth/login")
 async def auth_login(body: Dict[str, Any], response: Response):
     """登录（用户名 + 密码），返回令牌；同时种下资源 Cookie（供插件静态资源鉴权）"""
+    if _authmod.is_default_password():
+        raise HTTPException(status_code=409, detail="请先完成管理员账号设置")
     b = body or {}
     token = _authmod.login(b.get("username", ""), b.get("password", ""))
     _authmod.set_resource_cookie(response)
     return {"status": "success", "token": token}
+
+
+@app.post("/api/auth/setup")
+async def auth_setup(body: Dict[str, Any], response: Response):
+    """首次使用时创建管理员账号；完成后该接口会拒绝再次设置。"""
+    b = body or {}
+    token = _authmod.setup_credentials(b.get("username", ""), b.get("password", ""))
+    _authmod.set_resource_cookie(response)
+    logger.info("管理员账号已完成首次设置")
+    return {"status": "success", "token": token, "username": _authmod.get_username()}
 
 
 @app.post("/api/auth/resource_token")
@@ -200,7 +214,7 @@ async def auth_change_credentials(body: Dict[str, Any], user=Depends(_auth)):
     _authmod.change_credentials(
         b.get("old_password", ""), b.get("new_username", ""), b.get("new_password", ""),
     )
-    logger.info("Web 控制台登录凭据已修改")
+    logger.info("网页登录信息已修改")
     return {"status": "success", "username": _authmod.get_username()}
 
 
@@ -285,10 +299,21 @@ async def ui_notifications(user=Depends(_auth)):
     from kernel import notifier
     values = [dict(item) for item in notifier.history()]
     read_at = _notification_read_at()
+    plugin_icons = {}
+    for plugin_id in {str(item.get("plugin_id") or "").strip() for item in values}:
+        if not plugin_id:
+            continue
+        try:
+            meta = registry.get_meta(plugin_id)
+        except (OSError, ValueError):
+            meta = None
+        if meta and meta.icon:
+            plugin_icons[plugin_id] = meta.icon
     for item in values:
         item["text"] = _mask_notification_text(item.get("text"))
         item["category"] = _mask_notification_text(item.get("category"))
         item["account"] = _mask_notification_text(item.get("account"))
+        item["plugin_icon"] = plugin_icons.get(str(item.get("plugin_id") or "").strip(), "")
         try:
             item["unread"] = float(item.get("t") or 0) > read_at
         except (TypeError, ValueError):
@@ -337,7 +362,7 @@ async def index():
         # 导致新构建加载不进来（前端改动"看不到效果"）。入口禁缓存、每次校验，
         # 带 hash 的 assets 仍长缓存不变（见 plugin_static 的缓存策略）。
         return FileResponse(str(idx), headers={"Cache-Control": "no-cache"})
-    return {"message": "AWBotNest 平台运行中。前端尚未构建，请在 webui/frontend 执行 npm run build。"}
+    return {"message": "AWBotNest 运行中。网页尚未构建，请在 webui/frontend 执行 npm run build。"}
 
 
 @app.get("/favicon.ico")
@@ -1232,7 +1257,7 @@ async def put_notification_channels(body: Dict[str, Any], user=Depends(_auth_pwc
                 cfg.save(merged)
         except Exception as exc:  # noqa: BLE001
             restart_required = True
-            bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启平台后生效"}
+            bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启后生效"}
             logger.warning("通知渠道已保存，Bot 即时更新失败: %r", exc)
 
     old_channel_ids = {
@@ -1290,7 +1315,7 @@ async def put_ai_settings(body: Dict[str, Any], user=Depends(_auth_pwc)):
         saved = ai_kernel.save_ai_settings((body or {}).get("settings") or body)
     except (TypeError, ValueError, ai_kernel.AIServiceError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    logger.info("平台 AI 服务设置已更新")
+    logger.info("AI 服务设置已更新")
     return {"status": "success", "settings": saved}
 
 
@@ -1438,7 +1463,7 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
     restart_required = any(current.get(key) != merged.get(key) for key in restart_keys)
 
     cfg.save(merged)
-    logger.info("平台设置已更新（config.json）")
+    logger.info("系统设置已更新（config.json）")
 
     if "LOG_CLEANER" in incoming:
         from libs.log_cleaner_settings import get_log_cleaner_settings
@@ -1480,7 +1505,7 @@ async def put_settings_api(body: Dict[str, Any], user=Depends(_auth_pwc)):
             logger.info("Bot 设置已热更新")
         except Exception as e:  # noqa: BLE001
             restart_required = True
-            bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启平台后生效"}
+            bot_sync = {"failed": [], "message": "Bot 即时更新失败，重启后生效"}
             logger.warning("Bot 设置热更新失败，将在重启后生效: %r", e)
 
     # 被删除或停用的通知渠道必须立即从插件路由中移除。
@@ -1561,19 +1586,19 @@ async def restart_platform(user=Depends(_auth_pwc)):
     async with app.state.restart_lock:
         current_task = getattr(app.state, "restart_task", None)
         if current_task is not None and not current_task.done():
-            return {"status": "success", "message": "平台已经在重启"}
+            return {"status": "success", "message": "正在重启"}
 
         async def _delayed_exit():
             await _aio.sleep(1.0)  # 让本次 HTTP 响应完整返回给前端。
-            logger.info("收到管理员重启请求，正在重新启动平台…")
+            logger.info("收到管理员重启请求，正在重新启动 AWBotNest…")
             try:
                 _os.execv(_sys.executable, [_sys.executable, *_sys.argv])
             except Exception:  # noqa: BLE001
-                logger.exception("重新执行平台进程失败，改为退出并交给容器或守护进程拉起")
+                logger.exception("重新执行 AWBotNest 进程失败，改为退出并交给容器或守护进程拉起")
                 _os._exit(1)
 
         app.state.restart_task = _aio.create_task(_delayed_exit())
-        return {"status": "success", "message": "平台正在重启，请稍候刷新页面"}
+        return {"status": "success", "message": "正在重启，请稍候刷新页面"}
 
 
 # ──────────────────────────────────────────────
@@ -1586,7 +1611,7 @@ async def create_system_backup(user=Depends(_auth_pwc)):
         archive_path, filename = create_backup_archive(APP_VERSION)
     except (BackupError, OSError, sqlite3.Error) as e:
         raise HTTPException(status_code=500, detail=f"生成备份失败: {e}") from e
-    logger.info("平台备份已生成: %s", archive_path)
+    logger.info("备份已生成: %s", archive_path)
     return FileResponse(
         str(archive_path),
         media_type="application/zip",
@@ -1643,7 +1668,7 @@ async def restore_system_backup(file: UploadFile = File(...), user=Depends(_auth
         if upload_path is not None:
             upload_path.unlink(missing_ok=True)
 
-    logger.info("平台恢复包已校验并暂存: %s，文件 %d 个", filename, inspection.file_count)
+    logger.info("恢复包已校验并暂存: %s，文件 %d 个", filename, inspection.file_count)
     return {
         "status": "success",
         "staged_files": inspection.file_count,
@@ -1725,7 +1750,7 @@ async def test_proxy(body: Dict[str, Any], user=Depends(_auth_pwc)):
     except httpx.ConnectError:
         message = "无法连接代理，请检查代理是否启动并允许局域网访问"
     except ImportError:
-        message = "当前环境缺少 SOCKS 支持，请重新构建或更新平台"
+        message = "当前环境缺少 SOCKS 支持，请重新构建或更新 AWBotNest"
     except Exception as e:  # noqa: BLE001
         message = f"代理测试失败（{e.__class__.__name__}）"
     logger.info("管理员测试代理失败: %s", message)
@@ -1785,7 +1810,7 @@ async def test_db(body: Dict[str, Any], user=Depends(_auth_pwc)):
     try:
         engine = create_async_engine(dsn, pool_pre_ping=True)
     except (ImportError, ModuleNotFoundError):
-        return {"ok": False, "message": "当前环境缺少对应的数据库驱动，请重新构建或更新平台"}
+        return {"ok": False, "message": "当前环境缺少对应的数据库驱动，请重新构建或更新 AWBotNest"}
     try:
         async def _probe():
             async with engine.connect() as conn:
@@ -1870,13 +1895,13 @@ async def plugin_webhook(plugin_id: str, request: Request):
 
 @app.api_route("/api/v1/webhook", methods=["GET", "POST"])
 async def platform_webhook(request: Request):
-    """平台 webhook 入站：校验 WEBHOOK_SECRET → 把内容推送给平台管理员。
+    """平台 webhook 入站：校验 WEBHOOK_SECRET → 把内容推送给管理员。
     JSON 里若带 text/message/content 字段用其内容，否则推整段文本/JSON。
     可选 title/category 字段作为标题分类。"""
     import config.config as cfg
     secret = str((cfg.load().get("WEBHOOK_SECRET") or "")).strip()
     if not secret:
-        raise HTTPException(status_code=404, detail="平台 webhook 未开启")
+        raise HTTPException(status_code=404, detail="Webhook 未开启")
     given = request.query_params.get("apikey", "")
     if not _apikey_ok(given, secret):
         raise HTTPException(status_code=401, detail="apikey 无效")
@@ -1899,14 +1924,14 @@ async def platform_webhook(request: Request):
     accounts = _get_accounts()
     try:
         await notifier.submit(
-            accounts, "__platform_webhook__", "平台 Webhook", body_text,
+            accounts, "__platform_webhook__", "系统 Webhook", body_text,
             level="info", category=category,
         )
     except RuntimeError as e:
         # 无可用账号投递（Bot 未连接且无在线用户账号）
         raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:  # noqa: BLE001 - 投递失败（多为 Chat ID 配置错误 / Bot 无权限）
-        logger.warning("平台 webhook 投递失败: %r", e)
+        logger.warning("Webhook 投递失败: %r", e)
         raise HTTPException(
             status_code=502,
             detail=f"通知投递失败：{e.__class__.__name__}（请检查通知 Chat ID 是否正确、Bot 是否有权限）",
@@ -1990,7 +2015,7 @@ async def system_status(user=Depends(_auth)):
                 job_label = short
             else:
                 plugin_id = None
-                plugin_label = "平台"
+                plugin_label = "系统"
                 job_label = _SYSTEM_SCHEDULER_JOB_NAMES.get(jid, jid)
             sched_jobs.append({
                 "id": jid,
@@ -2139,7 +2164,7 @@ async def ui_health(user=Depends(_auth)):
          "detail": "已启用" if proxy_enabled else "未启用"},
         {"id": "notifications", "name": "通知渠道", "ok": True,
          "detail": f"{sum(1 for item in channels if item.get('enabled'))} 个渠道已启用"},
-        {"id": "ai", "name": "平台 AI", "ok": True,
+        {"id": "ai", "name": "AI 服务", "ok": True,
          "detail": f"{sum(1 for item in ai_providers if item.get('enabled'))} 个服务商已启用"},
         {"id": "browser", "name": "浏览器服务", "ok": True, "detail": "按需启动"},
         {"id": "scheduler", "name": "定时服务", "ok": True,

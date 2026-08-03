@@ -28,7 +28,7 @@ __plugin__ = {
     "author": "你的名字",
     "description": "这是一个插件模板，演示 setup/teardown、ctx 用法与配置 UI。",
     "icon": "",                         # 可选：图标 URL，前端卡片用；留空回退平台 logo
-    "scope": "user",                    # user(用户账号) | bot(机器人账号) | both
+    "scope": "user",                    # user(用户账号) | bot(机器人账号) | both | standalone(独立运行)
 
     # 上传后是否默认启用
     "default_enabled": False,
@@ -141,7 +141,7 @@ async def setup(ctx):
     async def on_hook(req):
         data = req.json or {}
         ctx.log.info("收到 webhook：%s", data or req.text)
-        # 例如把事件推送给平台管理员：
+        # 例如把事件推送给管理员：
         # await ctx.notify(f"收到外部事件：{data}", category="Webhook")
         return {"ok": True}
 

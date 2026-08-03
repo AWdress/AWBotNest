@@ -117,7 +117,7 @@ const acctReady = ref(false)
 const acctSaving = ref(false)
 let acctRequestId = 0
 
-const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号' }
+const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号', standalone: '独立运行' }
 
 async function load() {
   loading.value = true
@@ -338,7 +338,7 @@ async function copyText(text) {
   } catch { return false }
 }
 
-// ── 插件 webhook（入站地址；密钥用平台统一的 WEBHOOK_SECRET，在「系统设置 → 通知」生成） ──
+// ── 插件 webhook（入站地址；密钥使用统一的 WEBHOOK_SECRET，在「系统设置 → 通知」生成） ──
 const webhookSecret = ref('')
 const webhookPath = ref('')
 
@@ -604,7 +604,7 @@ function applyStoreFilters(list) {
 }
 
 const storeAvailable = computed(() => applyStoreFilters(store.value.filter((p) => !p.installed)))
-// 已安装但仓库有新版本的插件：仅当平台记录过下载版本(local_version)且与远端不同才提示，
+// 已安装但仓库有新版本的插件：仅当系统记录过下载版本(local_version)且与远端不同才提示，
 // 本地上传/手动导入(无 local_version)不误报更新，避免静默覆盖本地改动。
 function hasUpdate(p) {
   return p.installed && p.from_manifest && p.local_version && p.version && p.local_version !== p.version
@@ -654,6 +654,7 @@ const searchablePlugins = computed(() => {
       repo: shortRepo(market?.repo_url || ''),
       repoUrl: market?.repo_url || '',
       tags: market?.tags || local?.tags || [],
+      scope: local?.scope || market?.scope || '',
       localPlugin: local,
       marketPlugin: market,
     }
@@ -669,7 +670,7 @@ const searchResults = computed(() => {
     if (searchAuthorFilter.value && p.author !== searchAuthorFilter.value) return false
     if (searchRepoFilter.value && p.repoUrl !== searchRepoFilter.value) return false
     if (!words.length) return true
-    const text = [p.name, p.id, p.description, p.author, p.repo].join(' ').toLowerCase()
+    const text = [p.name, p.id, p.description, p.author, p.repo, scopeLabel[p.scope] || p.scope].join(' ').toLowerCase()
     return words.every((word) => text.includes(word))
   })
 
@@ -1179,6 +1180,7 @@ onUnmounted(() => {
               <p class="desc">{{ p.description || '（无描述）' }}</p>
               <div class="card-meta">
                 <span v-if="p.author" class="meta-item">{{ p.author }}</span>
+                <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
                 <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
               </div>
 
@@ -1218,6 +1220,7 @@ onUnmounted(() => {
           <p class="desc">{{ p.description || '（无描述）' }}</p>
           <div class="card-meta">
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
+            <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
           </div>
 
@@ -1395,7 +1398,7 @@ onUnmounted(() => {
             <Teleport to="body">
               <div v-if="configScopeDropdown === 'channels'" class="config-scope-menu"
                    :style="configScopeMenuStyle" @click.stop>
-                <!-- 空路由表示始终跟随平台当前默认渠道。 -->
+                <!-- 空路由表示始终跟随当前默认渠道。 -->
                 <label class="config-scope-option">
                   <input type="checkbox"
                          :checked="configBotChoice.length === 0"
@@ -1461,7 +1464,7 @@ onUnmounted(() => {
         <div v-if="configTarget?.webhook" class="webhook-box">
           <div class="webhook-title">Webhook 入站地址</div>
           <div class="hint muted small">
-            外部服务可 POST 到此地址触发本插件。密钥与平台统一（在「系统设置 → 通知」生成），
+            外部服务可 POST 到此地址触发本插件。密钥统一在「系统设置 → 通知」生成，
             所有插件共用；需插件已启用并实现了处理器才会真正响应。
           </div>
           <template v-if="webhookSecret">
@@ -1471,10 +1474,10 @@ onUnmounted(() => {
             </div>
           </template>
           <div v-else class="muted small">
-            尚未设置 Webhook 密钥。请先到「系统设置 → 通知 → 平台 Webhook」生成密钥。
+            尚未设置 Webhook 密钥。请先到「系统设置 → 通知 → Webhook」生成密钥。
           </div>
         </div>
-        <!-- vue 模式由插件组件自己管保存，右上角已有 × 关闭，底部不再重复关闭按钮；schema 模式给平台保存按钮 -->
+        <!-- vue 模式由插件组件自己管保存，右上角已有 × 关闭，底部不再重复关闭按钮；schema 模式提供统一保存按钮 -->
         <div v-if="configRenderMode !== 'vue'" class="modal-foot">
           <button class="btn" @click="configOpen=false">取消</button>
           <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
@@ -1528,7 +1531,7 @@ onUnmounted(() => {
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
             <div class="hint muted">仓库名必须是 AWBotNest-Plugins，例如 AWdress/AWBotNest-Plugins。</div>
-            <div class="hint muted">推荐仓库带 manifest.json 并写好 version，平台才能识别「更新」。</div>
+            <div class="hint muted">推荐仓库带 manifest.json 并写好 version，系统才能识别「更新」。</div>
           </div>
         </div>
         <div class="modal-foot">
@@ -2043,7 +2046,7 @@ onUnmounted(() => {
 }
 .modal { --modal-pad: var(--gap-lg); width: 540px; max-width: 90vw; max-height: 85vh; overflow-y: auto; box-shadow: var(--shadow-float); }
 /* 配置弹窗（vue 模式 + schema 模式）：大而响应式的画布，
-   vue 由插件自己布局，schema 由平台表单栅格铺开
+   vue 由插件自己布局，schema 由通用表单栅格铺开
    （用固定大宽度而非 fit-content：vue 插件多用 100%/栅格布局，fit-content 会坍缩） */
 .modal-wide { width: 1000px; max-width: 92vw; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }

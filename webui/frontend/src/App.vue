@@ -23,11 +23,6 @@ const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
 const restoringSession = ref(!!getToken())
-const mustChangePwd = ref(false)   // 仍是默认密码：强制改密后才放进主界面
-const npwd = ref('')
-const npwd2 = ref('')
-const pwdBusy = ref(false)
-const pwdErr = ref('')
 
 async function onAuthed() {
   restoringSession.value = true
@@ -37,7 +32,10 @@ async function onAuthed() {
       api.authStatus(),
       loadUiProfile(true),
     ])
-    mustChangePwd.value = !!st.must_change_password
+    if (st.needs_setup || st.must_change_password) {
+      logout()
+      return
+    }
     authed.value = true
     ping().then(checkUpdate)
   } catch (error) {
@@ -52,40 +50,21 @@ function logout() {
   clearUiProfile()
   authed.value = false
   restoringSession.value = false
-  mustChangePwd.value = false
-}
-
-async function submitNewPwd() {
-  pwdErr.value = ''
-  if (!npwd.value || npwd.value.length < 4) { pwdErr.value = '新密码至少 4 位'; return }
-  if (npwd.value !== npwd2.value) { pwdErr.value = '两次输入不一致'; return }
-  pwdBusy.value = true
-  try {
-    // 首次强制改密：旧密码就是默认 password，用户名保持不变
-    await api.changeCredentials('password', '', npwd.value)
-    // 改密后令牌失效，需重新登录
-    setToken('')
-    clearUiProfile()
-    mustChangePwd.value = false
-    authed.value = false
-    toast.success('密码已修改，请用新密码重新登录')
-  } catch (e) { pwdErr.value = e.message }
-  finally { pwdBusy.value = false }
 }
 
 const restarting = ref(false)
 async function restart() {
   const ok = await confirm({
-    title: '重启平台',
-    message: '确定重启平台？重启期间控制台会短暂不可用，约十几秒后自动恢复。',
+    title: '重启',
+    message: '确定重启？重启期间网页会短暂不可用，约十几秒后自动恢复。',
     confirmText: '重启', danger: true,
   })
   if (!ok) return
   restarting.value = true
   try {
     await api.restartPlatform()
-    toast.success('平台正在重启，请稍候刷新页面')
-    // 轮询直到平台重新可用，自动刷新
+    toast.success('正在重启，请稍候刷新页面')
+    // 轮询直到服务重新可用，自动刷新
     let tries = 0
     const timer = setInterval(async () => {
       tries++
@@ -196,8 +175,7 @@ const icons = {
 }
 
 onMounted(async () => {
-  // 恢复登录态（localStorage 令牌）后补种资源 Cookie，并补查强制改密状态——
-  // 若这里不查 authStatus，刷新页面后 mustChangePwd 恒为 false，首次改密门会被直接绕过。
+  // 恢复登录态后补种资源 Cookie，并确认账号已经完成首次设置。
   if (getToken()) {
     await onAuthed()
   }
@@ -208,29 +186,21 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div v-if="restoringSession" class="force-bg">
-    <div class="force-card profile-loading-card">
-      <img :src="logoWhite" class="force-logo" alt="AWBotNest" />
-      <div class="force-title">正在读取管理资料</div>
-      <div class="force-sub">头像和用户名准备好后会直接进入控制台。</div>
+  <div v-if="restoringSession" class="profile-loading-screen" role="status" aria-live="polite">
+    <div class="profile-loading-aura" aria-hidden="true"></div>
+    <div class="profile-loading-content">
+      <div class="profile-loading-mark">
+        <span class="profile-loading-ring" aria-hidden="true"></span>
+        <img :src="logoWhite" class="profile-loading-logo" alt="AWBotNest" />
+      </div>
+      <div class="profile-loading-title">
+        加载中<span class="profile-loading-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      </div>
+      <div class="profile-loading-track" aria-hidden="true"><span></span></div>
     </div>
   </div>
 
   <Login v-else-if="!authed" @authed="onAuthed" />
-
-  <!-- 强制首次改密：仍是默认密码时，必须改密才能进主界面 -->
-  <div v-else-if="mustChangePwd" class="force-bg">
-    <div class="force-card">
-      <img :src="logoWhite" class="force-logo" alt="" />
-      <div class="force-title">首次使用，请修改默认密码</div>
-      <div class="force-sub">为安全起见，必须先设置新密码才能使用控制台。</div>
-      <div v-if="pwdErr" class="force-alert">{{ pwdErr }}</div>
-      <input class="force-input" type="password" v-model="npwd" placeholder="新密码（至少 4 位）" @keyup.enter="submitNewPwd" />
-      <input class="force-input" type="password" v-model="npwd2" placeholder="再次输入新密码" @keyup.enter="submitNewPwd" />
-      <button class="force-btn" @click="submitNewPwd" :disabled="pwdBusy">{{ pwdBusy ? '提交中…' : '设置新密码' }}</button>
-      <div class="force-foot" @click="logout">退出登录</div>
-    </div>
-  </div>
 
   <div v-else class="layout">
     <!-- 侧边栏 -->
@@ -239,7 +209,7 @@ onMounted(async () => {
         <img :src="logoWhite" class="logo-img" alt="AWBotNest" />
         <div class="brand-text">
           <div class="brand-name">AWBotNest</div>
-          <div class="brand-sub">插件化机器人平台</div>
+          <div class="brand-sub">插件化机器人</div>
         </div>
       </div>
 
@@ -261,7 +231,6 @@ onMounted(async () => {
       </nav>
 
       <div class="sidebar-footer">
-        <div class="footer-card">
           <div class="foot-row">
             <span class="ver" v-if="version">
               <svg class="version-icon" viewBox="0 0 24 24" fill="none"
@@ -300,7 +269,6 @@ onMounted(async () => {
             </svg>
             <span>AWdress/AWBotNest</span>
           </a>
-        </div>
       </div>
     </aside>
 
@@ -308,7 +276,7 @@ onMounted(async () => {
     <main class="main">
       <header class="topbar">
         <img :src="logoWhite" class="topbar-logo" alt="" />
-        <h1>{{ route.meta.title || '控制台' }}</h1>
+        <h1>{{ route.meta.title || 'AWBotNest' }}</h1>
         <TopbarControlCenter
           :online="online"
           :version="version"
@@ -387,20 +355,14 @@ onMounted(async () => {
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
 .sidebar-footer {
-  padding: 14px 4px 2px;
+  padding: 12px 8px 0;
   border-top: 1px solid var(--border);
   font-size: 12px;
 }
-.footer-card {
-  border: 1px solid var(--border);
-  border-radius: 11px;
-  background: linear-gradient(145deg, rgba(19, 22, 31, .96), rgba(15, 17, 24, .94));
-  box-shadow: 0 8px 24px rgba(0, 0, 0, .2);
-}
 .foot-row {
-  min-height: 48px;
+  min-height: 32px;
   display: flex; align-items: center; justify-content: space-between;
-  gap: 10px; padding: 0 13px;
+  gap: 10px; padding: 0 2px;
 }
 .footer-status {
   display: flex; align-items: center; gap: 7px;
@@ -445,14 +407,13 @@ onMounted(async () => {
 }
 .update-pop-note { margin-top: 6px; color: var(--text-secondary); font-size: 11px; line-height: 1.5; }
 .footer-repo {
-  min-height: 42px; padding: 0 12px;
+  min-height: 34px; padding: 0 6px;
   display: flex; align-items: center; justify-content: center; gap: 8px;
-  color: var(--text-muted); border-top: 1px solid var(--border);
-  border-radius: 0 0 10px 10px;
+  color: var(--text-muted);
   font-family: monospace; font-size: 11px;
-  transition: color .16s ease, background .16s ease;
+  transition: color .16s ease;
 }
-.footer-repo:hover { color: var(--text-primary); background: var(--bg-hover); }
+.footer-repo:hover { color: var(--text-primary); }
 .footer-repo svg { width: 16px; height: 16px; flex: 0 0 16px; }
 .footer-repo span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .status-dot {
@@ -528,28 +489,148 @@ onMounted(async () => {
   .tab-icon { width: 20px; height: 20px; }
 }
 
-/* 强制首次改密界面 */
-.force-bg { height: 100vh; display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(1200px 600px at 50% 0%, #0d1426 0%, #0a0e17 55%, #07090f 100%); }
-.force-card { width: 360px; max-width: 90vw; background: rgba(17,19,26,0.95);
-  border: 1px solid var(--border-light); border-radius: 16px; padding: 36px 32px;
-  display: flex; flex-direction: column; align-items: center; box-shadow: 0 20px 60px rgba(0,0,0,0.5); }
-.force-logo { width: 52px; height: 52px; object-fit: contain; margin-bottom: 14px; }
-.force-title { font-size: 18px; font-weight: 700; color: #fff; }
-.force-sub { font-size: 12px; color: var(--text-muted); margin: 8px 0 18px; text-align: center; }
-.force-alert { width: 100%; background: var(--danger-dim); color: var(--danger); padding: 8px 12px;
-  border-radius: 8px; font-size: 13px; margin-bottom: 12px; text-align: center; }
-.force-input { width: 100%; padding: 11px 14px; margin-bottom: 12px; font-size: 16px;
-  background: var(--bg-elevated); border: 1px solid var(--border-light); border-radius: 10px; color: var(--text-primary); }
-.force-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
-.force-btn { width: 100%; padding: 12px; cursor: pointer; background: linear-gradient(135deg,#3080f0,#2566d8);
-  color: #fff; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; }
-.force-btn:disabled { opacity: 0.6; cursor: not-allowed; }
-.force-foot { margin-top: 16px; font-size: 12px; color: var(--text-muted); cursor: pointer; }
-.force-foot:hover { color: var(--danger); }
-.profile-loading-card::after { content: ''; width: 96px; height: 3px; border-radius: 999px;
-  background: linear-gradient(90deg, transparent, var(--accent), transparent);
-  animation: profile-loading 1.15s ease-in-out infinite; }
-@keyframes profile-loading { 0%, 100% { transform: scaleX(.35); opacity: .45; }
-  50% { transform: scaleX(1); opacity: 1; } }
+.profile-loading-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 43%, rgba(35, 124, 255, .11), transparent 25%),
+    radial-gradient(circle at 68% 68%, rgba(18, 184, 166, .06), transparent 30%),
+    #080c14;
+}
+.profile-loading-screen::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: .18;
+  background-image:
+    linear-gradient(rgba(91, 130, 180, .08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(91, 130, 180, .08) 1px, transparent 1px);
+  background-size: 52px 52px;
+  mask-image: radial-gradient(circle at center, #000 0%, transparent 68%);
+}
+.profile-loading-aura {
+  position: absolute;
+  width: min(52vw, 560px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(39, 128, 255, .14), rgba(17, 182, 165, .04) 38%, transparent 68%);
+  filter: blur(18px);
+  animation: profile-aura 3.2s ease-in-out infinite;
+}
+.profile-loading-content {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  transform: translateY(-2vh);
+}
+.profile-loading-mark {
+  position: relative;
+  width: 116px;
+  height: 116px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 24px;
+}
+.profile-loading-ring {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(80, 145, 255, .2);
+  border-radius: 32px;
+  transform: rotate(45deg);
+  box-shadow: inset 0 0 28px rgba(37, 119, 255, .07), 0 0 36px rgba(37, 119, 255, .08);
+  animation: profile-ring 2.4s ease-in-out infinite;
+}
+.profile-loading-ring::after {
+  content: '';
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  top: -4px;
+  left: 50%;
+  border-radius: 50%;
+  background: #32b8ff;
+  box-shadow: 0 0 14px #278cff;
+}
+.profile-loading-logo {
+  position: relative;
+  width: 70px;
+  height: 70px;
+  object-fit: contain;
+  filter: drop-shadow(0 8px 20px rgba(30, 109, 255, .22));
+  animation: profile-logo 2.4s ease-in-out infinite;
+}
+.profile-loading-title {
+  display: flex;
+  align-items: baseline;
+  min-height: 28px;
+  color: #f4f7ff;
+  font-size: 19px;
+  font-weight: 650;
+  letter-spacing: .12em;
+  text-shadow: 0 0 22px rgba(71, 145, 255, .18);
+}
+.profile-loading-dots {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 7px;
+}
+.profile-loading-dots i {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: #61a8ff;
+  animation: profile-dot 1.2s ease-in-out infinite;
+}
+.profile-loading-dots i:nth-child(2) { animation-delay: .16s; }
+.profile-loading-dots i:nth-child(3) { animation-delay: .32s; }
+.profile-loading-track {
+  width: 148px;
+  height: 2px;
+  margin-top: 18px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(84, 121, 169, .14);
+}
+.profile-loading-track span {
+  display: block;
+  width: 42%;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent, #398cff 45%, #25d0bd 100%);
+  box-shadow: 0 0 12px rgba(52, 144, 255, .65);
+  animation: profile-track 1.25s ease-in-out infinite;
+}
+@keyframes profile-aura {
+  0%, 100% { transform: scale(.92); opacity: .55; }
+  50% { transform: scale(1.08); opacity: 1; }
+}
+@keyframes profile-ring {
+  0%, 100% { transform: rotate(45deg) scale(.94); opacity: .58; }
+  50% { transform: rotate(135deg) scale(1.04); opacity: 1; }
+}
+@keyframes profile-logo {
+  0%, 100% { transform: translateY(1px); opacity: .92; }
+  50% { transform: translateY(-3px); opacity: 1; }
+}
+@keyframes profile-dot {
+  0%, 70%, 100% { transform: translateY(0); opacity: .3; }
+  35% { transform: translateY(-4px); opacity: 1; }
+}
+@keyframes profile-track {
+  0% { transform: translateX(-110%); }
+  100% { transform: translateX(350%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .profile-loading-aura,
+  .profile-loading-ring,
+  .profile-loading-logo,
+  .profile-loading-dots i,
+  .profile-loading-track span { animation: none; }
+  .profile-loading-track span { width: 100%; opacity: .7; }
+}
 </style>

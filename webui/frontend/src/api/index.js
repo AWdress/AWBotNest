@@ -55,6 +55,7 @@ export const api = {
   // 鉴权
   authStatus: () => request('GET', '/api/auth/status'),
   authLogin: (username, password) => request('POST', '/api/auth/login', { username, password }),
+  authSetup: (username, password) => request('POST', '/api/auth/setup', { username, password }),
   // 恢复登录态（localStorage 令牌）后补种资源 Cookie，确保能加载 vue 模式插件前端
   ensureResourceToken: () => request('POST', '/api/auth/resource_token'),
   changeCredentials: (old_password, new_username, new_password) =>
@@ -154,7 +155,7 @@ export const api = {
   loginSubmitCode: (session, code) => request('POST', '/api/accounts/login/submit_code', { session, code }),
   loginSubmitPassword: (session, password) => request('POST', '/api/accounts/login/submit_password', { session, password }),
 
-  // 平台设置（config.json）
+  // 系统设置（config.json）
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
   saveNotificationChannels: (channels) => request('PUT', '/api/settings/notification-channels', { channels }),

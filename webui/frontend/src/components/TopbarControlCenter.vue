@@ -132,6 +132,14 @@ function noticeKey(item) {
   return item.id || `notice-${item.t}`
 }
 
+function useFallbackNoticeIcon(event) {
+  const image = event?.currentTarget
+  if (!image || image.dataset.fallbackApplied === '1') return
+  image.dataset.fallbackApplied = '1'
+  image.src = logoWhite
+  image.closest('.notice-icon')?.classList.add('fallback')
+}
+
 function openModal(name) {
   panel.value = ''
   modal.value = name
@@ -390,7 +398,7 @@ onUnmounted(() => {
       <div class="shortcut-grid">
         <button @click.stop="openModal('logs')"><i>▤</i><span><strong>实时日志</strong><small>查看最新运行记录</small></span></button>
         <button @click.stop="openModal('network')"><i>⌁</i><span><strong>网络测试</strong><small>检查外部服务连接</small></span></button>
-        <button @click.stop="openModal('health')"><i>✦</i><span><strong>系统健康检查</strong><small>检查平台核心服务</small></span></button>
+        <button @click.stop="openModal('health')"><i>✦</i><span><strong>系统健康检查</strong><small>检查核心服务</small></span></button>
         <button @click.stop="openModal('services')"><i>◷</i><span><strong>定时服务</strong><small>查看和执行定时任务</small></span></button>
       </div>
     </div>
@@ -414,9 +422,12 @@ onUnmounted(() => {
         <button v-for="item in notices" :key="noticeKey(item)"
                 class="notice-item" :class="{ unread: item.unread, expanded: expandedNotice === noticeKey(item) }"
                 @click="expandedNotice = expandedNotice === noticeKey(item) ? '' : noticeKey(item)">
-          <span class="notice-icon">{{ item.level === 'error' ? '!' : item.level === 'success' ? '✓' : '·' }}</span>
+          <span class="notice-icon" :class="[`level-${item.level}`, { fallback: !item.plugin_icon }]">
+            <img :src="item.plugin_icon || logoWhite" :alt="`${item.plugin_name || '系统'}图标`"
+                 @error="useFallbackNoticeIcon">
+          </span>
           <span class="notice-body">
-            <strong>{{ item.plugin_name || '平台通知' }}</strong>
+            <strong>{{ item.plugin_name || '系统通知' }}</strong>
             <span class="notice-text">{{ item.text }}</span>
             <small>{{ item.category || '系统消息' }} · {{ relativeTime(item.t) }}</small>
           </span>
@@ -435,10 +446,10 @@ onUnmounted(() => {
       <div class="user-menu">
         <button @click="goSettings">个人信息</button>
         <button @click.stop="openModal('about')">关于 AWBotNest</button>
-        <button :disabled="restarting" @click="panel=''; emit('restart')">{{ restarting ? '重启中…' : '重启平台' }}</button>
+        <button :disabled="restarting" @click="panel=''; emit('restart')">{{ restarting ? '重启中…' : '重启' }}</button>
         <button class="danger" @click="emit('logout')">退出登录</button>
       </div>
-      <div class="user-status"><span :class="{ online }"></span>{{ online ? '平台在线' : '平台连接中' }}<b v-if="version">v{{ version }}</b></div>
+      <div class="user-status"><span :class="{ online }"></span>{{ online ? '连接正常' : '正在连接' }}<b v-if="version">v{{ version }}</b></div>
     </div>
   </div>
 
@@ -497,7 +508,7 @@ onUnmounted(() => {
         </div>
 
         <div v-else-if="modal === 'about'" class="modal-body about-modal">
-          <div v-if="aboutBusy" class="empty">正在读取平台信息…</div>
+          <div v-if="aboutBusy" class="empty">正在读取信息…</div>
           <template v-else-if="about">
             <section class="about-hero">
               <div class="about-mark">
@@ -505,13 +516,13 @@ onUnmounted(() => {
               </div>
               <div>
                 <h2>{{ about.name }}</h2>
-                <p>插件化机器人平台</p>
+                <p>插件化机器人</p>
               </div>
               <span class="about-current">v{{ about.version }}</span>
             </section>
 
             <section class="about-info-grid">
-              <div><span>平台版本</span><strong>v{{ about.version }}</strong></div>
+              <div><span>版本</span><strong>v{{ about.version }}</strong></div>
               <div><span>Python</span><strong>{{ about.python }}</strong></div>
               <div><span>运行系统</span><strong>{{ about.platform }}</strong></div>
               <div><span>已运行</span><strong>{{ formatUptime(about.uptime_seconds) }}</strong></div>
@@ -612,12 +623,18 @@ onUnmounted(() => {
 .notifications-pop { width: 420px; }
 .notice-list { max-height: 520px; overflow-y: auto; padding: 10px 14px 14px; scrollbar-gutter: stable; }
 .notice-item {
-  width: 100%; display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 11px; padding: 12px;
+  width: 100%; display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 11px; padding: 12px;
   border: 0; border-radius: 11px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer;
 }
 .notice-item:hover { background: var(--bg-hover); }
 .notice-item.unread { background: var(--accent-dim); }
-.notice-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 10px; background: var(--bg-elevated); color: var(--accent); font-weight: 700; }
+.notice-icon { width: 42px; height: 42px; flex: 0 0 42px; display: grid; place-items: center; overflow: hidden;
+  border: 1px solid rgba(82,142,255,.18); border-radius: 12px; background: var(--bg-elevated); }
+.notice-icon img { width: 100%; height: 100%; object-fit: contain; }
+.notice-icon.fallback img { width: 28px; height: 28px; }
+.notice-icon.level-success { border-color: rgba(20,184,135,.28); }
+.notice-icon.level-warning { border-color: rgba(245,166,35,.3); }
+.notice-icon.level-error { border-color: rgba(245,82,99,.32); }
 .notice-body { min-width: 0; padding-right: 4px; }
 .notice-body strong, .notice-body small, .notice-text { display: block; }
 .notice-text { margin: 4px 0; color: var(--text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

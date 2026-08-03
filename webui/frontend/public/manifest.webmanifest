@@ -1,7 +1,7 @@
 {
-  "name": "AWBotNest 控制台",
+  "name": "AWBotNest",
   "short_name": "AWBotNest",
-  "description": "Telegram 机器人平台控制台",
+  "description": "Telegram 机器人管理工具",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

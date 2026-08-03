@@ -7,6 +7,8 @@ const emit = defineEmits(['authed'])
 
 const username = ref('')
 const pwd = ref('')
+const confirmPwd = ref('')
+const setupMode = ref(false)
 const err = ref('')
 const busy = ref(false)
 const loading = ref(true)
@@ -17,6 +19,7 @@ onMounted(async () => {
     const st = await api.authStatus()
     version.value = st.version || ''
     if (st.dev_no_auth) { emit('authed'); return }
+    setupMode.value = !!(st.needs_setup || st.must_change_password)
   } catch (e) { /* 网络异常也展示登录页 */ }
   finally { loading.value = false }
 })
@@ -25,9 +28,13 @@ async function submit() {
   err.value = ''
   if (!username.value) { err.value = '请输入用户名'; return }
   if (!pwd.value) { err.value = '请输入密码'; return }
+  if (setupMode.value && pwd.value.length < 4) { err.value = '密码至少 4 位'; return }
+  if (setupMode.value && pwd.value !== confirmPwd.value) { err.value = '两次输入的密码不一致'; return }
   busy.value = true
   try {
-    const r = await api.authLogin(username.value.trim(), pwd.value)
+    const r = setupMode.value
+      ? await api.authSetup(username.value.trim(), pwd.value)
+      : await api.authLogin(username.value.trim(), pwd.value)
     setToken(r.token)
     emit('authed')
   } catch (e) { err.value = e.message }
@@ -41,22 +48,26 @@ async function submit() {
       <div class="lc-head">
         <img :src="logoWhite" class="lc-logo" alt="" />
         <div class="lc-title">AWBotNest</div>
-        <div class="lc-sub">插件化机器人平台 · 控制台登录</div>
+        <div class="lc-sub">{{ setupMode ? '首次使用 · 设置管理员账号' : '插件化机器人 · 登录' }}</div>
       </div>
 
       <div v-if="err" class="lc-alert">{{ err }}</div>
 
       <div class="lc-field">
-        <label>用户名</label>
-        <input class="lc-input" v-model="username" @keyup.enter="submit" placeholder="用户名" autofocus />
+        <label>{{ setupMode ? '管理员用户名' : '用户名' }}</label>
+        <input class="lc-input" v-model="username" @keyup.enter="submit" :placeholder="setupMode ? '设置管理员用户名' : '用户名'" autofocus />
       </div>
       <div class="lc-field">
-        <label>密码</label>
-        <input class="lc-input" type="password" v-model="pwd" @keyup.enter="submit" placeholder="密码" />
+        <label>{{ setupMode ? '设置密码' : '密码' }}</label>
+        <input class="lc-input" type="password" v-model="pwd" @keyup.enter="submit" :placeholder="setupMode ? '至少 4 位' : '密码'" />
+      </div>
+      <div v-if="setupMode" class="lc-field">
+        <label>确认密码</label>
+        <input class="lc-input" type="password" v-model="confirmPwd" @keyup.enter="submit" placeholder="再次输入密码" />
       </div>
 
-      <button class="lc-btn" @click="submit" :disabled="busy">
-        {{ busy ? '登录中…' : '登 录' }}
+      <button class="lc-btn" :class="{ setup: setupMode }" @click="submit" :disabled="busy">
+        {{ setupMode ? (busy ? '保存中…' : '保存并进入') : (busy ? '登录中…' : '登 录') }}
       </button>
 
       <div class="lc-hint">© 2026 AWBotNest<span v-if="version"> · v{{ version }}</span></div>
@@ -110,6 +121,7 @@ async function submit() {
 }
 .lc-btn:hover { opacity: 0.92; }
 .lc-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+.lc-btn.setup { letter-spacing: 0.08em; }
 
 .lc-hint { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 18px; }
 </style>

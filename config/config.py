@@ -27,7 +27,7 @@ _DEFAULTS: dict[str, Any] = {
     # BOT_TOKEN 对应的内置 Bot 显示名，以及当前作为默认出口的 Bot id。
     "BOT_NAME": "主要通知渠道",
     "DEFAULT_BOT_ID": "default",
-    # 默认 Bot 的通知目标 Chat ID（用户/群/频道）。留空=发给平台管理员（现有行为）。
+    # 默认 Bot 的通知目标 Chat ID（用户/群/频道）。留空=发给管理员（现有行为）。
     "DEFAULT_BOT_CHAT_ID": "",
     # 额外 Bot（多 Bot 通知推送用）。默认 Bot 仍由 BOT_TOKEN 表示（id="default"）。
     # 每项：{"id": "<唯一id>", "name": "<显示名>", "token": "<Bot Token>", "chat_id": "<可选通知目标>"}
@@ -36,7 +36,7 @@ _DEFAULTS: dict[str, Any] = {
     "WEB_UI_URL": "",
     "WEB_UI_PORT": 18001,
     # 平台级 webhook 密钥：外部服务 POST /api/v1/webhook?apikey=<此值> 即可把内容
-    # 推给平台管理员（经默认 Bot，回退主账号收藏夹）。留空=关闭平台 webhook。
+    # 推给管理员（经默认 Bot，回退主账号收藏夹）。留空=关闭平台 webhook。
     "WEBHOOK_SECRET": "",
     # 开放平台 API 密钥：第三方工具调用 /api/v1/* 接口时需携带此密钥验证身份。
     # 留空=关闭开放平台 API。在系统设置中生成。

@@ -177,7 +177,7 @@ function prettyCron(body) {
   return parts.length ? parts.join(' ') : 'cron'
 }
 
-// 平台内置任务的中文名（id → 显示名）；插件任务用后端给的 name
+// 系统内置任务的中文名（id → 显示名）；插件任务用后端给的 name
 const JOB_NAMES = { log_cleaner: '日志清理', 插件仓库轮询: '插件仓库轮询' }
 function jobName(j) { return JOB_NAMES[j.name] || JOB_NAMES[j.id] || j.name }
 
@@ -198,18 +198,18 @@ const cards = computed(() => {
 })
 
 const health = computed(() => {
-  if (!st.value) return { tone: 'ok', title: '正在检查平台', desc: '正在读取账号和插件状态。' }
+  if (!st.value) return { tone: 'ok', title: '正在检查', desc: '正在读取账号和插件状态。' }
   const s = st.value
   const issues = []
   if (!s.bot_connected) issues.push('Bot 账号未连接')
   if (!s.user_count) issues.push('没有在线用户账号')
   if (s.plugins.error) issues.push(`${s.plugins.error} 个插件异常`)
   if (!issues.length) {
-    return { tone: 'ok', title: '平台运行正常', desc: '账号和插件状态正常，可以继续使用。' }
+    return { tone: 'ok', title: '运行正常', desc: '账号和插件状态正常，可以继续使用。' }
   }
   return {
     tone: s.plugins.error ? 'danger' : 'warn',
-    title: s.plugins.error ? '有项目需要处理' : '平台已运行，部分功能未连接',
+    title: s.plugins.error ? '有项目需要处理' : '系统已运行，部分功能未连接',
     desc: issues.join('，') + '。',
   }
 })
@@ -292,7 +292,7 @@ const donutStyle = computed(() => ({
 
 <template>
   <div v-if="error" class="alert">{{ error }}</div>
-  <div v-if="loading" class="status skeleton-status" aria-label="正在加载平台状态" aria-busy="true">
+  <div v-if="loading" class="status skeleton-status" aria-label="正在加载运行状态" aria-busy="true">
     <div class="grid">
       <div v-for="i in 4" :key="i" class="card stat skeleton-card">
         <span class="skeleton-block skeleton-icon"></span>
@@ -311,7 +311,7 @@ const donutStyle = computed(() => ({
   <div v-else-if="st" class="status" :class="{ ready: pageReady }">
     <!-- 概览卡片：固定 4 列均分 -->
     <div class="grid reveal section-0">
-      <div v-for="(c, index) in cards" :key="c.key" class="card stat"
+      <div v-for="(c, index) in cards" :key="c.key" class="card stat status-card"
            :class="[c.tone, { 'bot-live': c.key === 'bot' && st.bot_connected }]"
            :style="{ '--item-delay': `${index * 55}ms` }">
         <div class="stat-icon">
@@ -329,7 +329,7 @@ const donutStyle = computed(() => ({
     <!-- 活跃时间线 + 占比环形 -->
     <div class="cols cols-activity reveal section-1">
       <!-- 时间线 -->
-      <div class="card info chart-card">
+      <div class="card info chart-card status-card">
         <div class="card-title">插件活跃时间线 <span class="muted sub">近 24 小时</span></div>
         <div v-if="!hasActivity" class="muted empty-chart">暂无插件活跃记录，插件处理消息后这里会出现时间线。</div>
         <template v-else>
@@ -368,7 +368,7 @@ const donutStyle = computed(() => ({
       </div>
 
       <!-- 占比环形 -->
-      <div class="card info chart-card">
+      <div class="card info chart-card status-card">
         <div class="card-title">活跃占比</div>
         <div v-if="!donut.sum" class="muted empty-chart">暂无数据</div>
         <div v-else class="donut-wrap">
@@ -394,7 +394,7 @@ const donutStyle = computed(() => ({
 
     <div class="cols reveal section-2">
       <!-- 账号 -->
-      <div class="card info">
+      <div class="card info status-card">
         <div class="card-title">账号 ({{ st.accounts.length }})</div>
         <div v-if="st.accounts.length === 0" class="muted empty">暂无账号，去「账号管理」登录。</div>
         <div v-else class="tbl-scroll">
@@ -413,7 +413,7 @@ const donutStyle = computed(() => ({
       </div>
 
       <!-- 定时任务 -->
-      <div class="card info">
+      <div class="card info status-card">
         <div class="card-title">定时任务 ({{ st.scheduler_jobs.length }})</div>
         <div v-if="st.scheduler_jobs.length === 0" class="muted empty">无定时任务</div>
         <div v-else class="job-list">
@@ -431,9 +431,9 @@ const donutStyle = computed(() => ({
       </div>
     </div>
 
-    <!-- 平台信息：全宽长条 -->
-    <div class="card info reveal section-3">
-      <div class="card-title">平台信息</div>
+    <!-- 运行信息：全宽长条 -->
+    <div class="card info reveal section-3 status-card">
+      <div class="card-title">运行信息</div>
       <div class="info-bar">
         <div class="ib"><span class="ib-k">版本</span><span class="ib-v mono">v{{ st.version }}</span></div>
         <div class="ib"><span class="ib-k">Python</span><span class="ib-v mono">{{ st.python }}</span></div>
@@ -456,6 +456,22 @@ const donutStyle = computed(() => ({
 .status.ready .section-1 { transition-delay: 90ms; }
 .status.ready .section-2 { transition-delay: 160ms; }
 .status.ready .section-3 { transition-delay: 230ms; }
+
+.status-card {
+  transition: border-color .2s ease, box-shadow .2s ease, translate .2s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+  .status-card:hover {
+    translate: 0 -3px;
+    border-color: rgba(48, 128, 240, .38);
+    box-shadow: 0 8px 24px rgba(48, 128, 240, .2), 0 2px 8px rgba(0, 0, 0, .3);
+  }
+  .status-card:active { translate: 0 -1px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-card { transition: border-color .2s ease, box-shadow .2s ease; }
+  .status-card:hover, .status-card:active { translate: none; }
+}
 
 /* 首次请求期间保持版面稳定，数据回来后不会整页跳动。 */
 .skeleton-card, .skeleton-panel, .skeleton-list { overflow: hidden; position: relative; }
@@ -630,7 +646,7 @@ const donutStyle = computed(() => ({
 .info-list > div:last-child { border-bottom: none; }
 .info-list .k { color: var(--text-muted); }
 .info-list .v { color: var(--text-primary); }
-/* 平台信息全宽长条：横向排开，每项「标签在上、值在下」 */
+/* 运行信息全宽长条：横向排开，每项「标签在上、值在下」 */
 .info-bar { display: flex; flex-wrap: wrap; gap: 12px 0; }
 .ib {
   flex: 1; min-width: 120px; display: flex; flex-direction: column; gap: 4px;

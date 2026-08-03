@@ -104,7 +104,7 @@ try:
 except OSError as e:
     # 常见于 /app/logs 由 root 挂载、降权用户无写权限。
     # 打到 stderr 提示，但保证程序继续以控制台日志运行。
-    print(f"[log] 文件日志不可用，退回控制台输出: {e}", file=sys.stderr)
+    print(f"[log] 文件日志不可用，退回终端输出: {e}", file=sys.stderr)
     fh = None
 
 # 检查是否已有处理器，避免重复添加

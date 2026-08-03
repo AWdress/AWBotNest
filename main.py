@@ -93,7 +93,7 @@ async def _wait_for_web_port(
         remaining = deadline - now
         if remaining <= 0:
             raise RuntimeError(
-                f"Web 端口 {port} 等待 {int(timeout)} 秒后仍被占用，平台已停止启动。"
+                f"Web 端口 {port} 等待 {int(timeout)} 秒后仍被占用，AWBotNest 已停止启动。"
                 "请确认旧的 AWBotNest 进程已经退出，或在系统设置中修改端口。"
             )
         if now >= next_notice:
@@ -107,7 +107,7 @@ async def _wait_for_web_port(
 
     waited = loop.time() - started
     if waited >= 0.1:
-        logger.info("Web 端口 %s 已释放，平台继续启动", port)
+        logger.info("Web 端口 %s 已释放，AWBotNest 继续启动", port)
 
 
 if __name__ == "__main__":
@@ -118,7 +118,7 @@ try:
     from webui.backup import apply_pending_restore as _apply_pending_restore
     _restored_files = _apply_pending_restore()
     if _restored_files:
-        print(f"[restore] 平台备份恢复完成，共恢复 {_restored_files} 个文件")
+        print(f"[restore] 备份恢复完成，共恢复 {_restored_files} 个文件")
 except Exception as _restore_error:  # noqa: BLE001 - keep the rolled-back platform bootable
     print(f"[restore] 待恢复备份应用失败，已保留原数据: {_restore_error}")
 
@@ -166,7 +166,7 @@ try:
     from libs.proxy import export_env as _export_proxy_env
     _px = _export_proxy_env()
     if _px:
-        print(f"[proxy] 平台代理已启用，平台出站请求将走 {_display_proxy_url(_px)}")
+        print(f"[proxy] 代理已启用，出站请求将走 {_display_proxy_url(_px)}")
 except Exception as _e:  # noqa: BLE001 - 代理导出失败不应阻断启动
     print(f"[proxy] 导出代理环境变量失败: {_e!r}")
 
@@ -226,17 +226,17 @@ async def start_platform() -> None:
     # 浏览器内核不在启动时预热：改为懒加载——插件首次真正调用 ctx.browser 时才
     # 下载内核（见 kernel/browser.py）。不用浏览器的部署零开销、零额外磁盘占用。
 
-    logger.info("AWBotNest 平台启动完成")
+    logger.info("AWBotNest 启动完成")
 
     # 5) idle 等待
     from core import idle
     try:
         await idle()
     finally:
-        logger.debug("平台关闭中...")
+        logger.debug("AWBotNest 关闭中...")
         await runtime.shutdown()
         await accounts.stop_all()
-        logger.info("平台已关闭")
+        logger.info("AWBotNest 已关闭")
 
 
 async def main() -> None:

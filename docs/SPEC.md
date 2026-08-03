@@ -78,7 +78,7 @@ __plugin__ = {
     "name": "举牌",            # 必填：前端显示名
     "id": "jupai",             # 必填：必须等于文件名（去 .py）
     "version": "1.0.0",        # 必填
-    "scope": "user",           # 必填：user | bot | both
+    "scope": "user",           # 必填：user | bot | both | standalone
     "author": "AW",            # 可选
     "description": "...",       # 可选：前端展示
     "changelog": "v1.0.0 初始版本\n- 功能说明",  # 可选：版本更新说明
@@ -258,7 +258,7 @@ async def setup(ctx):
 
 1. 插件调 `await ctx.notify(text, level="info", category=None, account=client)` —— 只提供内容、级别、分类，以及（多账号时）触发的账号。
 2. 平台 `notifier.submit` 负责**分类与统一格式**：按 `level`（info/success/warning/error）打图标标签，前缀插件名 + 可选 `category`；**多账号场景标注账号名**（从传入的 `account` client 解析 `me.first_name`→session 名，与账号管理页一致），让管理员知道是哪个账号的消息。
-3. 平台**统一投递**给平台管理员：优先 **本插件被平台分配的 Bot**（见 §8.2 多 Bot）私聊（`MY_TGID`，需管理员 /start 过该 Bot），Bot 不可用时回退主账号「收藏夹」。
+3. 平台**统一投递**给管理员：优先 **本插件被平台分配的 Bot**（见 §8.2 多 Bot）私聊（`MY_TGID`，需管理员 /start 过该 Bot），Bot 不可用时回退主账号「收藏夹」。
 4. 每条通知同时记入运行日志（带插件名）与通知中心历史环形缓冲（最近 200 条）。
 
 「发给谁、什么格式、怎么投递」是平台策略，插件不实现也不绕过——禁止插件为了发通知自己拼 `ctx.bot.send` 给 `owner_id`，统一走 `ctx.notify`。
@@ -367,7 +367,7 @@ async def setup(ctx):
 | 多账号列表 | `ctx.user_apps`（所有已连接用户账号；未连接时发送代理抛 `RuntimeError`，可判 `ctx.bot/user.connected`） |
 | 通知管理员 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给管理员，回退主账号收藏夹） |
 | 平台 AI | `ctx.ai.chat/vision/generate_image`（平台统一保管密钥、选择主/备用模型、控制插件权限与并发） |
-| 管理员 ID | `ctx.owner_id`（平台管理员 Telegram 数字 ID，无主账号为 0） |
+| 管理员 ID | `ctx.owner_id`（管理员 Telegram 数字 ID，无主账号为 0） |
 | 配置 | `ctx.config`（dict） |
 | 键值存储 | `ctx.kv.get/set/delete/keys`（每插件私有） |
 | 可写目录 | `ctx.data_dir`（`Path`，每插件独立 `data/plugin_data/<id>/`） |
@@ -377,6 +377,8 @@ async def setup(ctx):
 | 清理回调 | `ctx.add_cleanup(fn)` |
 
 `target`: `"user"` / `"bot"` / `"both"` / `"auto"`（按插件 scope 自动选择）。
+
+`scope=standalone` 表示插件不依赖用户账号或机器人，适合定时任务、Webhook、外部接口和浏览器自动化。它仍可使用配置、存储、平台 AI、通知和调度能力；`target="auto"` 不会挂载消息处理器，前端也不显示账号选择。若插件需要监听 Telegram 消息，必须改用 `user`、`bot` 或 `both`。
 
 **group 隔离（防止互相"吃消息"）**：Pyrogram 在同一 group 内只执行第一个匹配的 handler 即跳出该组。平台为**每个插件分配独立的 group 基址**（`PluginRuntime._group_base_for`，步长 1000），`ctx.on_message/on_callback` 把插件写的 `group=` 当作「**插件内相对优先级**」平移到该区间。因此：① 不同插件监听同类消息互不抢占，都能收到；② 单个插件内部仍可用多个相对 group 排序（数值越小越先）。插件作者无需关心其它插件的 group。若插件希望"我处理后不让后续插件再处理"，在 handler 内 `raise ctx.StopPropagation`。
 

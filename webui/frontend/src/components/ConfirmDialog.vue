@@ -1,5 +1,5 @@
 <script setup>
-// 全局确认弹窗组件，挂在 App 根部。样式与平台深色风格一致。
+// 全局确认弹窗组件，挂在 App 根部。样式与页面深色风格一致。
 import { confirmState, _resolveConfirm } from '../composables/confirm'
 
 function ok() { _resolveConfirm(true) }

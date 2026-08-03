@@ -86,7 +86,7 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | 文件 | 职责 |
 |------|------|
 | `api.py` | **主 FastAPI 后端**(约 1200 行，`APP_VERSION`)。路由分组：鉴权(`/api/auth/*`)、静态前端、插件管理(`/api/plugins/*` 列/传/开关/重载/删/配置/账号范围/会话/动作/webhook 信息)、插件自带前端(`/fe/`)与插件 API(`/api/`)、GitHub 导入、插件商店、多 Bot 路由、账号管理(三步登录)、平台设置(`/api/settings` 读写 config.json，敏感字段打码)、系统重启/代理测试/DB 测试、Webhook 入站(公开靠 apikey)、系统状态(`/api/status`)、运行日志(历史+WebSocket)。 |
-| `auth.py` | **鉴权**。用户名+密码(PBKDF2 存 `data/auth.json`)。**无状态令牌** `HMAC(secret, "user:pwd_hash")`(改密自动失效、重启不失效)。依赖：`require_auth`(Bearer)、`require_password_changed`(默认密码返回 428)、`require_resource_access`(资源 Cookie，供 vue 插件 ESM import)。`AWBOTNEST_DEV_NO_AUTH=true` 放行(仅开发)。 |
+| `auth.py` | **鉴权**。首次打开网页直接设置管理员用户名和密码(PBKDF2 存 `data/auth.json`)。**无状态令牌** `HMAC(secret, "user:pwd_hash")`(改密自动失效、重启不失效)。依赖：`require_auth`(Bearer)、`require_password_changed`(未完成首次设置返回 428)、`require_resource_access`(资源 Cookie，供 vue 插件 ESM import)。`AWBOTNEST_DEV_NO_AUTH=true` 放行(仅开发)。 |
 | `github_import.py` | **从 GitHub 导入插件**。解析多种来源格式(raw/仓库 URL/blob/`owner/repo[/subdir]`，防 SSRF)。优先读 `manifest.json`(插件市场清单)，无则目录扫描。支持单文件与文件夹递归下载，走平台代理，绕 CDN 缓存。 |
 | `repo_sync.py` | **插件商店/仓库轮询**。聚合官方仓库(`AWdress/AWBotNest-Plugins`)+用户 `PLUGIN_REPOS` 成商店列表(标 installed/official)。轮询(默认 20 分)只做两件事：刷新商店缓存、给已装且 manifest 版本变化的插件下载更新(在运行的热重载)。**绝不自动启用**。状态存 `data/repo_sync.json`。 |
 | `log_stream.py` | **日志流**。接平台 logger 输出到环形缓冲(最近 500 条)+WebSocket 广播，跨线程 `call_soon_threadsafe` 投递。 |
@@ -99,7 +99,7 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 | `vite.config.js` | Vue + 模块联邦(平台作宿主，只共享 vue 单例)。产物 outDir=`../static`，target esnext。开发时 `/api` 代理到 18001。含哑 remote 绕联邦空 remotes bug。 |
 | `src/main.js` | hash 路由(5 页 status/plugins/accounts/logs/settings) + 注册 PWA SW。 |
 | `src/api/index.js` | 统一请求封装(令牌存 localStorage，带 Bearer；401 跳登录)。方法对应后端各路由。 |
-| `src/App.vue` | 外壳。鉴权门(未登录→Login，默认密码→强制改密，否则主布局)。10 秒心跳拉状态，6 小时查 GitHub release 更新。重启平台/退出登录。 |
+| `src/App.vue` | 外壳。鉴权门(未登录或未完成首次设置→Login，否则主布局)。10 秒心跳拉状态，6 小时查 GitHub release 更新。重启平台/退出登录。 |
 | `src/views/Login.vue` | 登录页。 |
 | `src/views/Status.vue` | 系统状态。8 秒轮询，展示概览卡片、调度任务(trigger 转中文)、插件活跃时间线。 |
 | `src/views/Plugins.vue` | **核心页**(约 1019 行)。「我的插件/插件市场」两标签。卡片开关/重载/删/上传(点击+拖拽)、配置弹窗(schema→ConfigForm，vue→RemotePluginConfig)、账号范围、插件专属日志、webhook 地址。市场分区(可下载/有更新/已安装)。 |
@@ -179,7 +179,7 @@ AWBotNest 是一个 **Telegram 机器人平台**。核心理念：**平台内核
 - **group 隔离**：每插件独立 group 基址，避免 Pyrogram 同 group 内互相"吃消息"；`raise ctx.StopPropagation` 主动阻断后续插件。
 - **config_schema**：前端据此自动生成配置表单(type/default/label/help/options/section/show_if；类型 string/password/number/boolean/select/multiselect/slider/text/list/chat/action/info)。值存 `plugins_state.json`，插件用 `ctx.config` 读。
 - **Vue 模式**：复杂交互插件自带 Vue 界面(模块联邦)，`render_mode:"vue"` + `ctx.on_api` 后端接口。
-- **多账号**：scope=user/both 默认挂所有已连接用户账号，可按插件设账号范围(`account_scope`)。
+- **运行范围**：scope=user/both 默认挂所有已连接用户账号，可按插件设账号范围(`account_scope`)；scope=standalone 不挂用户账号或机器人。
 - **多 Bot**：平台配置多个 Bot，逐插件分配(`bot_choice`)，对 `ctx.bot`/`ctx.notify`/handler 挂载一致生效。插件不感知。
 - **依赖**：插件声明 `requirements`(PEP508)，启用时平台代装到 `data/plugin_deps`(卷持久化)，冲突则拒绝启用。必须兼容 Python 3.13。
 - **安全**：上传/启用=服务器执行代码，全经鉴权；下载不自动启用；敏感配置打码不回显。
@@ -201,7 +201,7 @@ Web 端口：`data/config.json` 的 `WEB_UI_PORT`(默认 18001)。
 docker compose up -d        # 访问 http://服务器IP:18001
 ```
 
-**首次使用**：默认登录 `admin/password`(务必到设置改密) → 填 Telegram API_ID/API_HASH/BOT_TOKEN → 账号管理登录 TG 账号 → 插件市场装插件并在「我的插件」开启。
+**首次使用**：按页面提示完成首次登录和密码设置 → 填 Telegram API_ID/API_HASH/BOT_TOKEN → 账号管理登录 TG 账号 → 插件市场装插件并在「我的插件」开启。
 
 ---
 

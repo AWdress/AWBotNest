@@ -26,7 +26,7 @@ const err = ref('')
 const host = {
   pluginId: props.pluginId,
   get token() { return getToken() },
-  // 标准配置读写（沿用平台统一存储，ctx.config 可直接读到）
+  // 标准配置读写（沿用统一存储，ctx.config 可直接读到）
   getConfig: async () => (await api.getPluginConfig(props.pluginId)).values,
   saveConfig: (values) => api.setPluginConfig(props.pluginId, values),
   // 调用插件 ctx.on_api 注册的端点：callApi('/status') / callApi('/run', {method:'POST', body})

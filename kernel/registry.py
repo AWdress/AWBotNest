@@ -26,7 +26,7 @@ STATE_FILE = Path("data/plugins_state.json")
 # __plugin__ 必填字段
 REQUIRED_FIELDS = ("name", "id", "version", "scope")
 # scope 合法值
-VALID_SCOPES = ("user", "bot", "both")
+VALID_SCOPES = ("user", "bot", "both", "standalone")
 # 配置界面渲染方式合法值
 VALID_RENDER_MODES = ("schema", "vue")
 # 插件自带前端（vue 模式）联邦产物约定路径（相对插件目录）
@@ -58,7 +58,7 @@ class PluginMeta:
     description: str = ""
     changelog: str = ""  # 可选：面向用户的版本更新说明
     icon: str = ""       # 可选：插件图标 URL，前端卡片展示；空则回退平台 logo
-    scope: str = "user"  # user | bot | both
+    scope: str = "user"  # user | bot | both | standalone
     default_enabled: bool = False
     webhook: bool = False  # 是否提供 HTTP webhook 入站端点（配 ctx.on_webhook 使用）
     # 配置界面渲染方式：

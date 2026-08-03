@@ -32,7 +32,7 @@ __plugin__ = {
     "description": "功能说明",
     "changelog": "v1.0.0 初始版本\n- 实现基础功能\n- 添加配置项",  # 可选，版本更新说明
     "icon": "",                   # 可选，图标 URL；留空回退平台 logo
-    "scope": "user",              # user | bot | both
+    "scope": "user",              # user | bot | both | standalone
     "default_enabled": False,
     "config_schema": {            # 可选，前端据此生成配置表单
         "keyword": {"type": "string", "default": "hello", "label": "触发词"},
@@ -95,7 +95,7 @@ async def h2(client, message):
 
 `group` 为本插件内部多个处理器之间的相对执行优先级，数值越小越先执行。在处理器中 `raise ctx.StopPropagation` 可阻止该消息被后续处理器继续处理。
 
-`on_message` / `on_edited_message` / `on_callback` 还接受 `target` 参数，决定处理器挂载到哪类账号：`"auto"`（默认，按插件 `scope` 选择）、`"user"`、`"bot"`、`"both"`。`scope` 为 `both` 时可借此将不同处理器分别挂到用户账号或机器人账号。
+`on_message` / `on_edited_message` / `on_callback` 还接受 `target` 参数，决定处理器挂载到哪类账号：`"auto"`（默认，按插件 `scope` 选择）、`"user"`、`"bot"`、`"both"`。`scope` 为 `both` 时可借此将不同处理器分别挂到用户账号或机器人账号；`scope` 为 `standalone` 时，`auto` 不会挂载任何 Telegram 消息处理器。
 
 ### 注册编辑消息处理器
 
@@ -162,9 +162,9 @@ async def get_chat_name(chat_id):
 - 查询失败时应有回退方案（如直接显示 ID）
 - 可以缓存结果避免重复查询
 
-### 通知平台管理员
+### 通知管理员
 
-监控、定时、告警类插件需向平台管理员推送时，调用 `ctx.notify` 提交给平台。平台负责分类、附加插件名与级别标签、统一格式与投递，插件无需关心收件人与格式。
+监控、定时、告警类插件需向管理员推送时，调用 `ctx.notify` 提交给平台。平台负责分类、附加插件名与级别标签、统一格式与投递，插件无需关心收件人与格式。
 
 ```python
 await ctx.notify("有新订单")
@@ -597,6 +597,9 @@ async def setup(ctx):
 | `user` | 用户账号 | 监听群消息、自动抢红包、自动抽奖等 |
 | `bot` | 机器人账号 | 菜单、命令、面向用户应答 |
 | `both` | 两者 | 需双端响应的功能 |
+| `standalone` | 不挂载账号 | 定时任务、Webhook、外部接口、浏览器自动化等独立功能 |
+
+`standalone` 在界面中显示为“独立运行”。它仍可正常使用配置、定时任务、Webhook、平台 AI、数据存储和 `ctx.notify`，只是不会出现账号选择，也不会按 `target="auto"` 挂载 Telegram 消息处理器。需要监听 Telegram 消息的插件应使用 `user`、`bot` 或 `both`，不要为了隐藏账号选择而使用 `standalone`。
 
 ---
 

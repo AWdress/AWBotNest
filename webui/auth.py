@@ -1,8 +1,8 @@
 """
 webui/auth.py
-Web 控制台鉴权 —— 用户名 + 密码登录。
+网页鉴权 —— 用户名 + 密码登录。
 
-- 首次运行自动初始化默认凭据：admin / password（存 data/auth.json）。
+- 首次运行自动初始化登录凭据（存 data/auth.json）。
 - 登录校验用户名+密码 → 签发令牌（HMAC(secret, username:pwd_hash)，
   无状态、重启不失效、改用户名或密码后自动失效）。
 - 之后请求带 Authorization: Bearer <token>，由 require_auth 校验。
@@ -17,6 +17,7 @@ import json
 import hmac
 import hashlib
 import secrets
+import threading
 from pathlib import Path
 
 from libs.log import logger
@@ -30,6 +31,7 @@ DEV_NO_AUTH = os.getenv("AWBOTNEST_DEV_NO_AUTH", "false").lower() == "true"
 
 DEFAULT_USERNAME = "admin"
 DEFAULT_PASSWORD = "password"
+_SETUP_LOCK = threading.Lock()
 
 
 def _hash_pwd(password: str, salt: str) -> str:
@@ -50,7 +52,7 @@ def _save(data: dict) -> None:
     _AUTH_FILE.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, ensure_ascii=False, indent=2)
     # 原子写：临时文件 + os.replace，避免写一半崩溃留下半截 JSON，
-    # 下次加载被当成损坏而重置成默认 admin/password（凭据丢失 + 安全降级）。
+    # 下次加载被当成损坏而重置成初始登录信息（凭据丢失 + 安全降级）。
     fd, tmp = tempfile.mkstemp(prefix=".auth_", suffix=".tmp", dir=str(_AUTH_FILE.parent))
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -65,7 +67,7 @@ def _save(data: dict) -> None:
 
 
 def _ensure_default() -> dict:
-    """首次运行或旧格式缺字段：写入默认 admin/password"""
+    """首次运行或旧格式缺字段：写入初始登录信息。"""
     data = _load()
     if not data.get("pwd_hash") or not data.get("username") or not data.get("secret") or not data.get("salt"):
         salt = secrets.token_hex(16)
@@ -76,10 +78,7 @@ def _ensure_default() -> dict:
             "secret": secrets.token_hex(32),
         }
         _save(data)
-        logger.warning(
-            "已生成默认控制台账号：用户名=%s 密码=%s（请登录后在「系统设置」尽快修改）",
-            DEFAULT_USERNAME, DEFAULT_PASSWORD,
-        )
+        logger.warning("登录信息已初始化，请在首次打开网页时按提示完成管理员账号设置")
     return data
 
 
@@ -115,11 +114,40 @@ def change_credentials(old_password: str, new_username: str, new_password: str) 
     if new_password:
         if len(new_password) < 4:
             raise HTTPException(status_code=400, detail="新密码至少 4 位")
+        if hmac.compare_digest(new_password.encode("utf-8"), DEFAULT_PASSWORD.encode("utf-8")):
+            raise HTTPException(status_code=400, detail="请设置一个新的密码")
         salt = secrets.token_hex(16)
         data["salt"] = salt
         data["pwd_hash"] = _hash_pwd(new_password, salt)
     data["username"] = new_username
     _save(data)
+
+
+def setup_credentials(username: str, password: str) -> str:
+    """首次设置管理员账号，并返回登录令牌。该操作只能成功一次。"""
+    username = (username or "").strip()
+    password = password or ""
+    if not username:
+        raise HTTPException(status_code=400, detail="请输入管理员用户名")
+    if len(username) > 64:
+        raise HTTPException(status_code=400, detail="用户名不能超过 64 个字符")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少 4 位")
+    if len(password) > 256:
+        raise HTTPException(status_code=400, detail="密码不能超过 256 个字符")
+    if hmac.compare_digest(password.encode("utf-8"), DEFAULT_PASSWORD.encode("utf-8")):
+        raise HTTPException(status_code=400, detail="请设置一个新的密码")
+
+    with _SETUP_LOCK:
+        data = _ensure_default()
+        if not _is_default_password(data):
+            raise HTTPException(status_code=409, detail="管理员账号已经设置完成")
+        salt = secrets.token_hex(16)
+        data["username"] = username
+        data["salt"] = salt
+        data["pwd_hash"] = _hash_pwd(password, salt)
+        _save(data)
+        return _make_token(data)
 
 
 def _verify_token(token: str) -> bool:
@@ -130,12 +158,16 @@ def _verify_token(token: str) -> bool:
     return hmac.compare_digest((token or "").encode("utf-8"), _make_token(data).encode("utf-8"))
 
 
-def is_default_password() -> bool:
-    """当前密码是否仍是出厂默认 password（用当前 salt 比对默认口令哈希）。"""
-    data = _load()
+def _is_default_password(data: dict) -> bool:
     if not data.get("pwd_hash") or not data.get("salt"):
         return True
     return hmac.compare_digest(_hash_pwd(DEFAULT_PASSWORD, data["salt"]), data["pwd_hash"])
+
+
+def is_default_password() -> bool:
+    """管理员账号是否仍处于首次设置前的初始状态。"""
+    data = _load()
+    return _is_default_password(data)
 
 
 async def require_auth(authorization: str = Header(default="")):
@@ -151,7 +183,7 @@ async def require_auth(authorization: str = Header(default="")):
 
 
 async def require_password_changed(authorization: str = Header(default="")):
-    """更严格的依赖：在 require_auth 基础上，若仍是默认密码则拒绝。
+    """更严格的依赖：在 require_auth 基础上，若尚未完成首次设置则拒绝。
     用于高危写操作（上传/导入/启用/配置/设置），强制首次改密后才能用。
     DEV_NO_AUTH 时仍放行（本地开发）。"""
     if DEV_NO_AUTH:
@@ -162,8 +194,8 @@ async def require_password_changed(authorization: str = Header(default="")):
     if not _verify_token(token):
         raise HTTPException(status_code=401, detail="未登录或登录已过期")
     if is_default_password():
-        # 428 Precondition Required：前端据此引导强制改密
-        raise HTTPException(status_code=428, detail="请先修改默认密码后再操作")
+        # 428 Precondition Required：前端据此引导完成管理员账号设置。
+        raise HTTPException(status_code=428, detail="请先完成管理员账号设置")
     return {"auth": True}
 
 

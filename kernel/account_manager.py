@@ -396,7 +396,7 @@ class AccountManager:
         for app in self.user_apps:
             session_file = self.workdir / f"{app.name}.session"
             if not session_file.exists():
-                logger.info("用户账号 [%s] 还没登录过，跳过（请在网页控制台或 Bot 里登录）", app.name)
+                logger.info("用户账号 [%s] 还没登录过，跳过（请在网页或 Bot 里登录）", app.name)
                 continue
             if app.name in paused:
                 logger.info("用户账号 [%s] 已手动下线，跳过", app.name)
@@ -421,7 +421,7 @@ class AccountManager:
         try:
             await self.start_bots()
         except RuntimeError as e:
-            logger.warning("Bot 暂不启动（可在网页控制台填好凭据后重启）: %s", e)
+            logger.warning("Bot 暂不启动（可在网页中填好凭据后重启）: %s", e)
         await self.start_users()
 
         # 同步到全局 manager，保持旧代码（core.manager 单例）可用

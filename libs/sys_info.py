@@ -28,7 +28,7 @@ async def system_version_get():
         f"**{project_name} 项目运行状态**\n\n"
         f"**系统信息**\n"
         f"├ 主机名: `{hostname}`\n"
-        f"├ 平台: `{sys_info.system}`\n"
+        f"├ 系统: `{sys_info.system}`\n"
         f"└ 内核: `{kernel_version}`\n\n"
         f"**运行环境**\n"
         f"├ Python: `{python_info}`\n"

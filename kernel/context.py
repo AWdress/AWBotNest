@@ -275,8 +275,8 @@ class PlatformContext:
     @property
     def owner_id(self) -> int:
         """
-        平台管理员的 Telegram 数字 ID（取自主账号 ACCOUNTS[0].tgid）。
-        插件不直接读 config，需要给「平台管理员」推送时用它。无主账号时为 0。
+        管理员的 Telegram 数字 ID（取自主账号 ACCOUNTS[0].tgid）。
+        插件不直接读 config，需要给管理员推送时用它。无主账号时为 0。
         """
         try:
             import config.config as _cfg
@@ -288,7 +288,7 @@ class PlatformContext:
                      account: Any = None, **kwargs) -> Any:
         """
         提交一条通知给平台通知中心。插件只管「内容 + 级别 + 分类 + 哪个账号」，
-        平台统一分类（打级别标签 + 插件名 + 账号名）、套格式，再通过 Bot 发给平台管理员
+        平台统一分类（打级别标签 + 插件名 + 账号名）、套格式，再通过 Bot 发给管理员
         （Bot 不可用时回退主账号收藏夹）。同时记入运行日志。
 
         level: info | success | warning | error
@@ -373,7 +373,7 @@ class PlatformContext:
             @ctx.on_message(ctx.filters.text, group=-10)
             async def handler(client, message): ...
 
-        target: 'user' | 'bot' | 'auto'(按插件 scope 自动选择，默认 user)
+        target: 'user' | 'bot' | 'auto'(按插件 scope 自动选择，standalone 不挂载账号)
 
         关于 group：Pyrogram 在同一 group 内只执行第一个匹配的 handler 就跳出该组，
         若所有插件都用同一 group，先注册者会"吃掉"消息。为此平台给每个插件分配独立的

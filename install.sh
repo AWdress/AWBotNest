@@ -91,7 +91,7 @@ else
   info "检测到已有配置，将保留 ${COMPOSE_FILE}。"
 fi
 
-info "正在拉取最新镜像并启动平台..."
+info "正在拉取最新镜像并启动 AWBotNest..."
 "${compose[@]}" -f "${COMPOSE_FILE}" pull
 "${compose[@]}" -f "${COMPOSE_FILE}" up -d --remove-orphans
 
@@ -104,5 +104,4 @@ server_ip="${server_ip:-服务器IP}"
 printf '\nAWBotNest 已启动。\n'
 printf '访问地址：http://%s:%s\n' "${server_ip}" "${WEB_PORT}"
 printf '安装目录：%s\n' "${INSTALL_DIR}"
-printf '默认账号：admin\n'
-printf '默认密码：password（登录后请立即修改）\n\n'
+printf '首次打开网页后，请按页面提示设置管理员用户名和密码。\n\n'
