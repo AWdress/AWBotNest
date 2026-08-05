@@ -239,31 +239,40 @@ const colorOf = pluginId => PALETTE[Math.max(0, activePlugins.value.indexOf(plug
 const timeline = computed(() => {
   const buckets = activityData.value?.buckets || []
   const totals = buckets.map(bucket => Object.values(bucket.counts || {}).reduce((sum, count) => sum + count, 0))
-  const max = Math.max(1, ...totals)
+  const successes = buckets.map(bucket => Object.values(bucket.success_counts || {}).reduce((sum, count) => sum + count, 0))
+  const max = Math.max(1, ...totals, ...successes)
   return buckets.map((bucket, index) => {
     const date = new Date(bucket.t * 1000)
     const x = buckets.length > 1 ? 28 + (index / (buckets.length - 1)) * 944 : 500
+    const step = buckets.length > 1 ? 944 / (buckets.length - 1) : 1000
+    const hitLeft = buckets.length === 1 || index === 0 ? 0 : x - step / 2
+    const hitRight = buckets.length === 1 || index === buckets.length - 1 ? 1000 : x + step / 2
     const y = 18 + (1 - totals[index] / max) * 154
+    const successY = 18 + (1 - successes[index] / max) * 154
     return {
       total: totals[index],
+      success: successes[index],
       label: activityRange.value === '7d'
         ? `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`
         : `${String(date.getHours()).padStart(2, '0')}:00`,
       hour: date.getHours(),
       x,
       y,
+      successY,
       xPct: `${(x / 1000) * 100}%`,
-      yPct: `${(y / 208) * 100}%`,
+      hitLeftPct: `${(hitLeft / 1000) * 100}%`,
+      hitWidthPct: `${((hitRight - hitLeft) / 1000) * 100}%`,
     }
   })
 })
 
 const linePath = computed(() => timeline.value.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '))
+const successLinePath = computed(() => timeline.value.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.successY}`).join(' '))
 const areaPath = computed(() => {
   if (!timeline.value.length) return ''
   return `${linePath.value} L ${timeline.value.at(-1).x} 176 L ${timeline.value[0].x} 176 Z`
 })
-const chartMax = computed(() => Math.max(1, ...timeline.value.map(point => point.total)))
+const chartMax = computed(() => Math.max(1, ...timeline.value.flatMap(point => [point.total, point.success])))
 const chartTicks = computed(() => [1, .75, .5, .25, 0].map(ratio => Math.round(chartMax.value * ratio)))
 const visibleAxisLabels = computed(() => activityRange.value === '7d'
   ? timeline.value
@@ -437,7 +446,10 @@ onUnmounted(() => {
           <div><strong>还没有插件活动</strong><p>插件处理消息后，这里会自动绘制{{ activityRangeLabel }}趋势。</p></div>
         </div>
         <template v-else>
-          <div class="chart-legend"><span><i></i>插件触发次数</span></div>
+          <div class="chart-legend">
+            <span><i class="trigger"></i>插件触发次数</span>
+            <span><i class="success"></i>成功次数</span>
+          </div>
           <div class="line-chart">
             <div class="y-axis" aria-hidden="true"><span v-for="tick in chartTicks" :key="tick">{{ tick }}</span></div>
             <div class="chart-canvas">
@@ -445,10 +457,12 @@ onUnmounted(() => {
                 <defs><linearGradient id="activity-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3080f0" stop-opacity=".26"/><stop offset="100%" stop-color="#3080f0" stop-opacity="0"/></linearGradient></defs>
                 <g class="chart-grid"><line v-for="index in 5" :key="index" x1="28" x2="972" :y1="18 + (index - 1) * 39.5" :y2="18 + (index - 1) * 39.5" /></g>
                 <path class="chart-area" :d="areaPath" />
-                <path class="chart-line" :d="linePath" />
-                <circle v-for="(point, index) in timeline" :key="index" class="chart-point" :class="{ active: hoveredPoint === index }" :cx="point.x" :cy="point.y" r="4" />
+                <path class="chart-line trigger" :d="linePath" />
+                <path class="chart-line success" :d="successLinePath" />
+                <circle v-if="hoveredChartPoint" class="chart-point trigger" :cx="hoveredChartPoint.x" :cy="hoveredChartPoint.y" r="3" />
+                <circle v-if="hoveredChartPoint" class="chart-point success" :cx="hoveredChartPoint.x" :cy="hoveredChartPoint.successY" r="3" />
               </svg>
-              <button v-for="(point, index) in timeline" :key="`hit-${index}`" type="button" class="chart-hit" :style="{ left: point.xPct, top: point.yPct }" :aria-label="`${point.label}，${point.total} 次`" @mouseenter="hoveredPoint = index" @mouseleave="hoveredPoint = null" @focus="hoveredPoint = index" @blur="hoveredPoint = null"></button>
+              <button v-for="(point, index) in timeline" :key="`hit-${index}`" type="button" class="chart-hit" :style="{ left: point.hitLeftPct, width: point.hitWidthPct }" :aria-label="`${point.label}，触发 ${point.total} 次，成功 ${point.success} 次`" @mouseenter="hoveredPoint = index" @mouseleave="hoveredPoint = null" @focus="hoveredPoint = index" @blur="hoveredPoint = null"></button>
               <div
                 v-if="hoveredChartPoint"
                 class="chart-hover-layer"
@@ -462,7 +476,8 @@ onUnmounted(() => {
                 <i class="chart-guide"></i>
                 <div class="chart-tooltip">
                   <strong>{{ hoveredChartPoint.label }}</strong>
-                  <span>触发次数: <b>{{ hoveredChartPoint.total }}</b></span>
+                  <span class="trigger-value">触发次数: <b>{{ hoveredChartPoint.total }}</b></span>
+                  <span class="success-value">成功次数: <b>{{ hoveredChartPoint.success }}</b></span>
                 </div>
               </div>
               <div class="x-axis" aria-hidden="true"><span v-for="point in visibleAxisLabels" :key="`${point.label}-${point.x}`" :style="{ left: point.xPct }">{{ point.label }}</span></div>
@@ -592,20 +607,25 @@ onUnmounted(() => {
 .range-switch button:hover { color: var(--text-primary); }
 .range-switch button.active { background: var(--bg-elevated); color: var(--text-primary); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
 
-.chart-legend { display: flex; padding: 0 17px 4px; color: var(--text-muted); font-size: 11px; }
+.chart-legend { display: flex; gap: 18px; padding: 0 17px 4px; color: var(--text-muted); font-size: 11px; }
 .chart-legend span { display: flex; align-items: center; gap: 7px; }
-.chart-legend i { width: 16px; height: 2px; border-radius: 3px; background: var(--accent); }
+.chart-legend i { width: 16px; height: 2px; border-radius: 3px; }
+.chart-legend i.trigger { background: var(--accent); }
+.chart-legend i.success { background: var(--success); }
 .line-chart { height: 226px; display: grid; grid-template-columns: 28px minmax(0,1fr); padding: 2px 15px 0 11px; }
 .y-axis { height: 208px; display: flex; flex-direction: column; justify-content: space-between; padding: 11px 5px 19px 0; color: var(--text-muted); font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; }
 .chart-canvas { position: relative; min-width: 0; height: 226px; }
 .chart-canvas > svg { width: 100%; height: 208px; overflow: visible; }
 .chart-grid line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
 .chart-area { fill: url(#activity-area); animation: chart-fade .55s ease both; }
-.chart-line { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 4px 7px rgba(48,128,240,.22)); }
-.chart-point { fill: var(--bg-card); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; opacity: .55; transition: opacity .16s ease, r .16s ease; }
-.chart-point.active { opacity: 1; r: 6px; }
-.chart-hit { position: absolute; width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%,-50%); cursor: crosshair; }
-.chart-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chart-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.chart-line.trigger { stroke: var(--accent); filter: drop-shadow(0 4px 7px rgba(48,128,240,.2)); }
+.chart-line.success { stroke: var(--success); filter: drop-shadow(0 4px 7px rgba(16,176,128,.16)); }
+.chart-point { fill: var(--bg-card); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.chart-point.trigger { stroke: var(--accent); }
+.chart-point.success { stroke: var(--success); }
+.chart-hit { position: absolute; top: 0; height: 208px; padding: 0; border: 0; background: transparent; cursor: crosshair; }
+.chart-hit:focus-visible { outline: 1px solid rgba(48,128,240,.38); outline-offset: -1px; }
 .chart-hover-layer { position: absolute; z-index: 4; width: 0; height: 0; pointer-events: none; }
 .chart-guide { position: absolute; left: 0; top: calc(-1 * var(--chart-guide-top, 208px)); width: 1px; height: 208px; background: rgba(188,201,220,.58); transform: translateX(-.5px); }
 .chart-tooltip { position: absolute; top: 14px; left: 12px; min-width: 144px; padding: 12px 13px; border: 1px solid var(--border-light); border-radius: 10px; background: rgba(15,24,37,.98); box-shadow: 0 12px 30px rgba(0,0,0,.32); }
@@ -613,7 +633,9 @@ onUnmounted(() => {
 .chart-hover-layer.place-above .chart-tooltip { top: auto; bottom: 14px; }
 .chart-tooltip strong, .chart-tooltip span { display: block; white-space: nowrap; }
 .chart-tooltip strong { margin-bottom: 8px; color: var(--text-primary); font-size: 14px; font-weight: 600; }
-.chart-tooltip span { color: var(--accent); font-size: 12px; }
+.chart-tooltip span { font-size: 12px; }
+.chart-tooltip .trigger-value { color: var(--accent); }
+.chart-tooltip .success-value { margin-top: 5px; color: var(--success); }
 .chart-tooltip b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .x-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; color: var(--text-muted); font-size: 9px; }
 .x-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }

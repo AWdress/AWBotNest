@@ -84,7 +84,7 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
             raise last_error
 
     def _install_activity_hooks(self) -> None:
-        """包裹常用出站发送方法，调用时给「当前插件」记一次活跃。
+        """包裹常用出站发送方法，记录当前插件的尝试次数与成功次数。
         覆盖 ctx.bot.send / ctx.user.send 与 message.reply/edit（它们内部都走这些方法）。
         幂等：重复 start 不会重复包裹。"""
         if getattr(self, "_activity_hooked", False):
@@ -113,7 +113,12 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
                         activity.record_current()
                     except Exception:  # noqa: BLE001 - 统计绝不影响发送
                         pass
-                    return await fn(*args, **kwargs)
+                    result = await fn(*args, **kwargs)
+                    try:
+                        activity.record_success_current()
+                    except Exception:  # noqa: BLE001 - 统计绝不影响发送
+                        pass
+                    return result
                 return wrapped
 
             setattr(self, name, make(orig))
