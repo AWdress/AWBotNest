@@ -2890,15 +2890,18 @@ onBeforeRouteLeave(async () => {
 
 /* 手机适配 */
 @media (max-width: 768px) {
+  .settings-page,
+  .toolbar { min-width: 0; width: 100%; }
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
   .tabs {
-    flex-wrap: nowrap;
-    overflow-x: auto;
-    scrollbar-width: none;
-    scroll-snap-type: x proximity;
+    width: 100%; min-width: 0; display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: hidden;
   }
-  .tabs::-webkit-scrollbar { display: none; }
-  .tab { white-space: nowrap; flex: 0 0 auto; justify-content: center; padding: 8px 14px; scroll-snap-align: start; }
+  .tab {
+    width: 100%; min-width: 0; min-height: 44px; justify-content: center;
+    padding: 8px 6px; white-space: nowrap; font-size: 13px;
+  }
   .panel { max-width: 100%; }
   .maint-item { flex-direction: column; align-items: stretch; }
   .grid3 { grid-template-columns: 1fr; }
