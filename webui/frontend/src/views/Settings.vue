@@ -1213,7 +1213,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 登录设置 -->
-      <div v-show="tab === 'login'" class="card profile-card">
+      <div v-if="tab === 'login'" class="card profile-card">
         <div class="card-title">个人信息</div>
         <div class="profile-settings">
           <div class="profile-avatar">
@@ -1237,7 +1237,7 @@ onBeforeRouteLeave(async () => {
         </div>
       </div>
 
-      <div v-show="tab === 'login'" class="card">
+      <div v-if="tab === 'login'" class="card">
         <div class="card-title">登录设置</div>
         <div class="hint muted">修改登录用户名和密码。</div>
         <div v-if="credErr" class="alert err">{{ credErr }}</div>
@@ -1258,7 +1258,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- Telegram 凭据 -->
-      <div v-show="tab === 'login'" class="card" style="margin-top:16px">
+      <div v-if="tab === 'login'" class="card" style="margin-top:16px">
         <div class="card-title">Telegram 凭据</div>
         <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知推送」页配置。敏感值显示为打码，不改就留着。</div>
         <div class="grid2">
@@ -1270,7 +1270,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 通知渠道 -->
-      <div v-show="tab === 'notify'" class="card">
+      <div v-if="tab === 'notify'" class="card">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
           设置消息发送渠道参数
@@ -1350,7 +1350,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 推送路由 -->
-      <div v-show="tab === 'notify'" class="card" style="margin-top:16px">
+      <div v-if="tab === 'notify'" class="card" style="margin-top:16px">
         <div class="card-title">推送路由</div>
         <div class="hint muted small" style="margin-bottom:12px">
           选择每个插件的通知发到哪个渠道；选择立即生效（无需保存设置）。未单独选择时使用当前默认渠道。
@@ -1681,7 +1681,7 @@ onBeforeRouteLeave(async () => {
       </template>
 
       <!-- Webhook -->
-      <div v-show="tab === 'api'" class="card">
+      <div v-if="tab === 'api'" class="card">
         <div class="card-title">Webhook 入站</div>
         <div class="hint muted small" style="margin-bottom:12px">
           外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
@@ -1701,7 +1701,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 开放 API -->
-      <div v-show="tab === 'api'" class="card" style="margin-top:16px">
+      <div v-if="tab === 'api'" class="card" style="margin-top:16px">
         <div class="card-title">REST API</div>
         <div class="hint muted small" style="margin-bottom:12px">
           第三方工具（如 AI 助手、自动化脚本）可通过 API 远程管理 AWBotNest 和插件。
@@ -1729,7 +1729,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 网页服务 -->
-      <div v-show="tab === 'system'" class="card">
+      <div v-if="tab === 'system'" class="card">
         <div class="card-title">网页服务</div>
         <div class="grid2">
           <div class="field"><label>监听端口 (WEB_UI_PORT)</label>
@@ -1741,7 +1741,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 运行代理 -->
-      <div v-show="tab === 'system'" class="card" style="margin-top:16px">
+      <div v-if="tab === 'system'" class="card" style="margin-top:16px">
         <div class="card-title">运行代理</div>
         <div class="row between">
           <span>启用代理</span>
@@ -1781,7 +1781,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 数据库 -->
-      <div v-show="tab === 'system'" class="card" style="margin-top:16px">
+      <div v-if="tab === 'system'" class="card" style="margin-top:16px">
         <div class="card-title">数据库</div>
         <div class="grid2">
           <div class="field"><label>类型</label>
@@ -1809,7 +1809,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 维护 -->
-      <div v-show="tab === 'maint'" class="card">
+      <div v-if="tab === 'maint'" class="card">
         <div class="card-title">维护</div>
         <div class="hint muted">
           这里可以设置日志自动清理、导出当前数据快照，或从已有备份包恢复。备份会包含 data/、sessions/、db_file/、plugins/。
@@ -2891,9 +2891,14 @@ onBeforeRouteLeave(async () => {
 /* 手机适配 */
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
-  /* tab 全部换行展示，避免靠右的「数据库」被裁掉看不全 */
-  .tabs { flex-wrap: wrap; }
-  .tab { white-space: nowrap; flex: 1 1 auto; justify-content: center; padding: 8px 12px; }
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab { white-space: nowrap; flex: 0 0 auto; justify-content: center; padding: 8px 14px; scroll-snap-align: start; }
   .panel { max-width: 100%; }
   .maint-item { flex-direction: column; align-items: stretch; }
   .grid3 { grid-template-columns: 1fr; }

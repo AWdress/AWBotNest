@@ -125,7 +125,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
+    <div v-if="error" class="alert">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
     <div v-if="loading" class="center muted">加载中…</div>
 
@@ -165,10 +165,10 @@ onMounted(load)
 
     <!-- 登录向导 -->
     <div v-if="wizardOpen" class="modal-mask" @click.self="wizardOpen=false">
-      <div class="modal card">
+      <div class="modal card" role="dialog" aria-modal="true" aria-label="登录账号">
         <div class="modal-head">
           <h2>登录账号</h2>
-          <span class="close" @click="wizardOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          <button type="button" class="close" aria-label="关闭" @click="wizardOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
 
         <!-- 步骤指示 -->
@@ -244,7 +244,7 @@ onMounted(load)
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
 .center { text-align: center; padding: 40px; }
 .alert { background: var(--danger-dim); color: var(--danger); padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 16px; display: flex; justify-content: space-between; }
-.alert .close { cursor: pointer; display: inline-flex; align-items: center; }
+.alert .close { border: 0; background: transparent; color: inherit; cursor: pointer; display: inline-flex; align-items: center; }
 .close .x-ico { width: 16px; height: 16px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); }
@@ -268,7 +268,7 @@ onMounted(load)
 .modal { --modal-pad: var(--gap-lg); width: 440px; max-width: 90vw; max-height: 86vh; overflow-y: auto; box-shadow: var(--shadow-float); }
 .modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .modal-head h2 { font-size: 16px; }
-.modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
+.modal-head .close { border: 0; background: transparent; cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
 .modal-head .close .x-ico { width: 20px; height: 20px; }
 .modal-foot {
   position: sticky; bottom: calc(0px - var(--modal-pad));

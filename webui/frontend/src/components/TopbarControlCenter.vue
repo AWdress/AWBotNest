@@ -44,6 +44,7 @@ let jobsTimer = null
 let notificationLoadVersion = 0
 const seenLogs = new Set()
 const quickLogsBox = ref(null)
+const modalDialog = ref(null)
 
 const modalTitle = computed(() => ({
   logs: '实时日志',
@@ -143,6 +144,7 @@ function useFallbackNoticeIcon(event) {
 function openModal(name) {
   panel.value = ''
   modal.value = name
+  nextTick(() => modalDialog.value?.focus())
   if (name === 'logs') {
     logPaused.value = false
     logs.value = []
@@ -408,12 +410,22 @@ onUnmounted(() => {
         <strong>通知中心</strong>
         <span class="notice-actions">
           <button class="read-action" :class="{ busy: notificationAction === 'read' }"
-                  :disabled="Boolean(notificationAction)" title="全部标记为已读" @click.stop="markAllRead">
-            {{ notificationAction === 'read' ? '…' : '✓' }}
+                  :disabled="Boolean(notificationAction)" title="全部标记为已读"
+                  aria-label="全部标记为已读" @click.stop="markAllRead">
+            <span v-if="notificationAction === 'read'">…</span>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m5 12 4 4L19 6"/>
+            </svg>
           </button>
           <button class="clear-action" :class="{ busy: notificationAction === 'clear' }"
-                  :disabled="Boolean(notificationAction)" title="清空全部通知" @click.stop="clearNotifications">
-            {{ notificationAction === 'clear' ? '…' : '⌫' }}
+                  :disabled="Boolean(notificationAction)" title="清空全部通知"
+                  aria-label="清空全部通知" @click.stop="clearNotifications">
+            <span v-if="notificationAction === 'clear'">…</span>
+            <svg v-else viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 7h16M9 7V4h6v3m-9 0 1 13h10l1-13M10 11v5m4-5v5"/>
+            </svg>
           </button>
         </span>
       </div>
@@ -455,8 +467,12 @@ onUnmounted(() => {
 
   <Teleport to="body">
     <div v-if="modal" class="control-modal-mask" @click.self="closeModal">
-      <section class="control-modal">
-        <header><strong>{{ modalTitle }}</strong><button @click="closeModal">×</button></header>
+      <section ref="modalDialog" class="control-modal" role="dialog" aria-modal="true"
+               :aria-label="modalTitle" tabindex="-1">
+        <header><strong>{{ modalTitle }}</strong><button aria-label="关闭" @click="closeModal">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button></header>
 
         <div v-if="modal === 'logs'" class="modal-body logs-modal" ref="quickLogsBox">
           <div class="log-toolbar">
@@ -607,6 +623,7 @@ onUnmounted(() => {
 .pop-head button:hover { color: var(--text-primary); border-color: var(--border-light); background: var(--bg-hover); }
 .pop-head button:active { transform: scale(.9); }
 .pop-head button:disabled { cursor: wait; opacity: .7; }
+.pop-head button svg { width: 18px; height: 18px; }
 .notice-actions { display: flex; align-items: center; gap: 5px; }
 .notice-actions .read-action:hover, .notice-actions .read-action.busy { color: var(--success); border-color: var(--success); background: rgba(16,185,129,.13); }
 .notice-actions .clear-action:hover, .notice-actions .clear-action.busy { color: var(--danger); border-color: var(--danger); background: rgba(239,68,68,.13); }
@@ -669,6 +686,7 @@ onUnmounted(() => {
 .control-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); }
 .control-modal > header strong { font-size: 18px; }
 .control-modal > header button { width: 34px; height: 34px; border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); font-size: 23px; cursor: pointer; }
+.control-modal > header button svg { width: 20px; height: 20px; }
 .control-modal > header button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .control-modal .modal-body { overflow-y: auto; padding: 18px 22px 22px; }
 .control-modal .logs-modal { overflow-anchor: none; }
@@ -756,7 +774,7 @@ onUnmounted(() => {
 .release-note-content :deep(code) { padding: 2px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elevated); color: var(--text-primary); font-family: var(--font-mono); font-size: .9em; }
 .release-note-content :deep(pre) { margin: 12px 0; padding: 13px 15px; overflow-x: auto; border: 1px solid var(--border); border-radius: 9px; background: var(--bg-base); }
 .release-note-content :deep(pre code) { padding: 0; border: 0; background: transparent; }
-.release-note-content :deep(blockquote) { margin: 12px 0; padding: 4px 14px; border-left: 3px solid var(--accent); color: var(--text-muted); }
+.release-note-content :deep(blockquote) { margin: 12px 0; padding: 10px 14px; border: 1px solid var(--border-light); border-radius: 9px; background: var(--bg-elevated); color: var(--text-muted); }
 .release-note-content :deep(hr) { margin: 20px 0; border: 0; border-top: 1px solid var(--border); }
 .release-note-content :deep(table) { width: 100%; margin: 12px 0; border-collapse: collapse; }
 .release-note-content :deep(th),

@@ -1,19 +1,22 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
-import { api } from '../api'
+import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import {
+  platformStatus,
+  platformStatusError,
+  platformStatusLoading,
+  refreshPlatformStatus,
+} from '../composables/platformStatus'
 
 const st = ref(null)
 const error = ref('')
-const loading = ref(true)
+const loading = computed(() => platformStatusLoading.value || !platformStatus.value)
 const pageReady = ref(false)
 const hoveredBar = ref(null)
 const focusedPlugin = ref('')
 const changedAccounts = ref([])
 const changedJobs = ref([])
 const animated = ref({ user: 0, plugin: 0, uptime: 0, donut: 0, donutAngle: 0 })
-let timer = null
 let changeTimer = null
-let loadingRequest = false
 let firstPaintFrame = null
 const animationFrames = new Map()
 
@@ -68,16 +71,13 @@ function markChangedRows(previous, next) {
   }, 1400)
 }
 
-async function load() {
-  if (loadingRequest) return
-  loadingRequest = true
+async function applyStatus(next) {
+  if (!next) return
   try {
     const previous = st.value
-    const next = await api.status()
     markChangedRows(previous, next)
     st.value = next
     error.value = ''
-    loading.value = false
 
     animateNumber('user', next.user_count)
     animateNumber('plugin', next.plugins.enabled)
@@ -94,14 +94,16 @@ async function load() {
     }
   } catch (e) {
     error.value = e.message
-    loading.value = false
-  } finally {
-    loadingRequest = false
   }
 }
-onMounted(() => { load(); timer = setInterval(load, 8000) })
+
+watch(platformStatus, applyStatus, { immediate: true })
+watch(platformStatusError, (message) => { error.value = message || '' }, { immediate: true })
+
+onMounted(() => {
+  if (!platformStatus.value) refreshPlatformStatus(true).catch(() => {})
+})
 onUnmounted(() => {
-  clearInterval(timer)
   clearTimeout(changeTimer)
   if (firstPaintFrame) cancelAnimationFrame(firstPaintFrame)
   for (const frame of animationFrames.values()) cancelAnimationFrame(frame)
@@ -348,7 +350,7 @@ const donutStyle = computed(() => ({
                   {{ nameOf(seg.pid) }} {{ seg.count }} 次
                 </span>
               </div>
-              <div class="bar-stack" :style="{ height: pageReady ? `${bar.heightPct}%` : '0%' }">
+              <div class="bar-stack" :style="{ height: `${bar.heightPct}%`, transform: pageReady ? 'scaleY(1)' : 'scaleY(0)' }">
                 <div v-for="seg in bar.segs" :key="seg.pid" class="bar-seg"
                      :style="{ height: (seg.frac * 100) + '%', background: colorOf(seg.pid) }"></div>
               </div>
@@ -583,10 +585,11 @@ const donutStyle = computed(() => ({
   width: 100%; min-height: 2px; border-radius: 3px 3px 0 0; overflow: hidden;
   display: flex; flex-direction: column-reverse;
   background: var(--bg-elevated);
-  transition: height .56s cubic-bezier(.2,.8,.2,1), filter .2s ease, box-shadow .2s ease;
+  transform-origin: bottom;
+  transition: transform .56s cubic-bezier(.2,.8,.2,1), filter .2s ease, box-shadow .2s ease;
   transition-delay: var(--bar-delay);
 }
-.bar-seg { width: 100%; transition: height .45s ease, opacity .2s ease; }
+.bar-seg { width: 100%; transition: opacity .2s ease; }
 .bar-tooltip {
   position: absolute; z-index: 4; left: 50%; bottom: calc(var(--bar-height) + 8px);
   width: max-content; min-width: 130px; max-width: 210px; padding: 9px 10px;
@@ -669,8 +672,8 @@ const donutStyle = computed(() => ({
 .job.changed, .tbl tr.changed { animation: row-changed 1.35s ease both; }
 @keyframes row-changed {
   0% { background: transparent; }
-  18% { background: rgba(48,128,240,.16); box-shadow: inset 3px 0 var(--accent); }
-  100% { background: transparent; box-shadow: inset 3px 0 transparent; }
+  18% { background: rgba(48,128,240,.16); box-shadow: inset 0 0 0 1px rgba(48,128,240,.32); }
+  100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
 }
 .job:last-child { border-bottom: none; }
 .job-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }

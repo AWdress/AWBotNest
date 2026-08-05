@@ -1075,7 +1075,7 @@ onUnmounted(() => {
       <div v-else class="control-caption">浏览并安装公开仓库中的插件</div>
     </div>
 
-    <div v-if="error" class="alert">{{ error }} <span @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
+    <div v-if="error" class="alert">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
     <!-- ════ 我的插件 ════ -->
     <template v-if="tab === 'mine'">
@@ -1156,7 +1156,7 @@ onUnmounted(() => {
     <!-- ════ 插件市场 ════ -->
     <template v-else>
       <div class="hint muted store-hint">来自官方仓库与你配置的 GitHub 仓库。点「安装」拉到本地（不自动启用），安装后到「我的插件」开启。</div>
-      <div v-if="storeErr" class="alert">{{ storeErr }} <span @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span></div>
+      <div v-if="storeErr" class="alert">{{ storeErr }} <button type="button" aria-label="关闭提示" @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
       <div v-if="storeBusy && store.length === 0" class="muted center">加载市场…</div>
       <template v-else>
@@ -1335,7 +1335,7 @@ onUnmounted(() => {
       <div class="modal card modal-changelog">
         <div class="modal-head">
           <h2>{{ changelogTarget.name }} · 版本历史</h2>
-          <span class="close" @click="changelogOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          <button type="button" class="close" aria-label="关闭" @click="changelogOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <div class="modal-body">
           <div class="changelog-header">
@@ -1370,7 +1370,7 @@ onUnmounted(() => {
                  @error="useFallbackPluginIcon" />
             <h2>{{ configTarget?.name }} · 配置</h2>
           </div>
-          <span class="close" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          <button type="button" class="close" aria-label="关闭" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <RemotePluginConfig v-if="configRenderMode === 'vue'"
                     :key="configTarget?.id"
@@ -1495,7 +1495,7 @@ onUnmounted(() => {
             {{ logsTarget?.name }} · 日志
             <span class="conn" :class="{ on: logsConnected }"><span class="dot"></span>{{ logsConnected ? '实时' : '连接中' }}</span>
           </h2>
-          <span class="close" @click="closeLogs"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          <button type="button" class="close" aria-label="关闭" @click="closeLogs"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <div class="log-box" ref="logsBox">
           <div v-if="logsList.length === 0" class="muted center">该插件暂无日志</div>
@@ -1516,7 +1516,7 @@ onUnmounted(() => {
       <div class="modal card">
         <div class="modal-head">
           <h2>设置 GitHub 仓库地址</h2>
-          <span class="close" @click="repoOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></span>
+          <button type="button" class="close" aria-label="关闭" @click="repoOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <div v-if="repoErr" class="alert">{{ repoErr }}</div>
         <div class="form">
@@ -1599,7 +1599,7 @@ onUnmounted(() => {
   padding: 12px 16px; border-radius: var(--radius-sm);
   margin-bottom: 16px; font-size: 13px;
   display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  border-left: 3px solid var(--danger);
+  border: 1px solid rgba(224, 72, 79, .45);
 }
 .alert::before {
   content: '';
@@ -1608,7 +1608,7 @@ onUnmounted(() => {
   background: url('data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%23ef4444" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>') no-repeat center;
   background-size: contain;
 }
-.alert .close { cursor: pointer; font-size: 16px; display: inline-flex; align-items: center; transition: transform 0.2s; }
+.alert .close { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 16px; display: inline-flex; align-items: center; transition: transform 0.2s; }
 .alert .close:hover { transform: scale(1.1); }
 .x-ico { width: 16px; height: 16px; }
 
@@ -1641,8 +1641,8 @@ onUnmounted(() => {
 .plugin-card.clickable:active { transform: translateY(-1px) scale(0.995); }
 .plugin-card.menu-open { position: relative; z-index: 50; }
 .plugin-card.err {
-  border-color: var(--danger-dim);
-  border-left: 3px solid var(--danger);
+  border-color: rgba(224, 72, 79, .48);
+  box-shadow: inset 0 0 0 1px rgba(224, 72, 79, .08);
 }
 
 .kebab-wrap { margin-left: auto; position: relative; }
@@ -1758,7 +1758,7 @@ onUnmounted(() => {
   padding: 16px;
   background: rgba(255, 193, 7, 0.05);
   border-radius: var(--radius-sm);
-  border-left: 3px solid #ffc107;
+  border: 1px solid rgba(224, 160, 32, .34);
 }
 .section-label {
   font-size: 14px; font-weight: 600; color: var(--text-secondary);
@@ -1782,7 +1782,7 @@ onUnmounted(() => {
   background: var(--danger-dim); color: var(--danger);
   padding: 10px 12px; border-radius: var(--radius-sm);
   font-size: 12px; font-family: monospace;
-  border-left: 3px solid var(--danger);
+  border: 1px solid rgba(224, 72, 79, .38);
   display: flex; align-items: flex-start; gap: 8px;
 }
 .err-msg::before {
@@ -2058,7 +2058,7 @@ onUnmounted(() => {
   background: var(--bg-elevated);
 }
 .config-plugin-icon-fallback { padding: 6px; }
-.modal-head .close { cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
+.modal-head .close { border: 0; background: transparent; cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
 .modal-head .close .x-ico { width: 20px; height: 20px; }
 .modal-foot {
   position: sticky; bottom: calc(0px - var(--modal-pad)); z-index: 2;

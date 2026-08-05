@@ -12,13 +12,14 @@ const icons = {
 <template>
   <div class="toast-wrap">
     <TransitionGroup name="toast">
-      <div v-for="t in toastState.items" :key="t.id" class="toast" :class="t.type" @click="dismissToast(t.id)">
+      <button v-for="t in toastState.items" :key="t.id" type="button" class="toast" :class="t.type"
+              :aria-label="`${t.message}，点击关闭`" @click="dismissToast(t.id)">
         <svg class="t-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">
           <path :d="icons[t.type] || icons.info" />
         </svg>
         <span class="t-msg">{{ t.message }}</span>
-      </div>
+      </button>
     </TransitionGroup>
   </div>
 </template>
@@ -35,19 +36,19 @@ const icons = {
   padding: 13px 16px;
   background: var(--bg-card); border: 1px solid var(--border-light);
   border-radius: var(--radius-sm); box-shadow: var(--shadow);
-  font-size: 13px; color: var(--text-primary);
+  font: inherit; font-size: 13px; color: var(--text-primary); text-align: left;
   cursor: pointer; pointer-events: auto;
 }
-.toast.success { border-left: 3px solid var(--accent); }
-.toast.error { border-left: 3px solid var(--danger); }
-.toast.info { border-left: 3px solid var(--accent); }
+.toast.success { border-color: rgba(48,128,240,.52); }
+.toast.error { border-color: rgba(224,72,79,.58); }
+.toast.info { border-color: rgba(48,128,240,.52); }
 .t-icon { width: 18px; height: 18px; flex-shrink: 0; }
 .toast.success .t-icon { color: var(--accent); }
 .toast.error .t-icon { color: var(--danger); }
 .toast.info .t-icon { color: var(--accent); }
 .t-msg { line-height: 1.4; }
 
-.toast-enter-active, .toast-leave-active { transition: all 0.25s ease; }
+.toast-enter-active, .toast-leave-active { transition: opacity 0.25s ease, transform 0.25s ease; }
 .toast-enter-from { opacity: 0; transform: translateX(30px); }
 .toast-leave-to { opacity: 0; transform: translateX(30px); }
 .toast-leave-active { position: absolute; right: 0; }

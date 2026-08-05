@@ -193,7 +193,7 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
       <div v-if="selectedIds.length" class="chips">
         <span v-for="id in selectedIds" :key="id" class="chip on">
           {{ titleOf(id) }}
-          <span class="chip-x" @click="removeSel(id)">×</span>
+          <button type="button" class="chip-x" :aria-label="`移除 ${titleOf(id)}`" @click="removeSel(id)">×</button>
         </span>
       </div>
       <div v-else class="muted-sm">未选择</div>
@@ -306,7 +306,7 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 .chip { font-size: 12px; padding: 4px 12px; border-radius: 16px; cursor: pointer;
   background: var(--bg-elevated); border: 1px solid var(--border-light); color: var(--text-secondary); }
 .chip.on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
-.chip-x { margin-left: 6px; cursor: pointer; font-weight: 700; }
+.chip-x { margin-left: 6px; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; font-weight: 700; }
 
 .slider { width: 100%; accent-color: var(--accent); }
 .slider-val { font-size: 13px; color: var(--accent); font-weight: 600; }

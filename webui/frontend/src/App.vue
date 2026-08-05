@@ -1,6 +1,6 @@
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { api, getToken, setToken, setUnauthorizedHandler } from './api'
 import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -10,6 +10,13 @@ import logoWhite from './assets/logo-white.png'
 import { confirm } from './composables/confirm'
 import { toast } from './composables/toast'
 import { clearUiProfile, loadUiProfile } from './composables/uiProfile'
+import {
+  platformStatus,
+  platformStatusError,
+  refreshPlatformStatus,
+  startPlatformStatusPolling,
+  stopPlatformStatusPolling,
+} from './composables/platformStatus'
 
 const route = useRoute()
 const router = useRouter()
@@ -37,7 +44,7 @@ async function onAuthed() {
       return
     }
     authed.value = true
-    ping().then(checkUpdate)
+    startPlatformStatusPolling().then(checkUpdate).catch(() => {})
   } catch (error) {
     authed.value = false
     if (getToken()) toast.error(`读取管理员资料失败：${error.message}`)
@@ -46,6 +53,7 @@ async function onAuthed() {
   }
 }
 function logout() {
+  stopPlatformStatusPolling()
   setToken('')
   clearUiProfile()
   authed.value = false
@@ -77,20 +85,21 @@ async function restart() {
   }
 }
 setUnauthorizedHandler(() => {
+  stopPlatformStatusPolling()
   clearUiProfile()
   authed.value = false
   restoringSession.value = false
 })
 
-// 刷新后先验证令牌并读取管理员资料，完成后再显示主界面。
-async function ping() {
-  try {
-    const s = await api.status()
-    online.value = true
-    version.value = s.version || ''
-    // 查更新走独立的低频节奏，不跟 10 秒心跳，否则会打满 GitHub 未鉴权限流(60次/小时)
-  } catch { online.value = false }
-}
+watch(platformStatus, (status) => {
+  if (!status) return
+  online.value = true
+  version.value = status.version || ''
+})
+
+watch(platformStatusError, (message) => {
+  if (message) online.value = false
+})
 
 // 把 "v1.2.3"/"1.2.3" 转成可比较的数字数组
 function parseVer(v) {
@@ -110,7 +119,7 @@ function isNewer(remote, local) {
 async function checkUpdate(includeHistory = false) {
   if (!version.value) {
     // 还没拿到本地版本就先取一次，避免 onMounted 时序导致跳过
-    try { const s = await api.status(); version.value = s.version || '' } catch { return }
+    try { const s = await refreshPlatformStatus(true); version.value = s.version || '' } catch { return }
     if (!version.value) return
   }
   try {
@@ -174,14 +183,21 @@ const icons = {
   gear: 'M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z',
 }
 
+let updateTimer = null
+
 onMounted(async () => {
   // 恢复登录态后补种资源 Cookie，并确认账号已经完成首次设置。
   if (getToken()) {
     await onAuthed()
   }
-  setInterval(() => { if (authed.value) ping() }, 10000)
+  if (authed.value) startPlatformStatusPolling().catch(() => {})
   // 查更新独立低频：每 6 小时一次，避免打满 GitHub 限流
-  setInterval(() => { if (authed.value) checkUpdate() }, 6 * 3600 * 1000)
+  updateTimer = setInterval(() => { if (authed.value) checkUpdate() }, 6 * 3600 * 1000)
+})
+
+onUnmounted(() => {
+  stopPlatformStatusPolling()
+  clearInterval(updateTimer)
 })
 </script>
 
@@ -505,12 +521,7 @@ onMounted(async () => {
   content: '';
   position: absolute;
   inset: 0;
-  opacity: .18;
-  background-image:
-    linear-gradient(rgba(91, 130, 180, .08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(91, 130, 180, .08) 1px, transparent 1px);
-  background-size: 52px 52px;
-  mask-image: radial-gradient(circle at center, #000 0%, transparent 68%);
+  background: radial-gradient(ellipse at 50% 72%, rgba(45, 126, 244, .055), transparent 50%);
 }
 .profile-loading-aura {
   position: absolute;
