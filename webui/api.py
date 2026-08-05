@@ -2215,7 +2215,7 @@ async def system_status(user=Depends(_auth)):
         "uptime_seconds": uptime,
         "python": _sys.version.split()[0],
         "platform": f"{_platform.system()} {_platform.release()}",
-        "bot_connected": bool(acc and acc.bot_app and acc.bot_app.is_connected) if acc else False,
+        "bot_connected": acc.connection_ready(acc.bot_app) if acc else False,
         "user_connected": bool(acc and acc.primary_user_app) if acc else False,
         "user_count": len(acc.connected_user_apps) if acc else 0,
         "accounts": accounts_info,
@@ -2325,10 +2325,7 @@ async def ui_health(user=Depends(_auth)):
         item for item in (ai_settings.get("providers", []) or [])
         if isinstance(item, dict)
     ]
-    bot_connected = bool(
-        accounts and accounts.bot_app
-        and getattr(accounts.bot_app, "is_connected", False)
-    )
+    bot_connected = accounts.connection_ready(accounts.bot_app) if accounts else False
     checks = [
         {"id": "accounts", "name": "账号服务", "ok": accounts is not None,
          "detail": f"{len(accounts.connected_user_apps) if accounts else 0} 个用户账号在线"},
@@ -2801,7 +2798,7 @@ async def api_list_accounts(user=Depends(_api_key)):
             "type": "bot",
             "session": "default",
             "name": getattr(bot, "name", "Bot"),
-            "connected": getattr(bot, "is_connected", False),
+            "connected": accounts.connection_ready(bot),
         })
 
     # 用户账号
@@ -2810,7 +2807,7 @@ async def api_list_accounts(user=Depends(_api_key)):
             "type": "user",
             "session": getattr(app, "name", ""),
             "name": getattr(app, "name", ""),
-            "connected": getattr(app, "is_connected", False),
+            "connected": accounts.connection_ready(app),
         })
 
     return {"accounts": result, "platform_ready": True}
@@ -2871,7 +2868,7 @@ async def api_get_platform_status(user=Depends(_api_key)):
 
     return {
         "version": APP_VERSION,
-        "bot_connected": accounts.bot_app is not None and getattr(accounts.bot_app, "is_connected", False),
+        "bot_connected": accounts.connection_ready(accounts.bot_app),
         "user_accounts_count": len(accounts.connected_user_apps),
         "total_plugins": len(registry.scan()),
         "enabled_plugins": len(enabled_plugins),

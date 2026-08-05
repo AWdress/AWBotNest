@@ -35,7 +35,7 @@ class InteractionMixin:
         try:
             return await asyncio.wait_for(future, timeout=timeout)
         except asyncio.TimeoutError:
-            logger.warning(f"Interaction: 等待 {key} 回复超时")
+            logger.warning(f"交互等待超时: 未收到 {key} 的回复")
             return None
         finally:
             wait_queue = self._waiting_for_answers.get(key)

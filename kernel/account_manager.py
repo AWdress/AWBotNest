@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 from core import API_HASH, API_ID
 from libs.log import logger
@@ -139,6 +140,12 @@ except Exception:  # noqa: BLE001
 class AccountManager:
     """管理所有 Telegram 账号客户端的连接与生命周期。"""
 
+    _RECONNECT_CHECK_INTERVAL = 10.0
+    _RECONNECT_GRACE_PERIOD = 30.0
+    _RECONNECT_BASE_DELAY = 10.0
+    _RECONNECT_MAX_DELAY = 300.0
+    _RECONNECT_ATTEMPT_TIMEOUT = 45.0
+
     def __init__(self, workdir: str = "sessions"):
         self.workdir = Path(workdir)
         self.workdir.mkdir(parents=True, exist_ok=True)
@@ -155,20 +162,36 @@ class AccountManager:
         # per-session 上线锁：防并发双击上线竞争（见 set_online）
         self._session_locks: dict[str, asyncio.Lock] = {}
 
+        # 平台级连接守护：Pyrogram 自带重连失效时再介入，并按连接独立退避。
+        self._reconnect_task: asyncio.Task | None = None
+        self._reconnect_callback: Callable[[], Awaitable[None]] | None = None
+        self._disconnect_since: dict[str, float] = {}
+        self._reconnect_attempts: dict[str, int] = {}
+        self._reconnect_after: dict[str, float] = {}
+
         # 代理：复用 manager 的解析结果
         self.proxy = manager.proxy
 
     # ──────────────────────────────────────────────
     # 便捷访问
     # ──────────────────────────────────────────────
+    @staticmethod
+    def connection_ready(app: Client | None) -> bool:
+        """同时检查 Client 和底层 Session，避免断网时误报在线。"""
+        if not app or not bool(getattr(app, "is_connected", False)):
+            return False
+        session = getattr(app, "session", None)
+        started = getattr(session, "is_started", None)
+        return bool(started and started.is_set())
+
     @property
     def primary_user_app(self) -> Optional[Client]:
         """主用户账号（第一个已连接的）"""
-        return next((a for a in self.user_apps if a and a.is_connected), None)
+        return next((a for a in self.user_apps if self.connection_ready(a)), None)
 
     @property
     def connected_user_apps(self) -> list[Client]:
-        return [a for a in self.user_apps if a and a.is_connected]
+        return [a for a in self.user_apps if self.connection_ready(a)]
 
     @property
     def bot_app(self) -> Optional[Client]:
@@ -194,7 +217,7 @@ class AccountManager:
         for b in _load_bots_config():
             bid = b["id"]
             app = self.bot_apps.get(bid)
-            online = bool(app and getattr(app, "is_connected", False))
+            online = self.connection_ready(app)
             username = None
             if online and getattr(app, "me", None):
                 username = getattr(app.me, "username", None)
@@ -428,8 +451,229 @@ class AccountManager:
         manager.user_apps = self.user_apps
         manager.bot_app = self.bot_app
 
+    def start_reconnect_watchdog(
+        self,
+        on_topology_changed: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        """启动账号连接守护；重复调用只更新拓扑变化回调。"""
+        self._reconnect_callback = on_topology_changed
+        if self._reconnect_task and not self._reconnect_task.done():
+            return
+        self._reconnect_task = asyncio.create_task(
+            self._reconnect_watchdog(),
+            name="account-reconnect-watchdog",
+        )
+        logger.info("账号连接自动恢复已启用")
+
+    async def stop_reconnect_watchdog(self) -> None:
+        """停止连接守护，防止平台退出时重新拉起账号。"""
+        task = self._reconnect_task
+        self._reconnect_task = None
+        self._reconnect_callback = None
+        if task and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    def _clear_reconnect_state(self, key: str) -> None:
+        self._disconnect_since.pop(key, None)
+        self._reconnect_attempts.pop(key, None)
+        self._reconnect_after.pop(key, None)
+
+    def _reconnect_is_due(self, key: str, label: str, now: float) -> bool:
+        disconnected_at = self._disconnect_since.get(key)
+        if disconnected_at is None:
+            self._disconnect_since[key] = now
+            logger.warning("%s 连接中断，等待网络恢复", label)
+            return False
+        return (
+            now - disconnected_at >= self._RECONNECT_GRACE_PERIOD
+            and now >= self._reconnect_after.get(key, 0.0)
+        )
+
+    def _record_reconnect_failure(self, key: str, label: str, error: object) -> None:
+        attempt = self._reconnect_attempts.get(key, 0) + 1
+        self._reconnect_attempts[key] = attempt
+        delay = min(
+            self._RECONNECT_BASE_DELAY * (2 ** min(attempt - 1, 5)),
+            self._RECONNECT_MAX_DELAY,
+        )
+        self._reconnect_after[key] = time.monotonic() + delay
+        detail = "连接超时" if isinstance(error, asyncio.TimeoutError) else repr(error)
+        logger.warning("%s 自动恢复失败，%.0f 秒后重试: %s", label, delay, detail)
+
+    async def _recover_client(
+        self,
+        key: str,
+        label: str,
+        app: Client,
+        *,
+        bot_id: str | None = None,
+        session_name: str | None = None,
+    ) -> bool:
+        """恢复现有客户端，返回是否需要重新挂载插件。"""
+        lock = (
+            self._bot_sync_lock
+            if bot_id is not None
+            else self._session_locks.setdefault(str(session_name), asyncio.Lock())
+        )
+        async with lock:
+            if bot_id is not None and self.bot_apps.get(bot_id) is not app:
+                self._clear_reconnect_state(key)
+                return False
+            if session_name is not None:
+                if app not in self.user_apps or session_name in _paused_set(self.workdir):
+                    self._clear_reconnect_state(key)
+                    return False
+            if self.connection_ready(app):
+                logger.info("%s 连接已自动恢复", label)
+                self._clear_reconnect_state(key)
+                return False
+
+            was_connected = bool(getattr(app, "is_connected", False))
+            logger.info("%s 正在尝试恢复连接", label)
+            try:
+                session = getattr(app, "session", None)
+                if was_connected and session is not None:
+                    await asyncio.wait_for(
+                        session.restart(),
+                        timeout=self._RECONNECT_ATTEMPT_TIMEOUT,
+                    )
+                else:
+                    await asyncio.wait_for(
+                        app.start(),
+                        timeout=self._RECONNECT_ATTEMPT_TIMEOUT,
+                    )
+                if not self.connection_ready(app):
+                    raise ConnectionError("底层会话尚未恢复")
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self._record_reconnect_failure(key, label, exc)
+                return False
+
+            self._clear_reconnect_state(key)
+            if bot_id is not None:
+                manager.bot_app = self.bot_app
+            else:
+                manager.user_apps = self.user_apps
+            logger.info("%s 连接已自动恢复", label)
+            # 首次 start 的客户端此前没有挂载插件；底层 Session 重启则保留原处理器。
+            return not was_connected
+
+    async def _recover_missing_bots(self, now: float) -> bool:
+        """重新创建启动阶段失败、尚未进入 bot_apps 的已配置 Bot。"""
+        changed = False
+        for spec in (bot for bot in _load_bots_config() if bot.get("token")):
+            bot_id = spec["id"]
+            if bot_id in self.bot_apps:
+                continue
+            key = f"bot:{bot_id}"
+            label = f"Bot [{spec.get('name') or bot_id}]"
+            if not self._reconnect_is_due(key, label, now):
+                continue
+
+            async with self._bot_sync_lock:
+                if bot_id in self.bot_apps:
+                    self._clear_reconnect_state(key)
+                    continue
+                current = next(
+                    (
+                        item
+                        for item in _load_bots_config()
+                        if item["id"] == bot_id and item.get("token")
+                    ),
+                    None,
+                )
+                if current is None:
+                    self._clear_reconnect_state(key)
+                    continue
+                logger.info("%s 正在尝试恢复连接", label)
+                try:
+                    app, error = await self._start_bot_client(
+                        bot_id,
+                        current.get("name") or bot_id,
+                        current["token"],
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    self._record_reconnect_failure(key, label, exc)
+                    continue
+                if app is None:
+                    self._record_reconnect_failure(key, label, error or "连接失败")
+                    continue
+
+                self.bot_apps[bot_id] = app
+                self._bot_names[bot_id] = current.get("name") or bot_id
+                import config.config as _cfg
+                configured_default = str(
+                    getattr(_cfg, "DEFAULT_BOT_ID", BUILTIN_BOT_ID) or BUILTIN_BOT_ID
+                )
+                if configured_default == bot_id or self.default_bot_id not in self.bot_apps:
+                    self.default_bot_id = bot_id
+                manager.bot_app = self.bot_app
+                self._clear_reconnect_state(key)
+                logger.info("%s 连接已自动恢复", label)
+                changed = True
+        return changed
+
+    async def _run_reconnect_cycle(self) -> None:
+        now = time.monotonic()
+        paused = _paused_set(self.workdir)
+        recoveries: list[Awaitable[bool]] = []
+
+        for bot_id, app in list(self.bot_apps.items()):
+            key = f"bot:{bot_id}"
+            label = f"Bot [{self._bot_names.get(bot_id, bot_id)}]"
+            if self.connection_ready(app):
+                if key in self._disconnect_since:
+                    logger.info("%s 连接已自动恢复", label)
+                    self._clear_reconnect_state(key)
+                continue
+            if self._reconnect_is_due(key, label, now):
+                recoveries.append(self._recover_client(key, label, app, bot_id=bot_id))
+
+        for app in list(self.user_apps):
+            key = f"user:{app.name}"
+            label = f"用户账号 [{app.name}]"
+            if app.name in paused or not (self.workdir / f"{app.name}.session").exists():
+                self._clear_reconnect_state(key)
+                continue
+            if self.connection_ready(app):
+                if key in self._disconnect_since:
+                    logger.info("%s 连接已自动恢复", label)
+                    self._clear_reconnect_state(key)
+                continue
+            if self._reconnect_is_due(key, label, now):
+                recoveries.append(
+                    self._recover_client(key, label, app, session_name=app.name)
+                )
+
+        recoveries.append(self._recover_missing_bots(now))
+        results = await asyncio.gather(*recoveries)
+        if any(results) and self._reconnect_callback is not None:
+            try:
+                await self._reconnect_callback()
+            except Exception as exc:  # noqa: BLE001
+                logger.error("连接恢复后重新挂载插件失败: %r", exc)
+
+    async def _reconnect_watchdog(self) -> None:
+        try:
+            while True:
+                try:
+                    await self._run_reconnect_cycle()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("账号连接自动恢复检查失败: %r", exc)
+                await asyncio.sleep(self._RECONNECT_CHECK_INTERVAL)
+        except asyncio.CancelledError:
+            logger.debug("账号连接自动恢复已停止")
+            raise
+
     async def stop_all(self) -> None:
         """停止所有账号连接"""
+        await self.stop_reconnect_watchdog()
         for bot in list(self.bot_apps.values()):
             if bot and bot.is_connected:
                 await bot.stop()
@@ -458,7 +702,7 @@ class AccountManager:
         result: list[dict] = []
         for sname in names:
             app = next((a for a in self.user_apps if a.name == sname), None)
-            online = bool(app and app.is_connected)
+            online = self.connection_ready(app)
             session_exists = (self.workdir / f"{sname}.session").exists()
             manually_paused = sname in paused
             if online:
@@ -511,17 +755,27 @@ class AccountManager:
         lock = self._session_locks.setdefault(session_name, asyncio.Lock())
         async with lock:
             app = next((a for a in self.user_apps if a.name == session_name), None)
-            if app and app.is_connected:
+            if self.connection_ready(app):
                 return True
+            created = app is None
             if app is None:
                 app = self._build_user_client(session_name)
                 self.user_apps.append(app)
             try:
-                await app.start()
+                session = getattr(app, "session", None)
+                if bool(getattr(app, "is_connected", False)) and session is not None:
+                    await asyncio.wait_for(
+                        session.restart(),
+                        timeout=self._RECONNECT_ATTEMPT_TIMEOUT,
+                    )
+                else:
+                    await app.start()
+                if not self.connection_ready(app):
+                    raise ConnectionError("底层会话尚未恢复")
             except Exception as e:  # noqa: BLE001
                 # session 失效（AUTH_KEY_UNREGISTERED 等）→ 清理并提示重新登录
-                # 在锁内安全移除：先找到要移除的 app，再统一更新列表
-                if app in self.user_apps:
+                # 仅移除本次临时创建的客户端；已有客户端保留给连接守护继续恢复。
+                if created and app in self.user_apps:
                     self.user_apps.remove(app)
                 msg = str(e)
                 if "AUTH_KEY_UNREGISTERED" in msg or "Unauthorized" in type(e).__name__:
@@ -534,10 +788,14 @@ class AccountManager:
 
     async def set_offline(self, session_name: str) -> bool:
         """下线一个账号（保留 session 文件，标记暂停，重启不自动上线）"""
-        app = next((a for a in self.user_apps if a.name == session_name), None)
-        if app and app.is_connected:
-            await app.stop()
-        _pause_account(session_name, self.workdir)
+        lock = self._session_locks.setdefault(session_name, asyncio.Lock())
+        async with lock:
+            # 先落暂停标记，避免连接守护在 stop 期间重新拉起。
+            _pause_account(session_name, self.workdir)
+            app = next((a for a in self.user_apps if a.name == session_name), None)
+            if app and app.is_connected:
+                await app.stop()
+            self._clear_reconnect_state(f"user:{session_name}")
         manager.user_apps = self.user_apps
         logger.info("账号 [%s] 已下线", session_name)
         return True

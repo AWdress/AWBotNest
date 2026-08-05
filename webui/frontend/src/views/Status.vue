@@ -315,12 +315,27 @@ const EVENT_SOURCE_NAMES = {
   plugin: '插件管理',
   plugin_runtime: '插件运行',
   account: '账号管理',
+  account_manager: '账号管理',
   notification: '通知服务',
+  notification_channels: '通知渠道',
   notifier: '通知服务',
+  custom_client: 'Telegram 客户端',
+  api: '平台接口',
+  registry: '插件注册',
+  context: '插件上下文',
+  deps: '依赖管理',
+  browser: '浏览器服务',
+  ai: 'AI 服务',
+  backup: '备份服务',
+  github_import: 'GitHub 导入',
+  log_stream: '日志服务',
 }
 
 function eventTitle(source) {
-  return EVENT_SOURCE_NAMES[source] || st.value?.plugin_names?.[source] || source || '平台运行'
+  if (!source) return '平台运行'
+  const knownName = EVENT_SOURCE_NAMES[source] || st.value?.plugin_names?.[source]
+  if (knownName) return knownName
+  return /^[a-z][a-z0-9_.-]*$/i.test(source) ? '平台模块' : source
 }
 
 function normalizeEvent(item) {

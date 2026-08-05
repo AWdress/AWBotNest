@@ -43,7 +43,7 @@ class InvokeMixin:
                     backoff = 1
                     retries += 1
                     if retries >= self._invoke_retries:
-                        logger.error(f"TimeoutError for {query.__class__.__name__}")
+                        logger.error(f"请求 {query.__class__.__name__} 超时")
 
                 except RPCError as e:
                     if await self._handle_rpc_error(query, e):
@@ -56,7 +56,7 @@ class InvokeMixin:
                     peer_id = self._extract_id_from_exception(e)
                     if peer_id:
                         self._add_invalid_peer(peer_id)
-                        logger.info(f"Peer ID {peer_id} 无效，已加入黑名单")
+                        logger.info(f"目标 ID {peer_id} 无效，已加入黑名单")
                     return None
 
                 except Exception as e:

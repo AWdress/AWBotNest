@@ -21,6 +21,6 @@ async def start_scheduler():
     try:
         await start_log_cleaner()
     except Exception as e:
-        logger.error(f"Failed to start log_cleaner: {e}")
+        logger.error(f"日志清理任务启动失败: {e}")
 
 

@@ -214,6 +214,7 @@ async def start_platform() -> None:
 
     # 3) 恢复已启用插件
     await runtime.restore_enabled()
+    accounts.start_reconnect_watchdog(runtime.resync)
 
     # 4) 插件仓库轮询（强制常开）：注册定时任务并立即刷新一次市场 + 检查已装更新
     try:
@@ -234,6 +235,7 @@ async def start_platform() -> None:
         await idle()
     finally:
         logger.debug("AWBotNest 关闭中...")
+        await accounts.stop_reconnect_watchdog()
         await runtime.shutdown()
         await accounts.stop_all()
         logger.info("AWBotNest 已关闭")

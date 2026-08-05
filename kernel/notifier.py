@@ -171,7 +171,7 @@ async def submit(
 
     # 所有渠道都不可用时保留原有兜底：发到主用户账号收藏夹。
     user = getattr(accounts, "primary_user_app", None)
-    if user and getattr(user, "is_connected", False):
+    if accounts.connection_ready(user):
         return await user.send_message("me", body, **send_kwargs)
     raise RuntimeError("无可用通知渠道，且没有在线用户账号可用于保底投递")
 
@@ -210,7 +210,7 @@ async def _send_to_channel(accounts: Any, channel_id: str, body: str,
 
         if channel_type == "telegram":
             bot = _get_bot(accounts, channel_id, fallback=False)
-            if not bot or not getattr(bot, "is_connected", False):
+            if not accounts.connection_ready(bot):
                 return False
             target = _parse_chat_id(str(config_data.get("chat_id") or ""))
             target = target or _owner_id() or None
@@ -228,7 +228,7 @@ async def _send_to_channel(accounts: Any, channel_id: str, body: str,
 
     # 没有新渠道配置时按旧 Bot 路由处理；空 id 表示当前默认 Bot。
     bot = _get_bot(accounts, channel_id, fallback=not channel_id)
-    if not bot or not getattr(bot, "is_connected", False):
+    if not accounts.connection_ready(bot):
         return False
     resolved_id = _resolved_bot_id(accounts, channel_id)
     target = _bot_chat_id(resolved_id) or _owner_id() or None
