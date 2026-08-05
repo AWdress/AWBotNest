@@ -1,6 +1,6 @@
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { api, getToken, setToken, setUnauthorizedHandler } from './api'
 import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -175,6 +175,18 @@ const nav = [
   { to: '/settings', label: '系统设置', icon: 'gear' },
 ]
 
+const pageContext = {
+  '/status': { kicker: '运行总览', title: '系统状态' },
+  '/plugins': { kicker: '插件生态', title: '插件管理' },
+  '/accounts': { kicker: '会话接入', title: '账号管理' },
+  '/logs': { kicker: '诊断中心', title: '运行日志' },
+  '/settings': { kicker: '平台配置', title: '系统设置' },
+}
+const currentPage = computed(() => pageContext[route.path] || {
+  kicker: 'AWBotNest',
+  title: route.meta.title || 'AWBotNest',
+})
+
 const icons = {
   grid: 'M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z',
   user: 'M12 12a5 5 0 100-10 5 5 0 000 10zM4 21a8 8 0 0116 0',
@@ -292,7 +304,10 @@ onUnmounted(() => {
     <main class="main">
       <header class="topbar">
         <img :src="logoWhite" class="topbar-logo" alt="" />
-        <h1>{{ route.meta.title || 'AWBotNest' }}</h1>
+        <div class="page-heading">
+          <span>{{ currentPage.kicker }}</span>
+          <h1>{{ currentPage.title }}</h1>
+        </div>
         <TopbarControlCenter
           :online="online"
           :version="version"
@@ -303,7 +318,7 @@ onUnmounted(() => {
           @logout="logout"
         />
       </header>
-      <div class="content">
+      <div class="content" :class="`route-${route.path.slice(1) || 'status'}`">
         <RouterView />
       </div>
     </main>
@@ -333,16 +348,16 @@ onUnmounted(() => {
 
 .sidebar {
   width: var(--sidebar-width);
-  background: rgba(11, 12, 18, .9);
+  background: rgba(7, 11, 18, .94);
   backdrop-filter: blur(18px);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  padding: 20px 14px;
+  padding: 18px 14px 14px;
   flex-shrink: 0;
 }
 
-.brand { display: flex; align-items: center; gap: 12px; padding: 10px 10px 24px; }
+.brand { display: flex; align-items: center; gap: 12px; padding: 8px 10px 26px; }
 .logo-img { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
 .brand-name {
   font-weight: 700; font-size: 19px; color: #fff;
@@ -355,7 +370,7 @@ onUnmounted(() => {
 .nav { display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .nav-item {
   display: flex; align-items: center; gap: 12px;
-  padding: 10px 12px;
+  min-height: 46px; padding: 10px 13px;
   border-radius: var(--radius-sm);
   color: #ffffff;
   transition: all 0.15s ease;
@@ -364,9 +379,9 @@ onUnmounted(() => {
 }
 .nav-item:hover { background: var(--bg-hover); color: #ffffff; }
 .nav-item.active {
-  background: linear-gradient(90deg, rgba(48,128,240,.2), rgba(48,128,240,.08));
+  background: linear-gradient(90deg, rgba(48,128,240,.22), rgba(48,128,240,.07));
   color: var(--accent);
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent), 0 8px 24px rgba(10, 83, 180, .08);
 }
 .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
 
@@ -446,18 +461,25 @@ onUnmounted(() => {
 
 .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 .topbar {
-  height: 64px;
+  height: 72px;
   display: flex; align-items: center;
   padding: 0 32px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
   position: relative;
   z-index: 40;
-  background: rgba(10, 14, 23, .62);
+  background: rgba(8, 13, 22, .76);
   backdrop-filter: blur(18px);
 }
-.topbar h1 { font-size: 18px; font-weight: 700; letter-spacing: .2px; }
-.content { flex: 1; overflow-y: auto; padding: 32px; position: relative; }
+.page-heading { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.page-heading > span { color: var(--text-muted); font-size: 10px; line-height: 1; letter-spacing: .11em; }
+.topbar h1 { margin-top: 6px; font-size: 20px; line-height: 1; font-weight: 760; letter-spacing: .1px; }
+.content {
+  flex: 1; overflow-y: auto; padding: 28px 32px 34px; position: relative;
+  background-image: radial-gradient(circle at center, rgba(80, 121, 172, .075) 0 1px, transparent 1.2px);
+  background-size: 28px 28px;
+  background-position: 3px 4px;
+}
 
 /* 顶栏 logo 默认仅在手机显示，控制中心在桌面和手机均显示。 */
 .topbar-logo { display: none; width: 28px; height: 28px; object-fit: contain; }
@@ -478,7 +500,8 @@ onUnmounted(() => {
     background: var(--bg-sidebar);
   }
   .topbar-logo { display: block; }
-  .topbar h1 { font-size: 16px; }
+  .page-heading > span { display: none; }
+  .topbar h1 { margin-top: 0; font-size: 16px; }
   /* 内容区留出底部悬浮标签栏高度，避免被遮 */
   .content { padding: 16px 14px calc(86px + env(safe-area-inset-bottom)); }
   /* 底部标签栏：悬浮胶囊，居中不拉满 */

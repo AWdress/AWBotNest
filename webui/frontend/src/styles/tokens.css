@@ -4,12 +4,12 @@
    ============================================================= */
 :root {
   /* 背景层次（由深到浅） */
-  --bg-base: #0a0e17;        /* 主背景 */
-  --bg-sidebar: #0b0c12;     /* 侧边栏 */
-  --bg-card: #11131a;        /* 卡片 */
-  --bg-elevated: #20222e;    /* 悬浮/输入框/激活态 */
-  --bg-hover: #1a1d28;       /* hover 态 */
-  --bg-panel: rgba(17, 20, 29, 0.86);
+  --bg-base: #07101b;        /* 主背景 */
+  --bg-sidebar: #080d15;     /* 侧边栏 */
+  --bg-card: #0d1623;        /* 卡片 */
+  --bg-elevated: #172131;    /* 悬浮/输入框/激活态 */
+  --bg-hover: #142238;       /* hover 态 */
+  --bg-panel: rgba(12, 21, 34, 0.92);
 
   /* 强调色 */
   --accent: #3080f0;         /* 主强调（蓝） */
@@ -30,8 +30,8 @@
   --text-muted: #5d6577;
 
   /* 边框 */
-  --border: #1f2330;
-  --border-light: #2a2f3d;
+  --border: #1b2a3b;
+  --border-light: #2a3c52;
 
   /* 圆角 */
   --radius-sm: 8px;
@@ -47,7 +47,7 @@
   --shadow-soft: 0 12px 36px rgba(0, 0, 0, 0.22);
   --shadow-float: 0 24px 70px rgba(0, 0, 0, 0.5);
 
-  --sidebar-width: 248px;
+  --sidebar-width: 224px;
 }
 
 * {
@@ -234,4 +234,36 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal, .modal.card { width: 94vw !important; max-width: 94vw !important; max-height: 88vh; }
   /* 双列网格在窄屏统一单列 */
   .grid2 { grid-template-columns: 1fr !important; }
+}
+
+.card {
+  background: linear-gradient(145deg, rgba(14, 24, 38, .97), rgba(10, 18, 29, .96));
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .16);
+  transition: border-color .2s ease, transform .2s ease, box-shadow .2s ease;
+}
+
+.route-plugins .plugin-card:hover,
+.route-accounts .acc-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(48, 128, 240, .42);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .24), 0 0 0 1px rgba(48,128,240,.05);
+}
+
+.route-plugins .toolbar,
+.route-accounts .toolbar,
+.route-logs .toolbar,
+.route-settings .toolbar {
+  border: 1px solid var(--border);
+  background: rgba(11, 19, 31, .82);
+  border-radius: 13px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.1);
+}
+
+.route-plugins .filter-pills,
+.route-settings .tabs {
+  background: rgba(7, 13, 23, .54);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  padding: 4px;
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { api } from '../api'
 import { confirm } from '../composables/confirm'
 
@@ -7,6 +7,12 @@ const accounts = ref([])
 const loading = ref(true)
 const error = ref('')
 const busy = ref({})
+const accountOverview = computed(() => ({
+  total: accounts.value.length,
+  online: accounts.value.filter(account => account.online).length,
+  offline: accounts.value.filter(account => !account.online).length,
+  ready: accounts.value.filter(account => account.session_exists).length,
+}))
 
 // 登录向导状态
 const wizardOpen = ref(false)
@@ -125,6 +131,13 @@ onMounted(load)
       </div>
     </div>
 
+    <section class="account-overview" aria-label="账号状态概览">
+      <div><span>全部账号</span><strong>{{ accountOverview.total }}</strong><small>当前已添加</small></div>
+      <div><span>在线</span><strong class="ok">{{ accountOverview.online }}</strong><small>正在接收消息</small></div>
+      <div><span>离线</span><strong>{{ accountOverview.offline }}</strong><small>可随时重新上线</small></div>
+      <div><span>会话就绪</span><strong>{{ accountOverview.ready }}</strong><small>登录状态已保存</small></div>
+    </section>
+
     <div v-if="error" class="alert">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
     <div v-if="loading" class="center muted">加载中…</div>
@@ -242,6 +255,17 @@ onMounted(load)
 
 <style scoped>
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+.account-overview {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 18px; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 13px;
+  background: rgba(11, 19, 31, .86);
+}
+.account-overview > div { min-width: 0; padding: 16px 18px; border-right: 1px solid var(--border); }
+.account-overview > div:last-child { border-right: 0; }
+.account-overview span, .account-overview small { display: block; color: var(--text-muted); font-size: 11px; }
+.account-overview strong { display: block; margin: 4px 0 2px; font-size: 22px; line-height: 1; font-variant-numeric: tabular-nums; }
+.account-overview strong.ok { color: var(--success); }
 .center { text-align: center; padding: 40px; }
 .alert { background: var(--danger-dim); color: var(--danger); padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 16px; display: flex; justify-content: space-between; }
 .alert .close { border: 0; background: transparent; color: inherit; cursor: pointer; display: inline-flex; align-items: center; }
@@ -294,6 +318,9 @@ onMounted(load)
 
 /* 手机适配 */
 @media (max-width: 768px) {
+  .account-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .account-overview > div:nth-child(2) { border-right: 0; }
+  .account-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
   .grid { grid-template-columns: 1fr; }
   .modal-mask { align-items: flex-end; }
   .modal { --modal-pad: 18px; width: 100%; max-width: 100%; max-height: 92dvh; border-radius: 18px 18px 0 0; padding: 20px 18px calc(18px + env(safe-area-inset-bottom)); }

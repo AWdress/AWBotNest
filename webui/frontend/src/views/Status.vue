@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { api, getToken } from '../api'
 import {
   platformStatus,
   platformStatusError,
@@ -9,16 +10,21 @@ import {
 
 const st = ref(null)
 const error = ref('')
-const loading = computed(() => platformStatusLoading.value || !platformStatus.value)
 const pageReady = ref(false)
-const hoveredBar = ref(null)
-const focusedPlugin = ref('')
+const hoveredPoint = ref(null)
 const changedAccounts = ref([])
 const changedJobs = ref([])
-const animated = ref({ user: 0, plugin: 0, uptime: 0, donut: 0, donutAngle: 0 })
+const events = ref([])
+const eventConnected = ref(false)
+const activityRange = ref('24h')
+const animated = ref({ user: 0, plugin: 0, uptime: 0, activity: 0 })
+
+const loading = computed(() => platformStatusLoading.value || !platformStatus.value)
+const animationFrames = new Map()
 let changeTimer = null
 let firstPaintFrame = null
-const animationFrames = new Map()
+let eventSocket = null
+let eventReconnectTimer = null
 
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
@@ -48,19 +54,19 @@ function activityTotal(data) {
 
 function markChangedRows(previous, next) {
   if (!previous) return
-  const oldAccounts = new Map(previous.accounts.map(account => [account.session, account]))
-  changedAccounts.value = next.accounts
+  const oldAccounts = new Map((previous.accounts || []).map(account => [account.session, account]))
+  changedAccounts.value = (next.accounts || [])
     .filter(account => {
       const old = oldAccounts.get(account.session)
       return !old || old.online !== account.online || old.name !== account.name || old.tgid !== account.tgid
     })
     .map(account => account.session)
 
-  const oldJobs = new Map(previous.scheduler_jobs.map(job => [job.id, job]))
-  changedJobs.value = next.scheduler_jobs
+  const oldJobs = new Map((previous.scheduler_jobs || []).map(job => [job.id, job]))
+  changedJobs.value = (next.scheduler_jobs || [])
     .filter(job => {
       const old = oldJobs.get(job.id)
-      return !old || old.next !== job.next || old.trigger !== job.trigger || old.name !== job.name
+      return !old || old.next !== job.next || old.running !== job.running || old.name !== job.name
     })
     .map(job => job.id)
 
@@ -73,147 +79,117 @@ function markChangedRows(previous, next) {
 
 async function applyStatus(next) {
   if (!next) return
-  try {
-    const previous = st.value
-    markChangedRows(previous, next)
-    st.value = next
-    error.value = ''
+  const previous = st.value
+  markChangedRows(previous, next)
+  st.value = next
+  error.value = ''
+  animateNumber('user', next.user_count)
+  animateNumber('plugin', next.plugins?.enabled)
+  animateNumber('uptime', next.uptime_seconds, 500)
+  animateNumber('activity', activityTotal(next))
 
-    animateNumber('user', next.user_count)
-    animateNumber('plugin', next.plugins.enabled)
-    animateNumber('uptime', next.uptime_seconds, 500)
-    animateNumber('donut', activityTotal(next))
-
-    if (!previous) {
-      animated.value.donutAngle = 0
-      await nextTick()
-      firstPaintFrame = requestAnimationFrame(() => {
-        pageReady.value = true
-        animateNumber('donutAngle', 360, 900)
-      })
-    }
-  } catch (e) {
-    error.value = e.message
+  if (!previous) {
+    await nextTick()
+    firstPaintFrame = requestAnimationFrame(() => { pageReady.value = true })
   }
 }
 
 watch(platformStatus, applyStatus, { immediate: true })
-watch(platformStatusError, (message) => { error.value = message || '' }, { immediate: true })
-
-onMounted(() => {
-  if (!platformStatus.value) refreshPlatformStatus(true).catch(() => {})
-})
-onUnmounted(() => {
-  clearTimeout(changeTimer)
-  if (firstPaintFrame) cancelAnimationFrame(firstPaintFrame)
-  for (const frame of animationFrames.values()) cancelAnimationFrame(frame)
-  animationFrames.clear()
-})
+watch(platformStatusError, message => { error.value = message || '' }, { immediate: true })
 
 function formatUptime(seconds) {
-  let s = seconds || 0
-  const d = Math.floor(s / 86400); s %= 86400
-  const h = Math.floor(s / 3600); s %= 3600
-  const m = Math.floor(s / 60)
+  let value = Number(seconds) || 0
+  const days = Math.floor(value / 86400)
+  value %= 86400
+  const hours = Math.floor(value / 3600)
+  const minutes = Math.floor((value % 3600) / 60)
   const parts = []
-  if (d) parts.push(`${d}天`)
-  if (h) parts.push(`${h}时`)
-  parts.push(`${m}分`)
+  if (days) parts.push(`${days}天`)
+  if (hours) parts.push(`${hours}时`)
+  parts.push(`${minutes}分`)
   return parts.join('')
 }
 
 const uptime = computed(() => formatUptime(animated.value.uptime))
+const activityData = computed(() => activityRange.value === '7d' ? st.value?.activity_7d : st.value?.activity)
+const activityRangeLabel = computed(() => activityRange.value === '7d' ? '近 7 天' : '近 24 小时')
+watch(activityData, data => animateNumber('activity', activityTotal(data)))
 
-// APScheduler trigger 字符串转人类可读
-// interval[0:01:00] / cron[hour='9',minute='0'] / date[2026-06-27 14:30:00 CST]
-function prettyTrigger(t) {
-  if (!t) return '—'
-  const m = /^(\w+)\[(.*)\]$/.exec(t)
-  if (!m) return t
-  const [, kind, body] = m
+function formatMemory(value) {
+  const amount = Number(value)
+  if (!Number.isFinite(amount) || amount <= 0) return '—'
+  if (amount >= 1024) return `${(amount / 1024).toFixed(1)} GB`
+  return `${Math.round(amount)} MB`
+}
+
+function prettyTrigger(trigger) {
+  if (!trigger) return '未设置'
+  const match = /^(\w+)\[(.*)\]$/.exec(trigger)
+  if (!match) return trigger
+  const [, kind, body] = match
   if (kind === 'interval') {
-    const [hh, mm, ss] = body.split(':').map(Number)
-    const secs = (hh || 0) * 3600 + (mm || 0) * 60 + (ss || 0)
-    if (secs % 86400 === 0 && secs) return `每 ${secs / 86400} 天`
-    if (secs % 3600 === 0 && secs) return `每 ${secs / 3600} 小时`
-    if (secs % 60 === 0 && secs) return `每 ${secs / 60} 分钟`
-    return `每 ${secs} 秒`
+    const [hours, minutes, seconds] = body.split(':').map(Number)
+    const total = (hours || 0) * 3600 + (minutes || 0) * 60 + (seconds || 0)
+    if (total && total % 86400 === 0) return `每 ${total / 86400} 天`
+    if (total && total % 3600 === 0) return `每 ${total / 3600} 小时`
+    if (total && total % 60 === 0) return `每 ${total / 60} 分钟`
+    return `每 ${total} 秒`
   }
   if (kind === 'cron') return prettyCron(body)
   if (kind === 'date') return `单次 ${body.split(' ').slice(0, 2).join(' ')}`
-  return t
+  return trigger
 }
 
-// cron 字段转中文，如 hour='3', minute='0' → 每天 03:00
-const WEEKDAYS = { '0': '周一', '1': '周二', '2': '周三', '3': '周四', '4': '周五', '5': '周六', '6': '周日',
-  mon: '周一', tue: '周二', wed: '周三', thu: '周四', fri: '周五', sat: '周六', sun: '周日' }
+const WEEKDAYS = {
+  '0': '周一', '1': '周二', '2': '周三', '3': '周四', '4': '周五', '5': '周六', '6': '周日',
+  mon: '周一', tue: '周二', wed: '周三', thu: '周四', fri: '周五', sat: '周六', sun: '周日',
+}
+
 function prettyCron(body) {
-  // 解析 key='value' 片段
-  const f = {}
-  for (const seg of body.split(',')) {
-    const mm = /(\w+)\s*=\s*'?([^',]+)'?/.exec(seg.trim())
-    if (mm) f[mm[1]] = mm[2]
+  const fields = {}
+  for (const segment of body.split(',')) {
+    const match = /(\w+)\s*=\s*'?([^',]+)'?/.exec(segment.trim())
+    if (match) fields[match[1]] = match[2]
   }
-  const h = f.hour, mi = f.minute, dow = f.day_of_week, dom = f.day, mon = f.month
-  // 纯「每天 时:分」
-  const isNum = (v) => v !== undefined && /^\d+$/.test(v)
-  if (isNum(h) && isNum(mi) && !dow && !dom && !mon) {
-    return `每天 ${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+  const { hour, minute, day_of_week: weekday, day, month } = fields
+  const isNumber = value => value !== undefined && /^\d+$/.test(value)
+  if (isNumber(hour) && isNumber(minute) && !weekday && !day && !month) {
+    return `每天 ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
   }
-  // 每周某天 时:分
-  if (isNum(h) && isNum(mi) && dow !== undefined) {
-    const day = WEEKDAYS[String(dow).toLowerCase()] || `周${dow}`
-    return `每${day} ${String(h).padStart(2, '0')}:${String(mi).padStart(2, '0')}`
+  if (isNumber(hour) && isNumber(minute) && weekday !== undefined) {
+    return `每${WEEKDAYS[String(weekday).toLowerCase()] || `周${weekday}`} ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
   }
-  // 每小时（只指定了分钟）
-  if (isNum(mi) && h === undefined && !dow && !dom) {
-    return `每小时 第${mi}分`
-  }
-  // 兜底：拼中文字段
+  if (isNumber(minute) && hour === undefined && !weekday && !day) return `每小时 第${minute}分`
   const parts = []
-  if (mon) parts.push(`${mon}月`)
-  if (dom) parts.push(`${dom}日`)
-  if (dow !== undefined) parts.push(WEEKDAYS[String(dow).toLowerCase()] || `周${dow}`)
-  if (h !== undefined) parts.push(`${h}时`)
-  if (mi !== undefined) parts.push(`${mi}分`)
-  return parts.length ? parts.join(' ') : 'cron'
+  if (month) parts.push(`${month}月`)
+  if (day) parts.push(`${day}日`)
+  if (weekday !== undefined) parts.push(WEEKDAYS[String(weekday).toLowerCase()] || `周${weekday}`)
+  if (hour !== undefined) parts.push(`${hour}时`)
+  if (minute !== undefined) parts.push(`${minute}分`)
+  return parts.length ? parts.join(' ') : '定时执行'
 }
 
-// 系统内置任务的中文名（id → 显示名）；插件任务用后端给的 name
 const JOB_NAMES = { log_cleaner: '日志清理', 插件仓库轮询: '插件仓库轮询' }
-function jobName(j) { return JOB_NAMES[j.name] || JOB_NAMES[j.id] || j.name }
+function jobName(job) { return JOB_NAMES[job.name] || JOB_NAMES[job.id] || job.name }
 
-// 概览卡片配置
 const cards = computed(() => {
   if (!st.value) return []
-  const s = st.value
+  const status = st.value
   return [
-    { key: 'bot', label: 'Bot 账号', value: s.bot_connected ? '在线' : '离线',
-      tone: s.bot_connected ? 'green' : 'gray', icon: 'bot' },
-    { key: 'user', label: '在线用户账号', value: animated.value.user, sub: `共 ${s.accounts.length} 个`,
-      tone: s.user_count ? 'blue' : 'gray', icon: 'user' },
-    { key: 'plugin', label: '已启用插件', value: animated.value.plugin, sub: `共 ${s.plugins.total} 个${s.plugins.error ? ' · ' + s.plugins.error + ' 异常' : ''}`,
-      tone: s.plugins.error ? 'amber' : 'green', icon: 'plug' },
-    { key: 'uptime', label: '运行时长', value: uptime.value,
-      tone: 'teal', icon: 'clock', small: true },
+    {
+      key: 'bot', label: 'Bot 账号', value: status.bot_connected ? '在线' : '离线',
+      sub: status.bot_connected ? '连接稳定' : '等待连接', tone: status.bot_connected ? 'green' : 'gray', icon: 'bot',
+    },
+    {
+      key: 'user', label: '在线用户账号', value: animated.value.user, sub: `共 ${(status.accounts || []).length} 个`,
+      tone: status.user_count ? 'blue' : 'gray', icon: 'user',
+    },
+    {
+      key: 'plugin', label: '已启用插件', value: animated.value.plugin, sub: `共 ${status.plugins?.total || 0} 个`,
+      tone: status.plugins?.error ? 'amber' : 'green', icon: 'plug',
+    },
+    { key: 'uptime', label: '运行时长', value: uptime.value, sub: '本次启动', tone: 'teal', icon: 'clock', small: true },
   ]
-})
-
-const health = computed(() => {
-  if (!st.value) return { tone: 'ok', title: '正在检查', desc: '正在读取账号和插件状态。' }
-  const s = st.value
-  const issues = []
-  if (!s.bot_connected) issues.push('Bot 账号未连接')
-  if (!s.user_count) issues.push('没有在线用户账号')
-  if (s.plugins.error) issues.push(`${s.plugins.error} 个插件异常`)
-  if (!issues.length) {
-    return { tone: 'ok', title: '运行正常', desc: '账号和插件状态正常，可以继续使用。' }
-  }
-  return {
-    tone: s.plugins.error ? 'danger' : 'warn',
-    title: s.plugins.error ? '有项目需要处理' : '系统已运行，部分功能未连接',
-    desc: issues.join('，') + '。',
-  }
 })
 
 const icons = {
@@ -223,500 +199,488 @@ const icons = {
   clock: 'M12 22a10 10 0 100-20 10 10 0 000 20zM12 6v6l4 2',
 }
 
-// ── 插件活跃时间线 ──
-const PALETTE = ['#3080f0', '#10b080', '#a050f0', '#f0a020', '#e05070',
-                 '#20b0d0', '#8090f0', '#50c070', '#f06040', '#c0a040']
-
-// 出现过的插件 id（按总活跃量降序，决定配色与图例顺序）
+const PALETTE = ['#3080f0', '#10b080', '#20b0d0', '#f0a020', '#e05070', '#8090f0', '#50c070']
 const activePlugins = computed(() => {
-  const totals = st.value?.activity?.totals || {}
+  const totals = activityData.value?.totals || {}
   return Object.keys(totals).sort((a, b) => totals[b] - totals[a])
 })
+const nameOf = pluginId => st.value?.plugin_names?.[pluginId] || pluginId
+const colorOf = pluginId => PALETTE[Math.max(0, activePlugins.value.indexOf(pluginId)) % PALETTE.length]
 
-const colorOf = (pid) => {
-  const i = activePlugins.value.indexOf(pid)
-  return PALETTE[(i < 0 ? 0 : i) % PALETTE.length]
-}
-const nameOf = (pid) => (st.value?.plugin_names?.[pid]) || pid
-
-// 时间线柱子：每个桶一根堆叠柱，高度按桶内总活跃归一化
 const timeline = computed(() => {
-  const buckets = st.value?.activity?.buckets || []
-  const sums = buckets.map(b => Object.values(b.counts).reduce((a, c) => a + c, 0))
-  const max = Math.max(1, ...sums)
-  return buckets.map((b, idx) => {
-    const total = sums[idx]
-    const segs = activePlugins.value
-      .filter(pid => b.counts[pid])
-      .map(pid => ({ pid, count: b.counts[pid], frac: b.counts[pid] / total }))
-    const d = new Date(b.t * 1000)
-    const label = `${String(d.getHours()).padStart(2, '0')}:00`
-    return { total, heightPct: (total / max) * 100, segs, label, hour: d.getHours() }
+  const buckets = activityData.value?.buckets || []
+  const totals = buckets.map(bucket => Object.values(bucket.counts || {}).reduce((sum, count) => sum + count, 0))
+  const max = Math.max(1, ...totals)
+  return buckets.map((bucket, index) => {
+    const date = new Date(bucket.t * 1000)
+    const x = buckets.length > 1 ? 28 + (index / (buckets.length - 1)) * 944 : 500
+    const y = 18 + (1 - totals[index] / max) * 154
+    return {
+      total: totals[index],
+      label: activityRange.value === '7d'
+        ? `${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`
+        : `${String(date.getHours()).padStart(2, '0')}:00`,
+      hour: date.getHours(),
+      x,
+      y,
+      xPct: `${(x / 1000) * 100}%`,
+      yPct: `${(y / 208) * 100}%`,
+    }
   })
 })
 
-const hasActivity = computed(() => (activePlugins.value.length > 0))
+const linePath = computed(() => timeline.value.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '))
+const areaPath = computed(() => {
+  if (!timeline.value.length) return ''
+  return `${linePath.value} L ${timeline.value.at(-1).x} 176 L ${timeline.value[0].x} 176 Z`
+})
+const chartMax = computed(() => Math.max(1, ...timeline.value.map(point => point.total)))
+const chartTicks = computed(() => [1, .75, .5, .25, 0].map(ratio => Math.round(chartMax.value * ratio)))
+const visibleAxisLabels = computed(() => activityRange.value === '7d'
+  ? timeline.value
+  : timeline.value.filter((point, index) => index === 0 || index === timeline.value.length - 1 || point.hour % 6 === 0))
+const peakPoint = computed(() => timeline.value.reduce((peak, point) => point.total > (peak?.total || -1) ? point : peak, null))
+const hoveredChartPoint = computed(() => hoveredPoint.value === null ? null : timeline.value[hoveredPoint.value])
+const hasActivity = computed(() => activePlugins.value.length > 0)
+const topPlugins = computed(() => {
+  const totals = activityData.value?.totals || {}
+  const max = Math.max(1, ...Object.values(totals))
+  return activePlugins.value.slice(0, 5).map((pluginId, index) => ({
+    pluginId,
+    rank: String(index + 1).padStart(2, '0'),
+    name: nameOf(pluginId),
+    count: totals[pluginId],
+    ratio: Math.max(4, Math.round((totals[pluginId] / max) * 100)),
+    color: colorOf(pluginId),
+  }))
+})
 
-// ── 活跃占比环形图 ──
-const donut = computed(() => {
-  const totals = st.value?.activity?.totals || {}
-  const sum = Object.values(totals).reduce((a, c) => a + c, 0)
-  if (!sum) return { sum: 0, stops: [], segs: [] }
-  let acc = 0
-  const stops = []
-  const segs = []
-  for (const pid of activePlugins.value) {
-    const frac = totals[pid] / sum
-    const from = acc * 360
-    const to = (acc + frac) * 360
-    const col = colorOf(pid)
-    stops.push(`${col} ${from}deg ${to}deg`)
-    segs.push({ pid, count: totals[pid], pct: Math.round(frac * 100), color: col, from, to })
-    acc += frac
+function eventKey(item) {
+  return item.id || `${item.timestamp || ''}|${item.level || ''}|${item.source || ''}|${item.msg || ''}`
+}
+
+const EVENT_SOURCE_NAMES = {
+  main: '平台',
+  repo_sync: '插件仓库',
+  scheduler: '定时服务',
+  plugin: '插件管理',
+  plugin_runtime: '插件运行',
+  account: '账号管理',
+  notification: '通知服务',
+  notifier: '通知服务',
+}
+
+function eventTitle(source) {
+  return EVENT_SOURCE_NAMES[source] || st.value?.plugin_names?.[source] || source || '平台运行'
+}
+
+function normalizeEvent(item) {
+  const level = String(item.level || 'INFO').toUpperCase()
+  const timestamp = item.timestamp ? new Date(item.timestamp) : new Date()
+  const source = String(item.source || '').trim()
+  return {
+    key: eventKey(item),
+    source,
+    detail: String(item.msg || '').replace(/\s+/g, ' ').trim() || '收到一条运行记录',
+    time: Number.isNaN(timestamp.getTime()) ? '--:--:--' : timestamp.toLocaleTimeString('zh-CN', { hour12: false }),
+    tone: level === 'ERROR' ? 'danger' : level === 'WARNING' ? 'warning' : 'success',
   }
-  return { sum, gradient: `conic-gradient(${stops.join(',')})`, segs }
+}
+
+function addEvent(item) {
+  if (!item || item.type === 'history') return
+  const normalized = normalizeEvent(item)
+  if (events.value.some(event => event.key === normalized.key)) return
+  events.value.unshift(normalized)
+  if (events.value.length > 6) events.value.length = 6
+}
+
+function connectEvents() {
+  disconnectEvents()
+  const protocol = location.protocol === 'https:' ? 'wss' : 'ws'
+  eventSocket = new WebSocket(`${protocol}://${location.host}/api/logs/ws?token=${encodeURIComponent(getToken())}&batch_history=1`)
+  eventSocket.onopen = () => { eventConnected.value = true }
+  eventSocket.onmessage = message => {
+    try {
+      const item = JSON.parse(message.data)
+      if (item.type === 'history' && Array.isArray(item.logs)) {
+        events.value = item.logs.slice(0, 6).map(normalizeEvent)
+        return
+      }
+      addEvent(item)
+    } catch {}
+  }
+  eventSocket.onclose = () => {
+    eventConnected.value = false
+    eventReconnectTimer = setTimeout(connectEvents, 3000)
+  }
+}
+
+function disconnectEvents() {
+  clearTimeout(eventReconnectTimer)
+  eventReconnectTimer = null
+  if (eventSocket) {
+    eventSocket.onclose = null
+    eventSocket.close()
+    eventSocket = null
+  }
+  eventConnected.value = false
+}
+
+async function refresh() {
+  try { await refreshPlatformStatus(true) } catch {}
+}
+
+onMounted(() => {
+  if (!platformStatus.value) refreshPlatformStatus(true).catch(() => {})
+  connectEvents()
 })
 
-const donutBackground = computed(() => {
-  if (!focusedPlugin.value) return donut.value.gradient
-  const stops = donut.value.segs.map(seg => {
-    const color = seg.pid === focusedPlugin.value ? seg.color : `${seg.color}38`
-    return `${color} ${seg.from}deg ${seg.to}deg`
-  })
-  return `conic-gradient(${stops.join(',')})`
+onUnmounted(() => {
+  disconnectEvents()
+  clearTimeout(changeTimer)
+  if (firstPaintFrame) cancelAnimationFrame(firstPaintFrame)
+  for (const frame of animationFrames.values()) cancelAnimationFrame(frame)
+  animationFrames.clear()
 })
-
-const donutStyle = computed(() => ({
-  background: donutBackground.value,
-  '--reveal-angle': `${animated.value.donutAngle}deg`,
-}))
 </script>
 
 <template>
-  <div v-if="error" class="alert">{{ error }}</div>
-  <div v-if="loading" class="status skeleton-status" aria-label="正在加载运行状态" aria-busy="true">
-    <div class="grid">
-      <div v-for="i in 4" :key="i" class="card stat skeleton-card">
-        <span class="skeleton-block skeleton-icon"></span>
-        <span class="skeleton-lines"><i></i><i></i><i></i></span>
-      </div>
+  <div v-if="error" class="status-alert" role="alert">
+    <span>{{ error }}</span>
+    <button type="button" @click="refresh">重新读取</button>
+  </div>
+
+  <div v-if="loading" class="status status-loading" aria-label="正在加载运行状态" aria-busy="true">
+    <div class="metric-strip skeleton-surface">
+      <div v-for="index in 4" :key="index" class="metric skeleton-metric"><i></i><span><b></b><em></em><small></small></span></div>
     </div>
-    <div class="cols cols-activity">
-      <div class="card skeleton-panel"><span></span><i></i></div>
-      <div class="card skeleton-panel"><span></span><i class="round"></i></div>
+    <div class="primary-grid">
+      <div class="surface skeleton-chart"><b></b><i></i></div>
+      <div class="surface skeleton-events"><b></b><i v-for="index in 4" :key="index"></i></div>
     </div>
-    <div class="cols">
-      <div class="card skeleton-list"><span></span><i></i><i></i><i></i></div>
-      <div class="card skeleton-list"><span></span><i></i><i></i><i></i></div>
+    <div class="secondary-grid">
+      <div v-for="index in 3" :key="index" class="surface skeleton-list"><b></b><i v-for="row in 3" :key="row"></i></div>
     </div>
   </div>
-  <div v-else-if="st" class="status" :class="{ ready: pageReady }">
-    <!-- 概览卡片：固定 4 列均分 -->
-    <div class="grid reveal section-0">
-      <div v-for="(c, index) in cards" :key="c.key" class="card stat status-card"
-           :class="[c.tone, { 'bot-live': c.key === 'bot' && st.bot_connected }]"
-           :style="{ '--item-delay': `${index * 55}ms` }">
-        <div class="stat-icon">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
-               stroke-linecap="round" stroke-linejoin="round"><path :d="icons[c.icon]" /></svg>
-        </div>
-        <div class="stat-body">
-          <div class="stat-label">{{ c.label }}</div>
-          <div class="stat-value" :class="{ sm: c.small }">{{ c.value }}</div>
-          <div class="stat-sub" v-if="c.sub">{{ c.sub }}</div>
-        </div>
-      </div>
-    </div>
 
-    <!-- 活跃时间线 + 占比环形 -->
-    <div class="cols cols-activity reveal section-1">
-      <!-- 时间线 -->
-      <div class="card info chart-card status-card">
-        <div class="card-title">插件活跃时间线 <span class="muted sub">近 24 小时</span></div>
-        <div v-if="!hasActivity" class="muted empty-chart">暂无插件活跃记录，插件处理消息后这里会出现时间线。</div>
-        <template v-else>
-          <div class="bars">
-            <div v-for="(bar, i) in timeline" :key="i" class="bar-col"
-                 :class="{ active: hoveredBar === i, dimmed: hoveredBar !== null && hoveredBar !== i }"
-                 :style="{ '--bar-height': `${bar.heightPct}%`, '--bar-delay': `${i * 18}ms` }"
-                 :aria-label="`${bar.label}，共 ${bar.total} 次触发`" tabindex="0"
-                 @mouseenter="hoveredBar = i" @mouseleave="hoveredBar = null"
-                 @focus="hoveredBar = i" @blur="hoveredBar = null">
-              <div v-if="hoveredBar === i" class="bar-tooltip"
-                   :class="{ left: i < 3, right: i > timeline.length - 4 }">
-                <strong>{{ bar.label }} · {{ bar.total }} 次</strong>
-                <span v-for="seg in bar.segs" :key="seg.pid">
-                  <i class="dot" :style="{ background: colorOf(seg.pid) }"></i>
-                  {{ nameOf(seg.pid) }} {{ seg.count }} 次
-                </span>
-              </div>
-              <div class="bar-stack" :style="{ height: `${bar.heightPct}%`, transform: pageReady ? 'scaleY(1)' : 'scaleY(0)' }">
-                <div v-for="seg in bar.segs" :key="seg.pid" class="bar-seg"
-                     :style="{ height: (seg.frac * 100) + '%', background: colorOf(seg.pid) }"></div>
-              </div>
+  <div v-else-if="st" class="status" :class="{ ready: pageReady }">
+    <section class="metric-strip reveal section-0" aria-label="平台指标">
+      <article v-for="(card, index) in cards" :key="card.key" class="metric" :class="card.tone" :style="{ '--delay': `${index * 55}ms` }">
+        <span class="metric-icon" :class="{ pulsing: card.key === 'bot' && st.bot_connected }">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="icons[card.icon]" /></svg>
+        </span>
+        <span class="metric-copy">
+          <small>{{ card.label }}</small>
+          <strong :class="{ compact: card.small }">{{ card.value }}</strong>
+          <em>{{ card.sub }}</em>
+        </span>
+      </article>
+    </section>
+
+    <section class="primary-grid reveal section-1">
+      <article class="surface activity-panel">
+        <header class="panel-heading">
+          <div><span class="eyebrow">实时运行</span><h2>插件活动时间线</h2></div>
+          <div class="chart-state">
+            <span v-if="hoveredChartPoint"><b>{{ hoveredChartPoint.label }}</b>{{ hoveredChartPoint.total }} 次</span>
+            <div v-else class="range-switch" aria-label="活动时间范围">
+              <button type="button" :class="{ active: activityRange === '24h' }" @click="activityRange = '24h'">24 小时</button>
+              <button type="button" :class="{ active: activityRange === '7d' }" @click="activityRange = '7d'">7 天</button>
             </div>
           </div>
-          <div class="bars-axis">
-            <span v-for="(bar, i) in timeline" :key="i" class="axis-tick">
-              <template v-if="bar.hour % 6 === 0">{{ bar.label }}</template>
-            </span>
+        </header>
+
+        <div v-if="!hasActivity" class="chart-empty">
+          <span class="empty-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg></span>
+          <div><strong>还没有插件活动</strong><p>插件处理消息后，这里会自动绘制{{ activityRangeLabel }}趋势。</p></div>
+        </div>
+        <template v-else>
+          <div class="chart-legend"><span><i></i>插件触发次数</span></div>
+          <div class="line-chart">
+            <div class="y-axis" aria-hidden="true"><span v-for="tick in chartTicks" :key="tick">{{ tick }}</span></div>
+            <div class="chart-canvas">
+              <svg viewBox="0 0 1000 208" preserveAspectRatio="none" role="img" :aria-label="`${activityRangeLabel}插件活动趋势`">
+                <defs><linearGradient id="activity-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3080f0" stop-opacity=".26"/><stop offset="100%" stop-color="#3080f0" stop-opacity="0"/></linearGradient></defs>
+                <g class="chart-grid"><line v-for="index in 5" :key="index" x1="28" x2="972" :y1="18 + (index - 1) * 39.5" :y2="18 + (index - 1) * 39.5" /></g>
+                <path class="chart-area" :d="areaPath" />
+                <path class="chart-line" :d="linePath" />
+                <circle v-for="(point, index) in timeline" :key="index" class="chart-point" :class="{ active: hoveredPoint === index }" :cx="point.x" :cy="point.y" r="4" />
+              </svg>
+              <button v-for="(point, index) in timeline" :key="`hit-${index}`" type="button" class="chart-hit" :style="{ left: point.xPct, top: point.yPct }" :aria-label="`${point.label}，${point.total} 次`" @mouseenter="hoveredPoint = index" @mouseleave="hoveredPoint = null" @focus="hoveredPoint = index" @blur="hoveredPoint = null"></button>
+              <div class="x-axis" aria-hidden="true"><span v-for="point in visibleAxisLabels" :key="`${point.label}-${point.x}`" :style="{ left: point.xPct }">{{ point.label }}</span></div>
+            </div>
           </div>
-          <div class="legend">
-            <span v-for="pid in activePlugins" :key="pid" class="legend-item">
-              <i class="dot" :style="{ background: colorOf(pid) }"></i>{{ nameOf(pid) }}
-            </span>
+          <div class="chart-summary">
+            <span><small>触发总数</small><strong>{{ animated.activity }}</strong></span>
+            <span><small>活跃插件</small><strong>{{ activePlugins.length }}</strong></span>
+            <span><small>峰值时段</small><strong>{{ peakPoint?.label || '—' }}</strong></span>
+            <span><small>峰值次数</small><strong>{{ peakPoint?.total || 0 }}</strong></span>
           </div>
         </template>
-      </div>
+      </article>
 
-      <!-- 占比环形 -->
-      <div class="card info chart-card status-card">
-        <div class="card-title">活跃占比</div>
-        <div v-if="!donut.sum" class="muted empty-chart">暂无数据</div>
-        <div v-else class="donut-wrap">
-          <div class="donut" :style="donutStyle" :class="{ focused: focusedPlugin }">
-            <div class="donut-hole">
-              <div class="donut-num">{{ animated.donut }}</div>
-              <div class="donut-cap">总触发</div>
-            </div>
-          </div>
-          <div class="donut-legend">
-            <div v-for="seg in donut.segs" :key="seg.pid" class="dl-row" tabindex="0"
-                 :class="{ active: focusedPlugin === seg.pid, dimmed: focusedPlugin && focusedPlugin !== seg.pid }"
-                 @mouseenter="focusedPlugin = seg.pid" @mouseleave="focusedPlugin = ''"
-                 @focus="focusedPlugin = seg.pid" @blur="focusedPlugin = ''">
-              <i class="dot" :style="{ background: seg.color }"></i>
-              <span class="dl-name">{{ nameOf(seg.pid) }}</span>
-              <span class="dl-pct mono">{{ seg.pct }}%</span>
-            </div>
+      <aside class="surface event-panel">
+        <header class="panel-heading compact">
+          <div><span class="eyebrow"><i :class="{ online: eventConnected }"></i>{{ eventConnected ? '实时连接' : '正在连接' }}</span><h2>运行事件</h2></div>
+        </header>
+        <div v-if="!events.length" class="event-empty">
+          <span class="empty-mark success"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span>
+          <div><strong>暂时没有新的事件</strong><p>新的插件记录出现后会自动显示在这里。</p></div>
+        </div>
+        <div v-else class="event-list">
+          <article v-for="event in events" :key="event.key" class="event-row">
+            <i class="event-dot" :class="event.tone"></i>
+            <div><strong>{{ eventTitle(event.source) }}</strong><p>{{ event.detail }}</p><time>{{ event.time }}</time></div>
+          </article>
+        </div>
+      </aside>
+    </section>
+
+    <section class="secondary-grid reveal section-2">
+      <article class="surface ranking-panel">
+        <header class="panel-heading compact"><div><span class="eyebrow">{{ activityRangeLabel }}</span><h2>活跃插件</h2></div><span class="panel-count">{{ activePlugins.length }} 个</span></header>
+        <div v-if="!topPlugins.length" class="small-empty">暂无插件活跃记录</div>
+        <div v-else class="ranking-list">
+          <div v-for="plugin in topPlugins" :key="plugin.pluginId" class="ranking-row">
+            <span class="rank">{{ plugin.rank }}</span>
+            <div class="ranking-data"><div><strong>{{ plugin.name }}</strong><span>{{ plugin.count }} 次</span></div><div class="progress"><i :style="{ width: `${plugin.ratio}%`, background: plugin.color }"></i></div></div>
           </div>
         </div>
-      </div>
-    </div>
+      </article>
 
-    <div class="cols reveal section-2">
-      <!-- 账号 -->
-      <div class="card info status-card">
-        <div class="card-title">账号 ({{ st.accounts.length }})</div>
-        <div v-if="st.accounts.length === 0" class="muted empty">暂无账号，去「账号管理」登录。</div>
-        <div v-else class="tbl-scroll">
-          <table class="tbl">
-            <thead><tr><th>名称</th><th>session</th><th>TGID</th><th>状态</th></tr></thead>
-            <tbody>
-              <tr v-for="a in st.accounts" :key="a.session" :class="{ changed: changedAccounts.includes(a.session) }">
-                <td>{{ a.name }}</td>
-                <td class="mono">{{ a.session }}</td>
-                <td class="mono">{{ a.tgid || '—' }}</td>
-                <td><span class="badge" :class="a.online ? 'badge-on' : 'badge-off'">{{ a.online ? '在线' : '离线' }}</span></td>
-              </tr>
-            </tbody>
-          </table>
+      <article class="surface account-panel">
+        <header class="panel-heading compact"><div><span class="eyebrow">连接状态</span><h2>账号</h2></div><span class="healthy-badge">{{ st.user_count }}/{{ st.accounts.length }} 在线</span></header>
+        <div v-if="!st.accounts.length" class="small-empty">暂无账号，请先到账号管理中登录。</div>
+        <div v-else class="account-list">
+          <div v-for="account in st.accounts" :key="account.session" class="account-row" :class="{ changed: changedAccounts.includes(account.session) }">
+            <span class="account-avatar">{{ (account.name || account.session || '账').slice(0, 2) }}</span>
+            <div><strong>{{ account.name || account.session }}</strong><small>{{ account.session }}</small></div>
+            <span class="account-tgid">{{ account.tgid || '未绑定 TGID' }}</span>
+            <span class="account-state" :class="{ offline: !account.online }">{{ account.online ? '在线' : '离线' }}</span>
+          </div>
         </div>
-      </div>
+      </article>
 
-      <!-- 定时任务 -->
-      <div class="card info status-card">
-        <div class="card-title">定时任务 ({{ st.scheduler_jobs.length }})</div>
-        <div v-if="st.scheduler_jobs.length === 0" class="muted empty">无定时任务</div>
+      <article class="surface jobs-panel">
+        <header class="panel-heading compact"><div><span class="eyebrow">计划任务</span><h2>即将执行</h2></div><span class="panel-count">{{ st.scheduler_jobs.length }} 项</span></header>
+        <div v-if="!st.scheduler_jobs.length" class="small-empty">当前没有定时任务。</div>
         <div v-else class="job-list">
-          <div v-for="j in st.scheduler_jobs" :key="j.id" class="job" :class="{ changed: changedJobs.includes(j.id) }">
-            <div class="job-main">
-              <span class="job-name">{{ jobName(j) }}</span>
-              <span class="job-plugin">{{ j.plugin }}</span>
-            </div>
-            <div class="job-meta">
-              <span class="job-trigger mono">{{ prettyTrigger(j.trigger) }}</span>
-              <span class="job-next mono">下次 {{ j.next || '—' }}</span>
-            </div>
+          <div v-for="job in st.scheduler_jobs" :key="job.id" class="job-row" :class="{ changed: changedJobs.includes(job.id) }">
+            <span class="job-mark" :class="{ running: job.running }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3v3m10-3v3M4 9h16M5 5h14v16H5zM8 13h3v3H8z"/></svg></span>
+            <div><strong>{{ jobName(job) }}</strong><small>{{ job.plugin }} · {{ prettyTrigger(job.trigger) }}</small></div>
+            <time>{{ job.running ? '正在运行' : (job.next || '等待安排') }}</time>
           </div>
         </div>
-      </div>
-    </div>
+      </article>
+    </section>
 
-    <!-- 运行信息：全宽长条 -->
-    <div class="card info reveal section-3 status-card">
-      <div class="card-title">运行信息</div>
-      <div class="info-bar">
-        <div class="ib"><span class="ib-k">版本</span><span class="ib-v mono">v{{ st.version }}</span></div>
-        <div class="ib"><span class="ib-k">Python</span><span class="ib-v mono">{{ st.python }}</span></div>
-        <div class="ib"><span class="ib-k">系统</span><span class="ib-v">{{ st.platform }}</span></div>
-        <div class="ib"><span class="ib-k">Web 端口</span><span class="ib-v mono">{{ st.web_port }}</span></div>
-        <div class="ib"><span class="ib-k">已加载插件</span><span class="ib-v">{{ st.plugins.loaded }}</span></div>
-        <div class="ib"><span class="ib-k">定时任务</span><span class="ib-v">{{ st.scheduler_jobs.length }}</span></div>
-      </div>
-    </div>
+    <footer class="runtime-strip reveal section-3">
+      <span class="runtime-resource runtime-cpu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1"/><path d="M9 2v3m6-3v3M9 19v3m6-3v3M2 9h3m-3 6h3m14-6h3m-3 6h3"/></svg>
+        <b>CPU {{ st.resources?.cpu_percent ?? 0 }}%</b>
+      </span>
+      <span class="runtime-resource"><b>内存 {{ formatMemory(st.resources?.memory_used_mb) }} / {{ formatMemory(st.resources?.memory_limit_mb) }}</b></span>
+      <span class="runtime-health" :class="{ warning: st.core_services && !st.core_services.healthy }"><i></i><b>{{ st.core_services?.message || (st.plugins.error ? `${st.plugins.error} 个插件异常` : '所有核心服务正常') }}</b></span>
+    </footer>
   </div>
 </template>
 
 <style scoped>
-.status { display: flex; flex-direction: column; gap: var(--gap); }
-.reveal {
-  opacity: 0; transform: translateY(10px);
-  transition: opacity .42s ease, transform .42s cubic-bezier(.2,.8,.2,1);
-}
+.status { display: flex; flex-direction: column; gap: 14px; }
+.reveal { opacity: 0; transform: translateY(9px); transition: opacity .42s ease, transform .42s cubic-bezier(.2,.8,.2,1); }
 .status.ready .reveal { opacity: 1; transform: translateY(0); }
-.status.ready .section-1 { transition-delay: 90ms; }
-.status.ready .section-2 { transition-delay: 160ms; }
-.status.ready .section-3 { transition-delay: 230ms; }
+.status.ready .section-1 { transition-delay: 70ms; }
+.status.ready .section-2 { transition-delay: 130ms; }
+.status.ready .section-3 { transition-delay: 190ms; }
 
-.status-card {
-  transition: border-color .2s ease, box-shadow .2s ease, translate .2s ease;
-}
+.status-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; padding: 11px 14px; border: 1px solid rgba(224,72,79,.45); border-radius: 10px; background: var(--danger-dim); color: var(--danger); font-size: 13px; }
+.status-alert button { border: 1px solid currentColor; border-radius: 7px; padding: 5px 9px; background: transparent; color: inherit; cursor: pointer; }
+.surface, .metric-strip { border: 1px solid var(--border); background: rgba(14,19,29,.94); box-shadow: 0 10px 34px rgba(0,0,0,.12); }
+.surface { min-width: 0; border-radius: 13px; overflow: hidden; transition: border-color .2s ease, box-shadow .2s ease, translate .2s ease; }
+
 @media (hover: hover) and (pointer: fine) {
-  .status-card:hover {
-    translate: 0 -3px;
-    border-color: rgba(48, 128, 240, .38);
-    box-shadow: 0 8px 24px rgba(48, 128, 240, .2), 0 2px 8px rgba(0, 0, 0, .3);
-  }
-  .status-card:active { translate: 0 -1px; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .status-card { transition: border-color .2s ease, box-shadow .2s ease; }
-  .status-card:hover, .status-card:active { translate: none; }
+  .surface:hover { translate: 0 -2px; border-color: rgba(48,128,240,.32); box-shadow: 0 12px 28px rgba(0,0,0,.2), 0 0 22px rgba(48,128,240,.06); }
 }
 
-/* 首次请求期间保持版面稳定，数据回来后不会整页跳动。 */
-.skeleton-card, .skeleton-panel, .skeleton-list { overflow: hidden; position: relative; }
-.skeleton-card { min-height: 104px; }
-.skeleton-block, .skeleton-lines i, .skeleton-panel span, .skeleton-panel i,
-.skeleton-list span, .skeleton-list i {
-  display: block; border-radius: 7px;
-  background: linear-gradient(100deg, var(--bg-elevated) 20%, rgba(60,69,89,.5) 45%, var(--bg-elevated) 70%);
-  background-size: 220% 100%; animation: skeleton-flow 1.35s ease-in-out infinite;
-}
-.skeleton-icon { width: 48px; height: 48px; border-radius: 12px; flex: 0 0 auto; }
-.skeleton-lines { width: min(150px, 60%); display: flex; flex-direction: column; gap: 8px; }
-.skeleton-lines i:nth-child(1) { width: 58%; height: 9px; }
-.skeleton-lines i:nth-child(2) { width: 82%; height: 21px; }
-.skeleton-lines i:nth-child(3) { width: 45%; height: 8px; }
-.skeleton-panel { min-height: 254px; }
-.skeleton-panel span { width: 120px; height: 11px; }
-.skeleton-panel > i { width: 84%; height: 120px; margin: 38px auto 0; }
-.skeleton-panel > i.round { width: 126px; height: 126px; border-radius: 50%; }
-.skeleton-list { min-height: 235px; }
-.skeleton-list span { width: 92px; height: 11px; margin-bottom: 28px; }
-.skeleton-list i { width: 100%; height: 10px; margin-top: 18px; }
+.metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); border-radius: 13px; overflow: hidden; }
+.metric { min-width: 0; display: flex; align-items: center; gap: 13px; padding: 16px 18px; border-right: 1px solid var(--border); animation: metric-enter .4s ease both; animation-delay: var(--delay); }
+.metric:last-child { border-right: 0; }
+.metric-icon { position: relative; width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 11px; }
+.metric-icon svg { width: 22px; height: 22px; }
+.metric.green .metric-icon, .metric.teal .metric-icon { color: var(--success); background: rgba(16,176,128,.11); }
+.metric.blue .metric-icon { color: var(--accent); background: var(--accent-dim); }
+.metric.amber .metric-icon { color: var(--warning); background: rgba(224,160,32,.12); }
+.metric.gray .metric-icon { color: var(--text-muted); background: var(--bg-elevated); }
+.metric-icon.pulsing::after { content: ''; position: absolute; inset: 0; border: 1px solid currentColor; border-radius: inherit; animation: status-pulse 2.6s ease-out infinite; }
+.metric-copy { min-width: 0; display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 8px; }
+.metric-copy small { grid-column: 1 / -1; color: var(--text-muted); font-size: 11px; }
+.metric-copy strong { margin-top: 4px; color: var(--text-primary); font-size: 23px; line-height: 1; font-variant-numeric: tabular-nums; }
+.metric-copy strong.compact { font-size: 18px; }
+.metric-copy em { overflow: hidden; color: var(--text-muted); font-size: 11px; font-style: normal; white-space: nowrap; text-overflow: ellipsis; }
+
+.primary-grid { display: grid; grid-template-columns: minmax(0,2.1fr) minmax(290px,.9fr); gap: 14px; }
+.secondary-grid { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,.9fr) minmax(0,1fr); gap: 14px; }
+.panel-heading { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 17px 11px; }
+.panel-heading.compact { min-height: 62px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.panel-heading h2 { margin: 4px 0 0; font-size: 16px; line-height: 1.2; }
+.eyebrow { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 10px; letter-spacing: .05em; }
+.eyebrow i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.eyebrow i.online { background: var(--success); box-shadow: 0 0 8px rgba(16,176,128,.65); }
+.chart-state { display: flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: 11px; }
+.chart-state span { display: flex; gap: 5px; }
+.chart-state b { color: var(--text-primary); font-weight: 600; }
+.range-switch { display: flex; gap: 3px; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: rgba(8,13,22,.7); }
+.range-switch button { min-width: 52px; border: 0; border-radius: 6px; padding: 6px 9px; background: transparent; color: var(--text-muted); font-size: 10px; cursor: pointer; transition: color .18s ease, background .18s ease; }
+.range-switch button:hover { color: var(--text-primary); }
+.range-switch button.active { background: var(--bg-elevated); color: var(--text-primary); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+
+.chart-legend { display: flex; padding: 0 17px 4px; color: var(--text-muted); font-size: 11px; }
+.chart-legend span { display: flex; align-items: center; gap: 7px; }
+.chart-legend i { width: 16px; height: 2px; border-radius: 3px; background: var(--accent); }
+.line-chart { height: 226px; display: grid; grid-template-columns: 28px minmax(0,1fr); padding: 2px 15px 0 11px; }
+.y-axis { height: 208px; display: flex; flex-direction: column; justify-content: space-between; padding: 11px 5px 19px 0; color: var(--text-muted); font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; }
+.chart-canvas { position: relative; min-width: 0; height: 226px; }
+.chart-canvas > svg { width: 100%; height: 208px; overflow: visible; }
+.chart-grid line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
+.chart-area { fill: url(#activity-area); animation: chart-fade .55s ease both; }
+.chart-line { fill: none; stroke: var(--accent); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; filter: drop-shadow(0 4px 7px rgba(48,128,240,.22)); }
+.chart-point { fill: var(--bg-card); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; opacity: .55; transition: opacity .16s ease, r .16s ease; }
+.chart-point.active { opacity: 1; r: 6px; }
+.chart-hit { position: absolute; width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%,-50%); cursor: crosshair; }
+.chart-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.x-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; color: var(--text-muted); font-size: 9px; }
+.x-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+.chart-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border-top: 1px solid var(--border); }
+.chart-summary span { min-width: 0; padding: 11px 16px; border-right: 1px solid var(--border); }
+.chart-summary span:last-child { border-right: 0; }
+.chart-summary small, .chart-summary strong { display: block; }
+.chart-summary small { color: var(--text-muted); font-size: 10px; }
+.chart-summary strong { margin-top: 4px; font-size: 15px; font-variant-numeric: tabular-nums; }
+.chart-empty { min-height: 276px; margin: 0 15px 15px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 1px dashed var(--border-light); border-radius: 10px; background: rgba(8,12,19,.34); }
+.chart-empty strong, .event-empty strong { display: block; font-size: 13px; }
+.chart-empty p, .event-empty p { margin: 5px 0 0; color: var(--text-muted); font-size: 11px; line-height: 1.45; }
+.empty-mark { width: 40px; height: 40px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 10px; color: var(--accent); background: var(--accent-dim); }
+.empty-mark.success { color: var(--success); background: rgba(16,176,128,.1); }
+.empty-mark svg { width: 20px; height: 20px; }
+
+.event-panel { min-height: 360px; }
+.event-list { max-height: 313px; overflow-y: auto; padding: 2px 16px 10px; }
+.event-row { display: grid; grid-template-columns: 9px minmax(0,1fr); gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+.event-row:last-child { border-bottom: 0; }
+.event-dot { width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(48,128,240,.08); }
+.event-dot.success { background: var(--success); box-shadow: 0 0 0 4px rgba(16,176,128,.08); }
+.event-dot.warning { background: var(--warning); box-shadow: 0 0 0 4px rgba(224,160,32,.08); }
+.event-dot.danger { background: var(--danger); box-shadow: 0 0 0 4px rgba(224,72,79,.08); }
+.event-row strong { display: block; overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.event-row p { display: -webkit-box; margin: 4px 0 0; overflow: hidden; color: var(--text-secondary); font-size: 11px; line-height: 1.45; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.event-row time { display: block; margin-top: 6px; color: var(--text-muted); font-family: var(--font-mono); font-size: 9px; }
+.event-empty { min-height: 214px; margin: 14px; padding: 20px; display: flex; align-items: center; justify-content: center; gap: 12px; border: 1px dashed var(--border-light); border-radius: 10px; background: rgba(8,12,19,.34); }
+
+.panel-count, .healthy-badge { border-radius: 20px; padding: 4px 8px; background: var(--bg-elevated); color: var(--text-muted); font-size: 9px; }
+.healthy-badge { color: var(--success); background: rgba(16,176,128,.09); }
+.ranking-list, .account-list, .job-list { padding: 3px 15px 10px; }
+.ranking-row { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 11px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.ranking-row:last-child, .account-row:last-child, .job-row:last-child { border-bottom: 0; }
+.rank { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
+.ranking-data > div:first-child { display: flex; justify-content: space-between; gap: 10px; }
+.ranking-data strong { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
+.ranking-data span { color: var(--text-muted); font-size: 10px; }
+.progress { height: 3px; margin-top: 8px; overflow: hidden; border-radius: 4px; background: var(--bg-elevated); }
+.progress i { display: block; height: 100%; border-radius: inherit; }
+
+.account-list, .job-list { max-height: 249px; overflow-y: auto; }
+.account-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto auto; gap: 9px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.account-avatar { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--accent-dim); color: #dceaff; font-size: 9px; }
+.account-row strong, .account-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.account-row strong { font-size: 11px; }
+.account-row small { margin-top: 3px; color: var(--text-muted); font-size: 9px; }
+.account-tgid { color: var(--text-muted); font-family: var(--font-mono); font-size: 9px; }
+.account-state { color: var(--success); font-size: 10px; }
+.account-state.offline { color: var(--text-muted); }
+
+.job-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.job-mark { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--accent-dim); color: var(--accent); }
+.job-mark.running { color: var(--success); background: rgba(16,176,128,.1); }
+.job-mark svg { width: 17px; height: 17px; }
+.job-row strong, .job-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.job-row strong { font-size: 11px; }
+.job-row small { margin-top: 3px; color: var(--text-muted); font-size: 9px; }
+.job-row time { max-width: 92px; overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+.small-empty { min-height: 160px; display: grid; place-items: center; padding: 20px; color: var(--text-muted); font-size: 11px; text-align: center; }
+
+.runtime-strip { min-height: 34px; display: flex; align-items: center; gap: 24px; padding: 0 22px; overflow: hidden; }
+.runtime-strip > span { min-width: 0; display: flex; align-items: center; gap: 7px; color: var(--text-secondary); }
+.runtime-strip b { overflow: hidden; font-size: 10px; font-weight: 500; white-space: nowrap; text-overflow: ellipsis; }
+.runtime-resource svg { width: 14px; height: 14px; color: var(--text-muted); }
+.runtime-strip .runtime-health { color: var(--success); }
+.runtime-strip .runtime-health.warning { color: var(--warning); }
+.runtime-health i { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px rgba(16,176,128,.55); }
+
+.changed { animation: row-changed 1.35s ease both; }
+@keyframes row-changed { 18% { background: rgba(48,128,240,.12); box-shadow: inset 0 0 0 1px rgba(48,128,240,.25); } }
+@keyframes metric-enter { from { opacity: 0; transform: translateY(7px); } }
+@keyframes chart-fade { from { opacity: 0; } }
+@keyframes status-pulse { 0%,45% { opacity: 0; transform: scale(.96); } 62% { opacity: .28; } 100% { opacity: 0; transform: scale(1.2); } }
+
+.skeleton-metric i, .skeleton-metric b, .skeleton-metric em, .skeleton-metric small, .skeleton-chart b, .skeleton-chart i, .skeleton-events b, .skeleton-events i, .skeleton-list b, .skeleton-list i { display: block; border-radius: 7px; background: linear-gradient(100deg,var(--bg-elevated) 20%,rgba(60,69,89,.5) 45%,var(--bg-elevated) 70%); background-size: 220% 100%; animation: skeleton-flow 1.35s ease-in-out infinite; }
+.skeleton-metric i { width: 42px; height: 42px; flex: 0 0 auto; }
+.skeleton-metric span { flex: 1; display: grid; gap: 6px; }
+.skeleton-metric b { width: 55%; height: 8px; }
+.skeleton-metric em { width: 72%; height: 18px; }
+.skeleton-metric small { width: 40%; height: 7px; }
+.skeleton-chart, .skeleton-events, .skeleton-list { min-height: 310px; padding: 18px; }
+.skeleton-chart b, .skeleton-events b, .skeleton-list b { width: 120px; height: 10px; }
+.skeleton-chart i { width: 92%; height: 165px; margin: 56px auto 0; }
+.skeleton-events i, .skeleton-list i { height: 38px; margin-top: 18px; }
 @keyframes skeleton-flow { to { background-position: -120% 0; } }
 
-.health-hero {
-  position: relative; overflow: hidden; display: flex; align-items: center; gap: 18px;
-  min-height: 128px; padding: 24px 26px; border: 1px solid rgba(16,176,128,.24);
-  border-radius: var(--radius-lg); background: linear-gradient(120deg, rgba(16,176,128,.16), rgba(17,19,26,.88) 62%);
-  box-shadow: var(--shadow-soft);
+@media (max-width: 1120px) {
+  .metric-strip { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .metric:nth-child(2) { border-right: 0; }
+  .metric:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .primary-grid { grid-template-columns: 1fr; }
+  .secondary-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .jobs-panel { grid-column: 1 / -1; }
 }
-.health-hero::after {
-  content: ''; position: absolute; width: 240px; height: 240px; right: 8%; top: -170px;
-  border-radius: 50%; background: rgba(16,176,128,.13); filter: blur(12px); pointer-events: none;
-}
-.health-hero.warn { border-color: rgba(224,160,32,.28); background: linear-gradient(120deg, rgba(224,160,32,.16), rgba(17,19,26,.9) 62%); }
-.health-hero.danger { border-color: rgba(224,72,79,.3); background: linear-gradient(120deg, rgba(224,72,79,.16), rgba(17,19,26,.9) 62%); }
-.health-mark { width: 48px; height: 48px; border-radius: 16px; display: grid; place-items: center; flex: 0 0 auto; background: var(--accent-2-dim); }
-.health-mark span { width: 13px; height: 13px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 7px rgba(16,176,128,.12), 0 0 20px rgba(16,176,128,.6); }
-.health-hero.warn .health-mark { background: rgba(224,160,32,.14); }
-.health-hero.warn .health-mark span { background: var(--warning); box-shadow: 0 0 0 7px rgba(224,160,32,.12); }
-.health-hero.danger .health-mark { background: var(--danger-dim); }
-.health-hero.danger .health-mark span { background: var(--danger); box-shadow: 0 0 0 7px var(--danger-dim); }
-.health-copy { min-width: 0; flex: 1; position: relative; z-index: 1; }
-.health-eyebrow { color: var(--text-muted); font-size: 11px; font-weight: 700; letter-spacing: 1.2px; text-transform: uppercase; }
-.health-copy h2 { margin-top: 3px; font-size: 22px; line-height: 1.25; }
-.health-copy p { margin-top: 6px; color: var(--text-secondary); font-size: 13px; }
-.health-links { display: flex; gap: 8px; position: relative; z-index: 1; }
-.health-link { padding: 8px 13px; border: 1px solid var(--border-light); border-radius: 9px; color: var(--text-secondary); font-size: 12px; font-weight: 600; background: rgba(10,14,23,.45); }
-.health-link.primary { color: #fff; border-color: var(--accent); background: var(--accent); }
 
-/* 概览卡片：固定 4 列均分，和下方列严格对齐 */
-.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--gap); }
-@media (max-width: 1100px) { .grid { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 560px)  { .grid { grid-template-columns: 1fr; } }
-.stat { display: flex; align-items: center; gap: 16px; min-width: 0; }
-.status.ready .stat { animation: stat-enter .44s cubic-bezier(.2,.8,.2,1) both; animation-delay: var(--item-delay); }
-@keyframes stat-enter { from { opacity: 0; transform: translateY(9px) scale(.985); } }
-.stat-icon {
-  position: relative;
-  width: 48px; height: 48px; border-radius: 12px; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
+@media (max-width: 720px) {
+  .status { gap: 10px; }
+  .metric { padding: 13px 12px; gap: 10px; }
+  .metric-icon { width: 38px; height: 38px; }
+  .metric-copy strong { font-size: 19px; }
+  .metric-copy em { grid-column: 1 / -1; margin-top: 4px; }
+  .secondary-grid { grid-template-columns: 1fr; }
+  .jobs-panel { grid-column: auto; }
+  .line-chart { height: 214px; padding-inline: 7px; }
+  .chart-canvas { height: 214px; }
+  .chart-summary { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .chart-summary span:nth-child(2) { border-right: 0; }
+  .chart-summary span:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .account-row { grid-template-columns: 32px minmax(0,1fr) auto; }
+  .account-tgid { display: none; }
+  .runtime-strip { flex-wrap: wrap; gap: 8px 18px; padding-block: 11px; }
+  .runtime-strip .runtime-health { width: 100%; }
 }
-.stat-icon::after {
-  content: ''; position: absolute; inset: -1px; border-radius: inherit;
-  border: 1px solid currentColor; opacity: 0; pointer-events: none;
-}
-.stat.bot-live .stat-icon::after { animation: online-pulse 2.4s ease-out infinite; }
-@keyframes online-pulse {
-  0%, 45% { opacity: 0; transform: scale(.96); }
-  62% { opacity: .28; }
-  100% { opacity: 0; transform: scale(1.2); }
-}
-.stat-icon svg { width: 24px; height: 24px; }
-.stat.green .stat-icon { background: var(--accent-2-dim); color: var(--accent-2); }
-.stat.blue  .stat-icon { background: var(--accent-dim); color: var(--accent); }
-.stat.amber .stat-icon { background: rgba(224,160,32,0.15); color: var(--warning); }
-.stat.teal  .stat-icon { background: rgba(16,176,128,0.15); color: #10b0a0; }
-.stat.gray  .stat-icon { background: var(--bg-elevated); color: var(--text-muted); }
-.stat-body { min-width: 0; }
-.stat-label { color: var(--text-secondary); font-size: 13px; }
-.stat-value { font-size: 26px; font-weight: 700; margin-top: 2px; }
-.stat-value.sm { font-size: 19px; }
-.stat-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
 
-.cols { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: var(--gap); }
-.cols > * { min-width: 0; }
-/* 时间线宽、环形窄 */
-.cols-activity { grid-template-columns: minmax(0,2fr) minmax(0,1fr); }
-@media (max-width: 860px) { .cols, .cols-activity { grid-template-columns: minmax(0,1fr); } }
-
-.info { display: flex; flex-direction: column; gap: 14px; }
-.card-title { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.card-title .sub { font-size: 12px; font-weight: 400; margin-left: 6px; }
-
-/* 时间线柱状图 */
-.chart-card { min-height: 240px; }
-.empty-chart { padding: 40px 0; text-align: center; font-size: 13px; }
-.bars {
-  display: flex; align-items: flex-end; gap: 3px;
-  height: 150px; padding-top: 8px;
-}
-.bar-col {
-  position: relative; flex: 1; height: 100%; display: flex; align-items: flex-end;
-  outline: none; transition: opacity .2s ease, filter .2s ease;
-}
-.bar-col.dimmed { opacity: .38; filter: saturate(.6); }
-.bar-col.active .bar-stack { filter: brightness(1.14); box-shadow: 0 0 18px rgba(48,128,240,.18); }
-.bar-stack {
-  width: 100%; min-height: 2px; border-radius: 3px 3px 0 0; overflow: hidden;
-  display: flex; flex-direction: column-reverse;
-  background: var(--bg-elevated);
-  transform-origin: bottom;
-  transition: transform .56s cubic-bezier(.2,.8,.2,1), filter .2s ease, box-shadow .2s ease;
-  transition-delay: var(--bar-delay);
-}
-.bar-seg { width: 100%; transition: opacity .2s ease; }
-.bar-tooltip {
-  position: absolute; z-index: 4; left: 50%; bottom: calc(var(--bar-height) + 8px);
-  width: max-content; min-width: 130px; max-width: 210px; padding: 9px 10px;
-  border: 1px solid var(--border-light); border-radius: 8px;
-  color: var(--text-secondary); background: rgba(10,13,20,.96); box-shadow: var(--shadow);
-  transform: translateX(-50%); animation: tooltip-in .16s ease both; pointer-events: none;
-}
-.bar-tooltip.left { left: 0; transform: none; }
-.bar-tooltip.right { right: 0; left: auto; transform: none; }
-.bar-tooltip strong { display: block; margin-bottom: 5px; color: var(--text-primary); font-size: 12px; }
-.bar-tooltip span { display: flex; align-items: center; gap: 6px; font-size: 11px; line-height: 1.7; }
-.bar-tooltip .dot { width: 7px; height: 7px; }
-@keyframes tooltip-in { from { opacity: 0; transform: translate(-50%, 4px); } }
-.bar-tooltip.left, .bar-tooltip.right { animation-name: tooltip-edge-in; }
-@keyframes tooltip-edge-in { from { opacity: 0; transform: translateY(4px); } }
-.bars-axis { display: flex; gap: 3px; margin-top: 6px; }
-.axis-tick { flex: 1; font-size: 10px; color: var(--text-muted); text-align: left; white-space: nowrap; }
-.legend { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 6px; max-height: 88px; overflow-y: auto; }
-.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
-.dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
-
-/* 环形图 */
-.donut-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
-.donut {
-  position: relative;
-  width: 150px; height: 150px; border-radius: 50%; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  transition: background .26s ease, transform .26s cubic-bezier(.2,.8,.2,1), filter .26s ease;
-}
-.donut::before {
-  content: ''; position: absolute; inset: -1px; z-index: 1; border-radius: 50%;
-  background: conic-gradient(transparent 0deg var(--reveal-angle), var(--bg-card) var(--reveal-angle) 360deg);
-  pointer-events: none;
-}
-.donut.focused { transform: scale(1.035); filter: saturate(1.08); }
-.donut-hole {
-  position: relative; z-index: 2;
-  width: 96px; height: 96px; border-radius: 50%; background: var(--bg-card);
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-}
-.donut-num { font-size: 24px; font-weight: 700; }
-.donut-cap { font-size: 11px; color: var(--text-muted); }
-.donut-legend { width: 100%; display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px 14px; max-height: 132px; overflow-y: auto; }
-.dl-row {
-  display: flex; align-items: center; gap: 8px; min-width: 0; padding: 3px 5px;
-  border-radius: 6px; font-size: 13px; outline: none;
-  transition: opacity .18s ease, color .18s ease, background .18s ease, transform .18s ease;
-}
-.dl-row.active { color: var(--text-primary); background: var(--bg-hover); transform: translateX(2px); }
-.dl-row.dimmed { opacity: .42; }
-.dl-row:focus-visible { box-shadow: 0 0 0 2px var(--accent-dim); }
-.dl-name { flex: 1; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dl-pct { color: var(--text-primary); }
-
-.info-list { display: flex; flex-direction: column; }
-.info-list > div { display: flex; justify-content: space-between; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
-.info-list > div:last-child { border-bottom: none; }
-.info-list .k { color: var(--text-muted); }
-.info-list .v { color: var(--text-primary); }
-/* 运行信息全宽长条：横向排开，每项「标签在上、值在下」 */
-.info-bar { display: flex; flex-wrap: wrap; gap: 12px 0; }
-.ib {
-  flex: 1; min-width: 120px; display: flex; flex-direction: column; gap: 4px;
-  padding: 0 20px; border-right: 1px solid var(--border);
-}
-.ib:last-child { border-right: none; }
-.ib-k { font-size: 12px; color: var(--text-muted); }
-.ib-v { font-size: 15px; font-weight: 600; color: var(--text-primary); }
-@media (max-width: 700px) { .ib { flex-basis: 33%; border-right: none; padding: 0 8px; } }
-
-.job-list { display: flex; flex-direction: column; gap: 8px; max-height: 216px; overflow-y: auto; padding-right: 4px; }
-/* 滚动条细化，深色风格 */
-.job-list::-webkit-scrollbar { width: 6px; }
-.job-list::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
-.job-list::-webkit-scrollbar-track { background: transparent; }
-.job {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  font-size: 13px; padding: 8px 0; border-bottom: 1px solid var(--border);
-}
-.job.changed, .tbl tr.changed { animation: row-changed 1.35s ease both; }
-@keyframes row-changed {
-  0% { background: transparent; }
-  18% { background: rgba(48,128,240,.16); box-shadow: inset 0 0 0 1px rgba(48,128,240,.32); }
-  100% { background: transparent; box-shadow: inset 0 0 0 1px transparent; }
-}
-.job:last-child { border-bottom: none; }
-.job-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.job-name { color: var(--text-primary); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.job-plugin { color: var(--accent); font-size: 12px; }
-.job-meta { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; flex-shrink: 0; }
-.job-trigger { color: var(--text-secondary); font-size: 12px; }
-.job-next { color: var(--text-muted); font-size: 12px; }
-
-.tbl-scroll { max-width: 100%; overflow-x: auto; }
-.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
-.tbl th { text-align: left; color: var(--text-muted); font-weight: 500; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-.tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
-.tbl tr:last-child td { border-bottom: none; }
-.empty { padding: 12px 0; }
-.alert { background: var(--danger-dim); color: var(--danger); padding: 10px 14px; border-radius: var(--radius-sm); margin-bottom: 16px; }
-
-/* 手机适配 */
-@media (max-width: 768px) {
-  .health-hero { align-items: flex-start; padding: 18px; gap: 12px; }
-  .health-mark { width: 40px; height: 40px; border-radius: 13px; }
-  .health-copy h2 { font-size: 18px; }
-  .health-links { width: 100%; margin-top: 4px; }
-  .health-hero { flex-wrap: wrap; }
-  .health-links .health-link { flex: 1; text-align: center; }
-  .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-  .stat { padding: 12px; gap: 10px; }
-  .stat-icon { width: 38px; height: 38px; }
-  .stat-value { font-size: 18px; }
-  /* 账号表格：超宽时在 .tbl-scroll 容器内横向滚动，不撑破卡片 */
-  .tbl { white-space: nowrap; }
-  .info-bar { gap: 10px 0; }
-  .ib { flex-basis: 50%; }
-  .reveal { transform: translateY(6px); transition-duration: .3s; }
-  .bar-tooltip { max-width: 160px; }
-  .stat.bot-live .stat-icon::after { animation-duration: 3.2s; }
+@media (max-width: 460px) {
+  .metric { padding: 12px 10px; gap: 8px; }
+  .metric-icon { width: 34px; height: 34px; }
+  .metric-icon svg { width: 19px; height: 19px; }
+  .metric-copy strong { font-size: 17px; }
+  .metric-copy strong.compact { font-size: 15px; }
+  .metric-copy small, .metric-copy em { font-size: 9px; }
+  .panel-heading { padding-inline: 13px; }
+  .line-chart { grid-template-columns: 22px minmax(0,1fr); }
+  .chart-summary span { padding-inline: 12px; }
+  .job-row { grid-template-columns: 32px minmax(0,1fr); }
+  .job-row time { grid-column: 2; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .reveal, .status.ready .reveal { opacity: 1; transform: none; transition: none; }
-  .status.ready .stat, .stat.bot-live .stat-icon::after, .skeleton-block, .skeleton-lines i,
-  .skeleton-panel span, .skeleton-panel i, .skeleton-list span, .skeleton-list i,
-  .job.changed, .tbl tr.changed, .bar-tooltip { animation: none; }
-  .bar-stack, .bar-seg, .bar-col, .donut, .dl-row { transition: none; }
+  .metric, .metric-icon.pulsing::after, .chart-area, .changed, .skeleton-metric i, .skeleton-metric b, .skeleton-metric em, .skeleton-metric small, .skeleton-chart b, .skeleton-chart i, .skeleton-events b, .skeleton-events i, .skeleton-list b, .skeleton-list i { animation: none; }
+  .surface { transition: border-color .2s ease; }
+  .surface:hover { translate: none; }
 }
 </style>

@@ -112,9 +112,11 @@ onUnmounted(() => {
         <span class="conn" :class="{ on: connected }">
           <span class="dot"></span>{{ connected ? '实时' : '断开重连中' }}
         </span>
-        <select class="select sm" v-model="levelFilter">
-          <option v-for="lv in levels" :key="lv" :value="lv">{{ lv }}</option>
-        </select>
+        <div class="level-tabs" aria-label="日志级别筛选">
+          <button v-for="lv in levels" :key="lv" type="button"
+                  :class="{ active: levelFilter === lv, [`is-${lv.toLowerCase()}`]: true }"
+                  @click="levelFilter = lv">{{ lv }}</button>
+        </div>
         <input class="input sm" v-model="search" placeholder="搜索插件名/内容…" />
       </div>
       <div class="row gap">
@@ -142,6 +144,13 @@ onUnmounted(() => {
 .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; flex-wrap: wrap; gap: 10px; }
 .select.sm, .input.sm { width: auto; padding: 6px 10px; font-size: 12px; }
 .input.sm { width: 200px; }
+.level-tabs { display: flex; align-items: center; padding: 3px; border: 1px solid var(--border); border-radius: 9px; background: rgba(6,11,19,.62); }
+.level-tabs button { min-height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-muted); font: 700 10px/1 inherit; cursor: pointer; }
+.level-tabs button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.level-tabs button.active { color: var(--text-primary); background: var(--bg-elevated); box-shadow: 0 3px 10px rgba(0,0,0,.2); }
+.level-tabs button.active.is-info { color: var(--accent); }
+.level-tabs button.active.is-warning { color: var(--warning); }
+.level-tabs button.active.is-error { color: var(--danger); }
 
 .conn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
 .conn .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); }
@@ -154,11 +163,12 @@ onUnmounted(() => {
 .log-box {
   flex: 1; overflow-y: auto; padding: 14px 16px;
   font-family: 'SFMono-Regular', Consolas, monospace; font-size: 12.5px;
-  line-height: 1.7; background: #07090f; overflow-anchor: none;
+  line-height: 1.75; background: rgba(5, 10, 18, .93); overflow-anchor: none;
+  border-radius: 13px;
 }
 .center { text-align: center; padding: 40px; }
-.log-line { display: flex; gap: 10px; white-space: pre-wrap; word-break: break-all; }
-.log-line:hover { background: rgba(255,255,255,0.03); }
+.log-line { display: flex; gap: 10px; margin: 0 -8px; padding: 1px 8px; border-radius: 5px; white-space: pre-wrap; word-break: break-all; }
+.log-line:hover { background: rgba(48,128,240,.07); }
 .time { color: var(--text-muted); flex-shrink: 0; }
 .level { flex-shrink: 0; width: 64px; font-weight: 600; }
 .lv-debug { color: var(--text-muted); }
@@ -172,6 +182,7 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
   .toolbar .row { flex-wrap: wrap; }
+  .level-tabs { width: 100%; overflow-x: auto; }
   .input.sm { width: 100%; }
 }
 </style>

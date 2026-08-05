@@ -4,13 +4,14 @@ kernel/activity.py
 供状态页「插件活跃时间线」与「活跃占比」展示。
 
 - 通过 ctx.on_message / ctx.on_callback 注册的处理器，每次触发时调用 record()。
-- 环形窗口仅保留最近 BUCKETS 个时间桶（默认 24 个 1 小时桶 = 近 24 小时）。
+- 环形窗口保留最近 7 天的小时桶，状态页可按 24 小时或 7 天查看。
 - 持久化到 data/activity.json：导入时加载、record 后节流落盘，平台重启不丢历史。
 - 线程安全：record 通常在事件循环线程触发，timeline 在 Web 请求线程读取。
 """
 from __future__ import annotations
 
 import json
+import math
 import time
 import threading
 import contextvars
@@ -18,7 +19,7 @@ from pathlib import Path
 from collections import OrderedDict, Counter
 
 BUCKET_SECONDS = 3600   # 每个时间桶的跨度：1 小时
-BUCKETS = 24            # 保留的桶数：近 24 小时
+BUCKETS = 24 * 7        # 保留的桶数：近 7 天
 _STATE_PATH = Path("data") / "activity.json"
 _SAVE_MIN_INTERVAL = 10  # 落盘最小间隔（秒），节流防频繁写盘
 
@@ -112,24 +113,41 @@ def record(plugin_id: str, n: int = 1) -> None:
         _save()
 
 
-def timeline() -> dict:
+def timeline(hours: int = 24, group_hours: int = 1) -> dict:
     """
-    返回近 BUCKETS 个时间桶的活跃数据 + 各插件总计。
+    返回指定时间范围的活跃数据 + 各插件总计。
     buckets 按时间升序（最旧 → 最新），缺失的桶补空，便于前端等宽渲染。
     """
+    hours = max(1, min(int(hours), BUCKETS))
+    group_hours = max(1, min(int(group_hours), hours))
     now_b = _bucket_of(time.time())
     with _lock:
         buckets = []
         totals: Counter = Counter()
-        for i in range(BUCKETS - 1, -1, -1):
-            b = now_b - i * BUCKET_SECONDS
-            c = _data.get(b)
-            counts = dict(c) if c else {}
-            buckets.append({"t": b, "counts": counts})
-            if c:
-                totals.update(c)
+        group_count = math.ceil(hours / group_hours)
+        if group_hours == 24:
+            local_now = time.localtime()
+            current_day = int(time.mktime((
+                local_now.tm_year, local_now.tm_mon, local_now.tm_mday,
+                0, 0, 0, local_now.tm_wday, local_now.tm_yday, local_now.tm_isdst,
+            )))
+            oldest = current_day - (group_count - 1) * 24 * BUCKET_SECONDS
+        else:
+            oldest = now_b - (hours - 1) * BUCKET_SECONDS
+        for offset in range(0, group_count * group_hours, group_hours):
+            grouped: Counter = Counter()
+            start = oldest + offset * BUCKET_SECONDS
+            for index in range(group_hours):
+                bucket = start + index * BUCKET_SECONDS
+                if bucket > now_b:
+                    break
+                counts = _data.get(bucket)
+                if counts:
+                    grouped.update(counts)
+            buckets.append({"t": start, "counts": dict(grouped)})
+            totals.update(grouped)
         return {
-            "bucket_seconds": BUCKET_SECONDS,
+            "bucket_seconds": BUCKET_SECONDS * group_hours,
             "buckets": buckets,
             "totals": dict(totals),
         }

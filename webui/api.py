@@ -17,6 +17,7 @@ import copy
 import base64
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -64,6 +65,160 @@ _SCHEDULER_LISTENER_INSTALLED = False
 _SYSTEM_SCHEDULER_JOB_NAMES = {
     "log_cleaner": "日志清理",
 }
+_RESOURCE_SAMPLE = {
+    "wall": time.monotonic(), "cpu": time.process_time(), "cgroup_cpu": None, "result": None,
+}
+_RESOURCE_SAMPLE_LOCK = threading.Lock()
+
+
+def _cgroup_roots() -> list[tuple[Path, bool]]:
+    """返回当前进程可能所在的 cgroup 目录及是否为 v2。"""
+    roots: list[tuple[Path, bool]] = []
+    try:
+        for line in Path("/proc/self/cgroup").read_text(encoding="ascii").splitlines():
+            _, controllers, relative = line.split(":", 2)
+            if not controllers:
+                roots.append((Path("/sys/fs/cgroup") / relative.lstrip("/"), True))
+            elif "memory" in controllers.split(","):
+                roots.append((Path("/sys/fs/cgroup/memory") / relative.lstrip("/"), False))
+    except (OSError, ValueError):
+        pass
+    roots.extend(((Path("/sys/fs/cgroup"), True), (Path("/sys/fs/cgroup/memory"), False)))
+    return list(dict.fromkeys(roots))
+
+
+def _read_cgroup_memory() -> tuple[int, int]:
+    for root, unified in _cgroup_roots():
+        used_path = root / ("memory.current" if unified else "memory.usage_in_bytes")
+        limit_path = root / ("memory.max" if unified else "memory.limit_in_bytes")
+        try:
+            used_value = used_path.read_text(encoding="ascii").strip()
+            limit_value = limit_path.read_text(encoding="ascii").strip()
+            if limit_value == "max":
+                continue
+            used = int(used_value)
+            limit = int(limit_value)
+            if 0 <= used <= limit < 1 << 60:
+                return used, limit
+        except (OSError, ValueError):
+            continue
+    return 0, 0
+
+
+def _read_cgroup_cpu() -> float | None:
+    for root, unified in _cgroup_roots():
+        if not unified:
+            continue
+        try:
+            values = dict(
+                line.split(maxsplit=1)
+                for line in (root / "cpu.stat").read_text(encoding="ascii").splitlines()
+                if " " in line
+            )
+            return int(values["usage_usec"]) / 1_000_000
+        except (KeyError, OSError, ValueError):
+            continue
+    candidates = [Path("/sys/fs/cgroup/cpuacct/cpuacct.usage")]
+    try:
+        for line in Path("/proc/self/cgroup").read_text(encoding="ascii").splitlines():
+            _, controllers, relative = line.split(":", 2)
+            if "cpuacct" in controllers.split(","):
+                candidates.insert(0, Path("/sys/fs/cgroup/cpuacct") / relative.lstrip("/") / "cpuacct.usage")
+    except (OSError, ValueError):
+        pass
+    for path in candidates:
+        try:
+            return int(path.read_text(encoding="ascii")) / 1_000_000_000
+        except (OSError, ValueError):
+            continue
+    return None
+
+
+def _read_process_memory() -> tuple[int, int]:
+    """读取当前进程内存和可用内存上限，不额外引入监控依赖。"""
+    used = 0
+    limit = 0
+    if os.name == "nt":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class _ProcessMemoryCounters(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = _ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            get_process_memory = ctypes.windll.psapi.GetProcessMemoryInfo
+            get_process_memory.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ProcessMemoryCounters), wintypes.DWORD]
+            get_process_memory.restype = wintypes.BOOL
+            if get_process_memory(
+                ctypes.windll.kernel32.GetCurrentProcess(), ctypes.byref(counters), counters.cb
+            ):
+                used = int(counters.WorkingSetSize)
+
+            class _MemoryStatus(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            status = _MemoryStatus()
+            status.dwLength = ctypes.sizeof(status)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+                limit = int(status.ullTotalPhys)
+        except (AttributeError, OSError, ValueError):
+            pass
+    else:
+        cgroup_used, cgroup_limit = _read_cgroup_memory()
+        if cgroup_limit:
+            return cgroup_used, cgroup_limit
+        try:
+            pages = int(Path("/proc/self/statm").read_text(encoding="ascii").split()[1])
+            used = pages * int(os.sysconf("SC_PAGE_SIZE"))
+        except (OSError, ValueError, IndexError):
+            pass
+
+        try:
+            limit = int(os.sysconf("SC_PHYS_PAGES")) * int(os.sysconf("SC_PAGE_SIZE"))
+        except (OSError, ValueError):
+            pass
+    return used, limit
+
+
+def _resource_snapshot() -> dict[str, float]:
+    with _RESOURCE_SAMPLE_LOCK:
+        now_wall = time.monotonic()
+        elapsed = max(now_wall - float(_RESOURCE_SAMPLE["wall"]), 0.001)
+        previous_result = _RESOURCE_SAMPLE.get("result")
+        if elapsed < 0.5 and isinstance(previous_result, dict):
+            return dict(previous_result)
+
+        now_cpu = time.process_time()
+        cgroup_cpu = _read_cgroup_cpu() if os.name != "nt" else None
+        previous_cgroup_cpu = _RESOURCE_SAMPLE.get("cgroup_cpu")
+        if cgroup_cpu is not None and previous_cgroup_cpu is not None:
+            cpu_percent = max(0.0, (cgroup_cpu - float(previous_cgroup_cpu)) / elapsed * 100)
+        else:
+            cpu_percent = max(0.0, (now_cpu - float(_RESOURCE_SAMPLE["cpu"])) / elapsed * 100)
+        memory_used, memory_limit = _read_process_memory()
+        result = {
+            "cpu_percent": round(cpu_percent, 1),
+            "memory_used_mb": round(memory_used / 1024 / 1024, 1),
+            "memory_limit_mb": round(memory_limit / 1024 / 1024, 1),
+        }
+        _RESOURCE_SAMPLE.update(
+            wall=now_wall, cpu=now_cpu, cgroup_cpu=cgroup_cpu, result=result,
+        )
+        return dict(result)
 
 
 def _avatar_path() -> Optional[Path]:
@@ -1998,6 +2153,7 @@ async def system_status(user=Depends(_auth)):
 
     # 调度任务
     sched_jobs = []
+    active_scheduler = None
     try:
         # 状态接口只读取已经启动的调度器，不能为了展示数据加载整套任务模块。
         sched_module = _sys.modules.get("schedulers")
@@ -2033,12 +2189,24 @@ async def system_status(user=Depends(_auth)):
     started = getattr(kernel_state, "started_at", None)
     uptime = int(_time.time() - started) if started else 0
 
+    core_issues = []
+    if acc is None:
+        core_issues.append("账号服务未就绪")
+    if runtime is None:
+        core_issues.append("插件运行时未就绪")
+    if active_scheduler is None or not getattr(active_scheduler, "running", False):
+        core_issues.append("定时服务未就绪")
+    if plugin_error:
+        core_issues.append(f"{plugin_error} 个插件异常")
+
     # 插件活跃时间线
     try:
         from kernel import activity as _activity
-        activity_data = _activity.timeline()
+        activity_data = _activity.timeline(hours=24)
+        activity_7d_data = _activity.timeline(hours=24 * 7, group_hours=24)
     except Exception:  # noqa: BLE001
         activity_data = {"bucket_seconds": 3600, "buckets": [], "totals": {}}
+        activity_7d_data = {"bucket_seconds": 86400, "buckets": [], "totals": {}}
 
     return {
         "version": APP_VERSION,
@@ -2053,7 +2221,14 @@ async def system_status(user=Depends(_auth)):
                      "loaded": len(runtime.loaded_ids) if runtime else 0},
         "scheduler_jobs": sched_jobs,
         "web_port": config.telegram.web_ui_port,
+        "resources": _resource_snapshot(),
+        "core_services": {
+            "healthy": not core_issues,
+            "message": core_issues[0] if core_issues else "所有核心服务正常",
+            "issues": core_issues,
+        },
         "activity": activity_data,
+        "activity_7d": activity_7d_data,
         "plugin_names": plugin_names,
     }
 

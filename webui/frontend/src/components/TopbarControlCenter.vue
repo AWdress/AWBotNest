@@ -389,10 +389,16 @@ onUnmounted(() => {
       </svg>
       <span v-if="unread" class="notice-badge">{{ unread > 99 ? '99+' : unread }}</span>
     </button>
-    <button class="avatar-btn" :class="{ active: panel === 'user' }"
+    <button class="profile-trigger" :class="{ active: panel === 'user' }"
             title="管理员菜单" @click="togglePanel('user')">
-      <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像">
-      <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
+      <span class="avatar-btn">
+        <img v-if="profile.avatar_url" :src="profile.avatar_url" alt="管理员头像">
+        <span v-else>{{ profile.username.slice(0, 2).toUpperCase() }}</span>
+      </span>
+      <span class="profile-trigger-copy"><strong>{{ profile.username }}</strong><small>管理员</small></span>
+      <svg class="profile-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="m7 10 5 5 5-5"/>
+      </svg>
     </button>
 
     <div v-if="panel === 'shortcuts'" class="control-pop shortcuts-pop">
@@ -600,7 +606,18 @@ onUnmounted(() => {
 .control-btn:hover, .control-btn.active { color: var(--text-primary); border-color: var(--border-light); background: var(--bg-hover); }
 .control-btn svg { width: 19px; height: 19px; }
 .avatar-btn { border-radius: 50%; overflow: hidden; color: #fff; font-size: 11px; font-weight: 700; background: linear-gradient(145deg, var(--accent), var(--accent-2)); }
-.avatar-btn.active { box-shadow: 0 0 0 3px var(--accent-dim); }
+.profile-trigger {
+  min-width: 118px; min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 2px 5px 2px 2px;
+  border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--text-primary);
+  font: inherit; text-align: left; cursor: pointer; transition: background .16s ease, border-color .16s ease;
+}
+.profile-trigger:hover, .profile-trigger.active { border-color: var(--border-light); background: var(--bg-hover); }
+.profile-trigger .avatar-btn { width: 38px; height: 38px; flex: 0 0 38px; pointer-events: none; }
+.profile-trigger-copy { min-width: 0; display: flex; flex: 1; flex-direction: column; }
+.profile-trigger-copy strong { max-width: 94px; overflow: hidden; color: var(--text-primary); font-size: 12px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+.profile-trigger-copy small { color: var(--text-muted); font-size: 9px; line-height: 1.25; }
+.profile-chevron { width: 14px; height: 14px; flex: 0 0 14px; color: var(--text-muted); transition: transform .16s ease; }
+.profile-trigger.active .profile-chevron { transform: rotate(180deg); }
 .avatar-btn img, .avatar-large img { width: 100%; height: 100%; object-fit: cover; }
 .notice-badge {
   position: absolute; right: -4px; top: -4px; min-width: 17px; height: 17px; padding: 0 4px;
@@ -782,6 +799,9 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .control-center { gap: 3px; }
   .control-btn, .avatar-btn { width: 34px; height: 34px; }
+  .profile-trigger { min-width: 34px; min-height: 34px; width: 34px; padding: 0; border-radius: 50%; }
+  .profile-trigger .avatar-btn { width: 34px; height: 34px; flex-basis: 34px; }
+  .profile-trigger .profile-trigger-copy, .profile-trigger .profile-chevron { display: none; }
   .control-pop { position: fixed; top: 56px; right: 8px; width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 132px); box-sizing: border-box; }
   .notifications-pop { width: calc(100vw - 16px); max-width: calc(100vw - 16px); box-sizing: border-box; }
   .notice-content { word-break: break-word; overflow-wrap: anywhere; }
