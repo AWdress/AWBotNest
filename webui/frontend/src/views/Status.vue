@@ -18,6 +18,7 @@ const events = ref([])
 const eventConnected = ref(false)
 const activityRange = ref('24h')
 const animated = ref({ user: 0, plugin: 0, uptime: 0, activity: 0 })
+const currentTime = ref(Date.now())
 
 const loading = computed(() => platformStatusLoading.value || !platformStatus.value)
 const animationFrames = new Map()
@@ -25,6 +26,7 @@ let changeTimer = null
 let firstPaintFrame = null
 let eventSocket = null
 let eventReconnectTimer = null
+let clockTimer = null
 
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
@@ -172,6 +174,33 @@ function prettyCron(body) {
 const JOB_NAMES = { log_cleaner: '日志清理', 插件仓库轮询: '插件仓库轮询' }
 function jobName(job) { return JOB_NAMES[job.name] || JOB_NAMES[job.id] || job.name }
 
+function isSameLocalDay(left, right) {
+  return left.getFullYear() === right.getFullYear()
+    && left.getMonth() === right.getMonth()
+    && left.getDate() === right.getDate()
+}
+
+function clockLabel(date) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
+function nextRunLabel(job) {
+  if (job.running) return '正在运行'
+  if (!job.next_run_at) return '等待安排'
+  const nextRun = new Date(job.next_run_at)
+  const remaining = nextRun.getTime() - currentTime.value
+  if (!Number.isFinite(remaining)) return '等待安排'
+  if (remaining <= 0) return '即将执行'
+  if (remaining < 3600000) return `${Math.max(1, Math.ceil(remaining / 60000))}分钟后`
+
+  const now = new Date(currentTime.value)
+  if (isSameLocalDay(now, nextRun)) return `今天 ${clockLabel(nextRun)}`
+  const tomorrow = new Date(now)
+  tomorrow.setDate(now.getDate() + 1)
+  if (isSameLocalDay(tomorrow, nextRun)) return `明天 ${clockLabel(nextRun)}`
+  return `${String(nextRun.getMonth() + 1).padStart(2, '0')}-${String(nextRun.getDate()).padStart(2, '0')} ${clockLabel(nextRun)}`
+}
+
 const cards = computed(() => {
   if (!st.value) return []
   const status = st.value
@@ -241,16 +270,27 @@ const visibleAxisLabels = computed(() => activityRange.value === '7d'
   : timeline.value.filter((point, index) => index === 0 || index === timeline.value.length - 1 || point.hour % 6 === 0))
 const peakPoint = computed(() => timeline.value.reduce((peak, point) => point.total > (peak?.total || -1) ? point : peak, null))
 const hoveredChartPoint = computed(() => hoveredPoint.value === null ? null : timeline.value[hoveredPoint.value])
+const hoveredChartPointPosition = computed(() => {
+  const point = hoveredChartPoint.value
+  if (!point) return {}
+  return {
+    left: point.xPct,
+    top: `${point.y}px`,
+    '--chart-guide-top': `${point.y}px`,
+  }
+})
 const hasActivity = computed(() => activePlugins.value.length > 0)
 const topPlugins = computed(() => {
   const totals = activityData.value?.totals || {}
   const max = Math.max(1, ...Object.values(totals))
+  const total = Math.max(1, Object.values(totals).reduce((sum, count) => sum + count, 0))
   return activePlugins.value.slice(0, 5).map((pluginId, index) => ({
     pluginId,
     rank: String(index + 1).padStart(2, '0'),
     name: nameOf(pluginId),
     count: totals[pluginId],
     ratio: Math.max(4, Math.round((totals[pluginId] / max) * 100)),
+    share: (totals[pluginId] / total) * 100,
     color: colorOf(pluginId),
   }))
 })
@@ -334,11 +374,13 @@ async function refresh() {
 onMounted(() => {
   if (!platformStatus.value) refreshPlatformStatus(true).catch(() => {})
   connectEvents()
+  clockTimer = window.setInterval(() => { currentTime.value = Date.now() }, 30000)
 })
 
 onUnmounted(() => {
   disconnectEvents()
   clearTimeout(changeTimer)
+  clearInterval(clockTimer)
   if (firstPaintFrame) cancelAnimationFrame(firstPaintFrame)
   for (const frame of animationFrames.values()) cancelAnimationFrame(frame)
   animationFrames.clear()
@@ -383,8 +425,7 @@ onUnmounted(() => {
         <header class="panel-heading">
           <div><span class="eyebrow">实时运行</span><h2>插件活动时间线</h2></div>
           <div class="chart-state">
-            <span v-if="hoveredChartPoint"><b>{{ hoveredChartPoint.label }}</b>{{ hoveredChartPoint.total }} 次</span>
-            <div v-else class="range-switch" aria-label="活动时间范围">
+            <div class="range-switch" aria-label="活动时间范围">
               <button type="button" :class="{ active: activityRange === '24h' }" @click="activityRange = '24h'">24 小时</button>
               <button type="button" :class="{ active: activityRange === '7d' }" @click="activityRange = '7d'">7 天</button>
             </div>
@@ -408,6 +449,22 @@ onUnmounted(() => {
                 <circle v-for="(point, index) in timeline" :key="index" class="chart-point" :class="{ active: hoveredPoint === index }" :cx="point.x" :cy="point.y" r="4" />
               </svg>
               <button v-for="(point, index) in timeline" :key="`hit-${index}`" type="button" class="chart-hit" :style="{ left: point.xPct, top: point.yPct }" :aria-label="`${point.label}，${point.total} 次`" @mouseenter="hoveredPoint = index" @mouseleave="hoveredPoint = null" @focus="hoveredPoint = index" @blur="hoveredPoint = null"></button>
+              <div
+                v-if="hoveredChartPoint"
+                class="chart-hover-layer"
+                :class="{
+                  'align-right': hoveredChartPoint.x > 760,
+                  'place-above': hoveredChartPoint.y > 112,
+                }"
+                :style="hoveredChartPointPosition"
+                aria-hidden="true"
+              >
+                <i class="chart-guide"></i>
+                <div class="chart-tooltip">
+                  <strong>{{ hoveredChartPoint.label }}</strong>
+                  <span>触发次数: <b>{{ hoveredChartPoint.total }}</b></span>
+                </div>
+              </div>
               <div class="x-axis" aria-hidden="true"><span v-for="point in visibleAxisLabels" :key="`${point.label}-${point.x}`" :style="{ left: point.xPct }">{{ point.label }}</span></div>
             </div>
           </div>
@@ -439,12 +496,12 @@ onUnmounted(() => {
 
     <section class="secondary-grid reveal section-2">
       <article class="surface ranking-panel">
-        <header class="panel-heading compact"><div><span class="eyebrow">{{ activityRangeLabel }}</span><h2>活跃插件</h2></div><span class="panel-count">{{ activePlugins.length }} 个</span></header>
+        <header class="panel-heading compact"><div><span class="eyebrow">{{ activityRangeLabel }}</span><h2>活跃插件</h2></div><RouterLink class="panel-link" to="/plugins">查看全部</RouterLink></header>
         <div v-if="!topPlugins.length" class="small-empty">暂无插件活跃记录</div>
         <div v-else class="ranking-list">
           <div v-for="plugin in topPlugins" :key="plugin.pluginId" class="ranking-row">
             <span class="rank">{{ plugin.rank }}</span>
-            <div class="ranking-data"><div><strong>{{ plugin.name }}</strong><span>{{ plugin.count }} 次</span></div><div class="progress"><i :style="{ width: `${plugin.ratio}%`, background: plugin.color }"></i></div></div>
+            <div class="ranking-data"><div><strong>{{ plugin.name }}</strong><span class="ranking-metrics"><b>{{ plugin.count }} 次</b><em>{{ plugin.share.toFixed(1) }}%</em></span></div><div class="progress"><i :style="{ width: `${plugin.ratio}%`, background: plugin.color }"></i></div></div>
           </div>
         </div>
       </article>
@@ -463,13 +520,13 @@ onUnmounted(() => {
       </article>
 
       <article class="surface jobs-panel">
-        <header class="panel-heading compact"><div><span class="eyebrow">计划任务</span><h2>即将执行</h2></div><span class="panel-count">{{ st.scheduler_jobs.length }} 项</span></header>
+        <header class="panel-heading compact jobs-heading"><div><span class="eyebrow">计划任务</span><h2>即将执行</h2></div><span class="jobs-header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v3m10-3v3M4 9h16M5 5h14v15H5z"/><circle cx="16.5" cy="16.5" r="3.5"/><path d="M16.5 14.8v1.9l1.2.7"/></svg></span></header>
         <div v-if="!st.scheduler_jobs.length" class="small-empty">当前没有定时任务。</div>
         <div v-else class="job-list">
           <div v-for="job in st.scheduler_jobs" :key="job.id" class="job-row" :class="{ changed: changedJobs.includes(job.id) }">
-            <span class="job-mark" :class="{ running: job.running }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M7 3v3m10-3v3M4 9h16M5 5h14v16H5zM8 13h3v3H8z"/></svg></span>
-            <div><strong>{{ jobName(job) }}</strong><small>{{ job.plugin }} · {{ prettyTrigger(job.trigger) }}</small></div>
-            <time>{{ job.running ? '正在运行' : (job.next || '等待安排') }}</time>
+            <span class="job-mark" :class="{ running: job.running }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
+            <div><strong>{{ jobName(job) }}</strong><small>{{ job.plugin }}</small></div>
+            <time :title="job.next || ''">{{ nextRunLabel(job) }}</time>
           </div>
         </div>
       </article>
@@ -549,6 +606,15 @@ onUnmounted(() => {
 .chart-point.active { opacity: 1; r: 6px; }
 .chart-hit { position: absolute; width: 22px; height: 22px; border: 0; border-radius: 50%; background: transparent; transform: translate(-50%,-50%); cursor: crosshair; }
 .chart-hit:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.chart-hover-layer { position: absolute; z-index: 4; width: 0; height: 0; pointer-events: none; }
+.chart-guide { position: absolute; left: 0; top: calc(-1 * var(--chart-guide-top, 208px)); width: 1px; height: 208px; background: rgba(188,201,220,.58); transform: translateX(-.5px); }
+.chart-tooltip { position: absolute; top: 14px; left: 12px; min-width: 144px; padding: 12px 13px; border: 1px solid var(--border-light); border-radius: 10px; background: rgba(15,24,37,.98); box-shadow: 0 12px 30px rgba(0,0,0,.32); }
+.chart-hover-layer.align-right .chart-tooltip { left: auto; right: 12px; }
+.chart-hover-layer.place-above .chart-tooltip { top: auto; bottom: 14px; }
+.chart-tooltip strong, .chart-tooltip span { display: block; white-space: nowrap; }
+.chart-tooltip strong { margin-bottom: 8px; color: var(--text-primary); font-size: 14px; font-weight: 600; }
+.chart-tooltip span { color: var(--accent); font-size: 12px; }
+.chart-tooltip b { font-weight: 600; font-variant-numeric: tabular-nums; }
 .x-axis { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; color: var(--text-muted); font-size: 9px; }
 .x-axis span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .chart-summary { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); border-top: 1px solid var(--border); }
@@ -579,17 +645,24 @@ onUnmounted(() => {
 
 .panel-count, .healthy-badge { border-radius: 20px; padding: 4px 8px; background: var(--bg-elevated); color: var(--text-muted); font-size: 9px; }
 .healthy-badge { color: var(--success); background: rgba(16,176,128,.09); }
-.ranking-list, .account-list, .job-list { padding: 3px 15px 10px; }
+.panel-link { color: var(--accent); font-size: 11px; font-weight: 500; transition: color .16s ease; }
+.panel-link:hover { color: var(--accent-hover); }
+.panel-link:focus-visible { border-radius: 4px; outline: 2px solid var(--accent); outline-offset: 3px; }
+.ranking-list, .account-list { padding: 3px 15px 10px; }
+.job-list { padding: 3px 22px 14px; }
 .ranking-row { display: grid; grid-template-columns: 24px minmax(0,1fr); gap: 11px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .ranking-row:last-child, .account-row:last-child, .job-row:last-child { border-bottom: 0; }
 .rank { color: var(--text-muted); font-family: var(--font-mono); font-size: 10px; }
 .ranking-data > div:first-child { display: flex; justify-content: space-between; gap: 10px; }
 .ranking-data strong { overflow: hidden; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; }
-.ranking-data span { color: var(--text-muted); font-size: 10px; }
+.ranking-metrics { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 9px; font-size: 10px; }
+.ranking-metrics b { color: var(--text-muted); font-weight: 500; }
+.ranking-metrics em { color: var(--success); font-style: normal; font-variant-numeric: tabular-nums; }
 .progress { height: 3px; margin-top: 8px; overflow: hidden; border-radius: 4px; background: var(--bg-elevated); }
 .progress i { display: block; height: 100%; border-radius: inherit; }
 
-.account-list, .job-list { max-height: 249px; overflow-y: auto; }
+.account-list { max-height: 249px; overflow-y: auto; }
+.job-list { max-height: 320px; overflow-y: auto; }
 .account-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto auto; gap: 9px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .account-avatar { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--accent-dim); color: #dceaff; font-size: 9px; }
 .account-row strong, .account-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -599,14 +672,19 @@ onUnmounted(() => {
 .account-state { color: var(--success); font-size: 10px; }
 .account-state.offline { color: var(--text-muted); }
 
-.job-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto; gap: 9px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border); }
-.job-mark { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--accent-dim); color: var(--accent); }
+.jobs-panel { min-height: 0; align-self: start; border-color: rgba(48,128,240,.38); }
+.jobs-heading { min-height: 80px; padding-top: 18px; }
+.jobs-header-icon { width: 28px; height: 28px; display: grid; place-items: center; color: var(--text-secondary); }
+.jobs-header-icon svg { width: 27px; height: 27px; }
+.job-row { display: grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 12px; align-items: center; min-height: 55px; margin: 0; padding: 10px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
+.job-row:last-child { border-bottom: 0; }
+.job-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: rgba(48,128,240,.12); color: var(--accent); }
 .job-mark.running { color: var(--success); background: rgba(16,176,128,.1); }
-.job-mark svg { width: 17px; height: 17px; }
+.job-mark svg { width: 19px; height: 19px; }
 .job-row strong, .job-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.job-row strong { font-size: 11px; }
-.job-row small { margin-top: 3px; color: var(--text-muted); font-size: 9px; }
-.job-row time { max-width: 92px; overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); font-size: 9px; white-space: nowrap; text-overflow: ellipsis; }
+.job-row strong { font-size: 12px; }
+.job-row small { margin-top: 4px; color: var(--text-muted); font-size: 10px; }
+.job-row time { max-width: 110px; overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
 .small-empty { min-height: 160px; display: grid; place-items: center; padding: 20px; color: var(--text-muted); font-size: 11px; text-align: center; }
 
 .runtime-strip { min-height: 34px; display: flex; align-items: center; gap: 24px; padding: 0 22px; overflow: hidden; }
@@ -673,7 +751,7 @@ onUnmounted(() => {
   .panel-heading { padding-inline: 13px; }
   .line-chart { grid-template-columns: 22px minmax(0,1fr); }
   .chart-summary span { padding-inline: 12px; }
-  .job-row { grid-template-columns: 32px minmax(0,1fr); }
+  .job-row { grid-template-columns: 40px minmax(0,1fr); }
   .job-row time { grid-column: 2; }
 }
 

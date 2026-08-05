@@ -2180,8 +2180,10 @@ async def system_status(user=Depends(_auth)):
                 "plugin": plugin_label,
                 "trigger": str(getattr(j, "trigger", "")),
                 "next": nxt.strftime("%m-%d %H:%M:%S") if nxt else None,
+                "next_run_at": nxt.isoformat() if nxt else None,
                 "running": _scheduler_job_running(active_scheduler, j),
             })
+        sched_jobs.sort(key=lambda job: (job["next_run_at"] is None, job["next_run_at"] or ""))
     except Exception:  # noqa: BLE001
         pass
 
