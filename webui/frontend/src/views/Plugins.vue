@@ -1196,14 +1196,14 @@ onUnmounted(() => {
 
               <p class="desc">{{ p.description || '（无描述）' }}</p>
               <div class="card-meta">
+                <span v-if="p.author" class="meta-item">{{ p.author }}</span>
+                <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
+                <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
                 <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                       :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
                   <Flame aria-hidden="true" />
                   <span>{{ formatInstallCount(p.install_count) }}</span>
                 </span>
-                <span v-if="p.author" class="meta-item">{{ p.author }}</span>
-                <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
-                <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
               </div>
 
               <div class="card-actions">
@@ -1241,14 +1241,14 @@ onUnmounted(() => {
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
           <div class="card-meta">
+            <span v-if="p.author" class="meta-item">{{ p.author }}</span>
+            <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
+            <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
               <span>{{ formatInstallCount(p.install_count) }}</span>
             </span>
-            <span v-if="p.author" class="meta-item">{{ p.author }}</span>
-            <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
-            <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
           </div>
 
           <div class="card-actions">
@@ -1680,6 +1680,7 @@ onUnmounted(() => {
 .kebab-wrap { margin-left: auto; position: relative; }
 .plugin-card.clickable .heat-count { margin-left: auto; }
 .plugin-card.clickable .kebab-wrap { margin-left: 0; }
+.store-card .heat-count { margin-left: auto; }
 .kebab {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; padding: 0;
