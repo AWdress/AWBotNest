@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
+import { Download } from '@lucide/vue'
 import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import RemotePluginConfig from '../components/RemotePluginConfig.vue'
@@ -559,11 +560,18 @@ const stats = computed(() => ({
 }))
 
 const pluginFilter = ref('all')
+const installCount = (plugin) => Math.max(0, Number(plugin?.install_count) || 0)
+const installCountFormatter = new Intl.NumberFormat('zh-CN')
+const formatInstallCount = (value) => installCountFormatter.format(Math.max(0, Number(value) || 0))
+const sortByHeat = (a, b) => installCount(b) - installCount(a)
+  || (a.name || a.id).localeCompare(b.name || b.id, 'zh-CN')
+
 const filteredPlugins = computed(() => {
-  if (pluginFilter.value === 'enabled') return plugins.value.filter((p) => p.enabled && !p.error)
-  if (pluginFilter.value === 'disabled') return plugins.value.filter((p) => !p.enabled && !p.error)
-  if (pluginFilter.value === 'error') return plugins.value.filter((p) => p.error)
-  return plugins.value
+  let filtered = plugins.value
+  if (pluginFilter.value === 'enabled') filtered = filtered.filter((p) => p.enabled && !p.error)
+  if (pluginFilter.value === 'disabled') filtered = filtered.filter((p) => !p.enabled && !p.error)
+  if (pluginFilter.value === 'error') filtered = filtered.filter((p) => p.error)
+  return [...filtered].sort(sortByHeat)
 })
 
 // ── 插件市场（多仓库聚合） ──
@@ -597,8 +605,9 @@ function applyStoreFilters(list) {
     filtered.sort((a, b) => (a.repo || '').localeCompare(b.repo || '', 'zh-CN'))
   } else if (filterSort.value === 'latest') {
     filtered.sort((a, b) => (b.id || '').localeCompare(a.id || ''))
+  } else {
+    filtered.sort(sortByHeat)
   }
-  // hot 排序保持原顺序（已在后端或初始列表中排序）
 
   return filtered
 }
@@ -649,6 +658,7 @@ const searchablePlugins = computed(() => {
       enabled: !!local?.enabled,
       error: local?.error || '',
       installed,
+      install_count: installCount(market || local),
       updateAvailable: !!market && hasUpdate(market),
       official: isOfficial(market || local || { id }),
       repo: shortRepo(market?.repo_url || ''),
@@ -676,10 +686,11 @@ const searchResults = computed(() => {
 
   // 应用排序
   if (searchSort.value === 'hot') {
-    // 热门排序：可更新 > 已安装 > 未安装，同级别按名称
     results.sort((a, b) => {
       const rank = (p) => p.updateAvailable ? 0 : p.installed ? 1 : 2
-      return rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN')
+      return installCount(b) - installCount(a)
+        || rank(a) - rank(b)
+        || a.name.localeCompare(b.name, 'zh-CN')
     })
   } else if (searchSort.value === 'name') {
     results.sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'))
@@ -868,6 +879,7 @@ async function download(p) {
     } else {
       p.installed = true
       p.local_version = p.version   // 记录新版本，清除「有更新」提示
+      p.install_count = res.install_counts?.[p.id] ?? p.install_count ?? 0
       await load()
       const reloaded = (res.reloaded || []).includes(p.id)
       const reloadError = (res.reload_errors || []).find(item => item.startsWith(`${p.id}:`))
@@ -1114,6 +1126,11 @@ onUnmounted(() => {
           <div v-if="p.error" class="err-msg">{{ p.error }}</div>
 
           <div class="card-meta">
+            <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
+                  :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
+              <Download aria-hidden="true" />
+              <span>{{ formatInstallCount(p.install_count) }}</span>
+            </span>
             <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item">v{{ p.version }}</span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
@@ -1179,6 +1196,11 @@ onUnmounted(() => {
 
               <p class="desc">{{ p.description || '（无描述）' }}</p>
               <div class="card-meta">
+                <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
+                      :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
+                  <Download aria-hidden="true" />
+                  <span>{{ formatInstallCount(p.install_count) }}</span>
+                </span>
                 <span v-if="p.author" class="meta-item">{{ p.author }}</span>
                 <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
                 <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
@@ -1219,6 +1241,11 @@ onUnmounted(() => {
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
           <div class="card-meta">
+            <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
+                  :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
+              <Download aria-hidden="true" />
+              <span>{{ formatInstallCount(p.install_count) }}</span>
+            </span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
             <span v-if="p.scope" class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item mono">{{ shortRepo(p.repo_url) }}</span>
@@ -1309,6 +1336,11 @@ onUnmounted(() => {
               </div>
               <div class="search-desc">{{ p.description || '暂无说明' }}</div>
               <div class="search-meta">
+                <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
+                      :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
+                  <Download aria-hidden="true" />
+                  <span>{{ formatInstallCount(p.install_count) }}</span>
+                </span>
                 <span class="mono">{{ p.id }}</span>
                 <span v-if="p.author">{{ p.author }}</span>
                 <span v-if="p.repo">{{ p.repo }}</span>
@@ -1798,6 +1830,12 @@ onUnmounted(() => {
   font-size: 11px; color: var(--text-muted);
   background: var(--bg-elevated); padding: 2px 8px; border-radius: 4px;
 }
+.download-count {
+  display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto;
+  color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.download-count svg { width: 13px; height: 13px; stroke-width: 2.2; }
 
 .card-actions { display: flex; gap: 8px; margin-top: 4px; }
 .btn.sm {
@@ -2019,8 +2057,10 @@ onUnmounted(() => {
   margin-top: 3px; color: var(--text-secondary); font-size: 12px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.search-meta { display: flex; gap: 8px; margin-top: 4px; color: var(--text-muted); font-size: 10px; }
+.search-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; color: var(--text-muted); font-size: 10px; }
 .search-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.search-meta .download-count { font-size: 10px; overflow: visible; }
+.search-meta .download-count svg { width: 12px; height: 12px; }
 .search-action {
   min-width: 62px; padding: 7px 11px; border: 1px solid var(--border-light); border-radius: 8px;
   color: var(--text-secondary); background: var(--bg-elevated); font-size: 12px; cursor: pointer;

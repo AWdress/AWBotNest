@@ -11,7 +11,9 @@ webui/repo_sync.py
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -30,23 +32,144 @@ JOB_ID = "插件仓库轮询"
 
 # 官方插件仓库：始终内置在商店里，其插件打「官方」标签
 OFFICIAL_REPO = "AWdress/AWBotNest-Plugins"
+# 所有 AWBotNest 实例统一使用的插件热度中心。
+PLUGIN_HEAT_SERVER_URL = "http://115.231.35.106:18002"
+_MAX_SAFE_COUNT = 9_007_199_254_740_991
+_APP_VERSION_PATH = Path(__file__).parent.parent / "VERSION"
+_APP_VERSION = _APP_VERSION_PATH.read_text(encoding="utf-8").strip() if _APP_VERSION_PATH.exists() else ""
+_HEAT_SYNC_LOCK = asyncio.Lock()
 
 
 # ──────────────────────────────────────────────
 # 状态持久化
 # ──────────────────────────────────────────────
+def _clean_counts(value: Any) -> dict[str, int]:
+    return {
+        plugin_id: count
+        for plugin_id, count in (value.items() if isinstance(value, dict) else [])
+        if isinstance(plugin_id, str)
+        and plugin_id
+        and isinstance(count, int)
+        and not isinstance(count, bool)
+        and count >= 0
+        and count <= _MAX_SAFE_COUNT
+    }
+
+
 def _load_state() -> dict[str, Any]:
+    state: dict[str, Any] = {}
     if STATE_PATH.exists():
         try:
-            return json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            loaded = json.loads(STATE_PATH.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                state = loaded
         except (json.JSONDecodeError, OSError):
             pass
-    return {"last_sync": None, "store": [], "versions": {}}
+
+    state.setdefault("last_sync", None)
+    state.setdefault("store", [])
+    state.setdefault("versions", {})
+    state["installs"] = _clean_counts(state.get("installs"))
+    state["global_installs"] = _clean_counts(state.get("global_installs"))
+    try:
+        state["installation_id"] = str(uuid.UUID(str(state.get("installation_id") or "")))
+    except (ValueError, AttributeError, TypeError):
+        state["installation_id"] = str(uuid.uuid4())
+    from webui.plugin_heat import HeatEventError, validate_event
+
+    pending_events = []
+    for event in state.get("pending_heat_events") or []:
+        try:
+            pending_events.append(validate_event(event))
+        except HeatEventError:
+            continue
+    state["pending_heat_events"] = pending_events[-2000:]
+    state.setdefault("heat_last_sync", None)
+    return state
 
 
 def _save_state(state: dict[str, Any]) -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_install_counts() -> dict[str, int]:
+    """配置中心后返回中心下发数据；未配置时回退到当前实例的本地次数。"""
+    state = _load_state()
+    if not _heat_server_url():
+        return dict(state.get("installs") or {})
+    return dict(state.get("global_installs") or {})
+
+
+def _heat_server_url() -> str:
+    from webui.plugin_heat import normalize_server_url
+
+    try:
+        return normalize_server_url(PLUGIN_HEAT_SERVER_URL)
+    except ValueError as exc:
+        logger.warning("全局插件热度服务器地址无效: %s", exc)
+        return ""
+
+
+async def sync_plugin_heat() -> dict[str, Any]:
+    """补报本地事件并拉取全局计数。失败不影响插件市场和安装流程。"""
+    async with _HEAT_SYNC_LOCK:
+        state = _load_state()
+        server_url = _heat_server_url()
+        if not server_url or httpx is None:
+            return {"ok": False, "configured": bool(server_url), "state": state}
+
+        changed = False
+        error = ""
+        if state.get("heat_server_url") != server_url:
+            state["heat_server_url"] = server_url
+            state["global_installs"] = {}
+            state["heat_last_sync"] = None
+            changed = True
+        pending = list(state.get("pending_heat_events") or [])
+        try:
+            timeout = httpx.Timeout(4, connect=2)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+                if pending:
+                    batch = pending[:100]
+                    batch_ids = {event.get("event_id") for event in batch}
+                    response = await client.post(
+                        f"{server_url}/api/plugin-heat/events",
+                        json={"events": batch},
+                    )
+                    response.raise_for_status()
+                    report_data = response.json() or {}
+                    acknowledged = set(report_data.get("acknowledged") or []) & batch_ids
+                    if acknowledged:
+                        state["pending_heat_events"] = [
+                            event for event in pending
+                            if event.get("event_id") not in acknowledged
+                        ]
+                        changed = True
+                    reported_counts = _clean_counts(report_data.get("counts"))
+                    if reported_counts:
+                        current_global = state.get("global_installs") or {}
+                        state["global_installs"] = {**current_global, **reported_counts}
+                        changed = True
+
+                response = await client.get(f"{server_url}/api/plugin-heat/counts")
+                response.raise_for_status()
+                if int(response.headers.get("content-length") or 0) > 1024 * 1024:
+                    raise ValueError("全局插件热度响应过大")
+                raw_counts = (response.json() or {}).get("counts")
+                if not isinstance(raw_counts, dict) or len(raw_counts) > 10_000:
+                    raise ValueError("全局插件热度响应格式无效")
+                fetched_counts = _clean_counts(raw_counts)
+                state["global_installs"] = fetched_counts
+                state["heat_last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                changed = True
+        except Exception as exc:  # noqa: BLE001
+            error = str(exc)
+            logger.warning("同步全局插件热度失败，事件将在下次重试: %s", exc)
+        finally:
+            if changed:
+                _save_state(state)
+        return {"ok": not error, "configured": True, "error": error, "state": state}
 
 
 # ──────────────────────────────────────────────
@@ -140,18 +263,23 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
     refresh=True 实时拉取并刷新缓存；refresh=False 直接返回缓存。
     返回 {ok, repos:int, plugins:[...], errors:[...], last_sync}。
     """
+    if refresh:
+        await sync_plugin_heat()
     state = _load_state()
     versions: dict[str, str] = state.get("versions") or {}
+    installs = get_install_counts()
     if not refresh:
         plugins = state.get("store") or []
         for p in plugins:
             p["installed"] = _local_exists(p["id"])
+            p["install_count"] = installs.get(p["id"], 0)
             # local_version = 平台记录的「已下载版本」，供前端判断是否有更新。
             # 只有从商店下载过的插件才有记录；本地上传/手动导入的没有，前端据此不提示更新。
             p["local_version"] = versions.get(p["id"])
         return {"ok": True, "cached": True, "plugins": plugins,
                 "official_ids": state.get("official_ids") or [],
-                "errors": [], "last_sync": state.get("last_sync")}
+                "errors": [], "last_sync": state.get("last_sync"),
+                "heat_last_sync": state.get("heat_last_sync")}
 
     repos = _get_repos()
     aggregated: list[dict[str, Any]] = []
@@ -176,6 +304,7 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
             p["official"] = bool(repo.get("official"))
             p["installed"] = _local_exists(pid)
             p["local_version"] = versions.get(pid)
+            p["install_count"] = installs.get(pid, 0)
             if p["official"]:
                 official_ids.append(pid)
             aggregated.append(p)
@@ -185,7 +314,8 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
     state["last_sync"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _save_state(state)
     return {"ok": True, "cached": False, "plugins": aggregated, "official_ids": official_ids,
-            "errors": errors, "last_sync": state["last_sync"]}
+            "errors": errors, "last_sync": state["last_sync"],
+            "heat_last_sync": state.get("heat_last_sync")}
 
 
 def get_store_status() -> dict[str, Any]:
@@ -197,6 +327,9 @@ def get_store_status() -> dict[str, Any]:
         "store_count": len(store),
         "repos": len(_get_repos()),          # 含官方仓库
         "user_repos": len(_user_repos()),    # 用户自配仓库数
+        "heat_server_configured": bool(_heat_server_url()),
+        "heat_last_sync": state.get("heat_last_sync"),
+        "heat_pending": len(state.get("pending_heat_events") or []),
     }
 
 
@@ -208,9 +341,14 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     下载指定插件到 plugins/（不启用）。plugins 为商店列表里的插件对象（含 owner/repo/path 等）。
     返回 {ok, downloaded:[], errors:[]}。
     """
-    result: dict[str, Any] = {"ok": False, "downloaded": [], "errors": []}
+    result: dict[str, Any] = {
+        "ok": False,
+        "downloaded": [],
+        "errors": [],
+        "install_counts": {},
+    }
     state = _load_state()
-    versions: dict[str, str] = state.get("versions") or {}
+    successful_events: list[dict[str, str]] = []
     repos = {r["url"] for r in _get_repos()}
 
     for plugin in plugins:
@@ -221,6 +359,7 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
         if plugin.get("repo_url") not in repos:
             result["errors"].append(f"{pid}: 插件来源仓库未配置")
             continue
+        was_installed = _local_exists(pid)
         try:
             files = await github_import.resolve_files(plugin)
             if not files:
@@ -242,13 +381,44 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
         ver = str(plugin.get("version") or "")
         if ver:
             versions[pid] = ver
+        successful_events.append({
+            "event_id": str(uuid.uuid4()),
+            "plugin_id": pid,
+            "event_type": "update" if was_installed else "install",
+            "version": ver,
+            "app_version": _APP_VERSION,
+        })
         result["downloaded"].append(pid)
         from kernel.registry import registry as _reg
         logger.info("插件商店下载：%s（%d 文件，来自 %s）",
                     _reg.display_name(pid), len(files), plugin.get("repo_url"))
 
+    # 重新读取状态，避免下载期间的定时同步覆盖或丢失待上报事件。
+    state = _load_state()
+    versions = state.get("versions") or {}
+    installs = state.get("installs") or {}
+    installation_id = state["installation_id"]
+    pending_events = list(state.get("pending_heat_events") or [])
+    for event in successful_events:
+        pid = event["plugin_id"]
+        ver = event["version"]
+        if ver:
+            versions[pid] = ver
+        installs[pid] = installs.get(pid, 0) + 1
+        event["installation_id"] = installation_id
+        pending_events.append(event)
+    state["pending_heat_events"] = pending_events[-2000:]
     state["versions"] = versions
+    state["installs"] = installs
+    for cached_plugin in state.get("store") or []:
+        cached_plugin["install_count"] = installs.get(cached_plugin.get("id"), 0)
     _save_state(state)
+    heat_sync = await sync_plugin_heat()
+    merged_counts = get_install_counts()
+    for pid in result["downloaded"]:
+        result["install_counts"][pid] = merged_counts.get(pid, installs.get(pid, 0))
+    result["heat_reported"] = bool(heat_sync.get("ok"))
+    result["heat_pending"] = len((heat_sync.get("state") or {}).get("pending_heat_events") or [])
     _refresh_registry()
     # 自动重载「更新成功且当前正在运行」的插件，让新代码立即生效。
     # 未加载的插件只更新文件、不启用（保持 §7.5：启用=执行远程代码须手动）。

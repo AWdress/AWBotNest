@@ -553,7 +553,10 @@ async def root_static(filename: str):
 @app.get("/api/plugins")
 async def list_plugins(user=Depends(_auth)):
     """列出所有插件及其状态"""
+    from webui import repo_sync
+
     runtime = _get_runtime()
+    install_counts = repo_sync.get_install_counts()
     metas = registry.scan()
     out = []
     for m in metas:
@@ -561,6 +564,7 @@ async def list_plugins(user=Depends(_auth)):
         d = m.to_dict()
         # vue 模式：附带前端构建产物是否就绪，供前端决定「加载组件」还是「提示未构建」
         d["has_frontend"] = registry.has_frontend(m.id) if m.render_mode == "vue" else False
+        d["install_count"] = install_counts.get(m.id, 0)
         out.append(d)
     return {"plugins": out}
 
