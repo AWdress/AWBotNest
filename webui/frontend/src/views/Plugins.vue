@@ -1126,14 +1126,14 @@ onUnmounted(() => {
           <div v-if="p.error" class="err-msg">{{ p.error }}</div>
 
           <div class="card-meta">
+            <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
+            <span class="meta-item">v{{ p.version }}</span>
+            <span v-if="p.author" class="meta-item">{{ p.author }}</span>
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
               <span>{{ formatInstallCount(p.install_count) }}</span>
             </span>
-            <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
-            <span class="meta-item">v{{ p.version }}</span>
-            <span v-if="p.author" class="meta-item">{{ p.author }}</span>
             <div class="kebab-wrap">
               <button class="kebab" :class="{ active: menuFor === p.id }" @click.stop="toggleMenu(p, $event)"
                       title="更多" aria-label="更多">
@@ -1678,6 +1678,8 @@ onUnmounted(() => {
 }
 
 .kebab-wrap { margin-left: auto; position: relative; }
+.plugin-card.clickable .heat-count { margin-left: auto; }
+.plugin-card.clickable .kebab-wrap { margin-left: 0; }
 .kebab {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; padding: 0;
