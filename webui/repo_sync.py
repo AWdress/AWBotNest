@@ -93,6 +93,65 @@ def _save_state(state: dict[str, Any]) -> None:
     STATE_PATH.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def seed_installed_plugin_heat() -> list[str]:
+    """首次启用全局热度时，把本机已有插件各计为一次安装。"""
+    state = _load_state()
+    if state.get("heat_inventory_seeded") is True:
+        return []
+
+    try:
+        from kernel.registry import registry
+
+        installed = registry.scan()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("扫描本地插件以初始化安装热度失败，将在下次重试: %s", exc)
+        return []
+
+    from webui.plugin_heat import HeatEventError, validate_event
+
+    installs = state.get("installs") or {}
+    pending_events = list(state.get("pending_heat_events") or [])
+    pending_plugin_ids = {
+        event.get("plugin_id") for event in pending_events
+        if event.get("event_type") in {"install", "update"}
+    }
+    installation_id = state["installation_id"]
+    seeded: list[str] = []
+
+    for meta in installed:
+        plugin_id = str(getattr(meta, "id", "") or "").strip()
+        if not plugin_id or installs.get(plugin_id, 0) > 0:
+            continue
+        installs[plugin_id] = 1
+        seeded.append(plugin_id)
+        if plugin_id in pending_plugin_ids:
+            continue
+        try:
+            event = validate_event({
+                "event_id": str(uuid.uuid4()),
+                "installation_id": installation_id,
+                "plugin_id": plugin_id,
+                "event_type": "install",
+                "version": str(getattr(meta, "version", "") or ""),
+                "app_version": _APP_VERSION,
+            })
+        except HeatEventError as exc:
+            logger.warning("插件 [%s] 无法初始化安装热度: %s", plugin_id, exc)
+            installs.pop(plugin_id, None)
+            seeded.pop()
+            continue
+        pending_events.append(event)
+        pending_plugin_ids.add(plugin_id)
+
+    state["installs"] = installs
+    state["pending_heat_events"] = pending_events[-2000:]
+    state["heat_inventory_seeded"] = True
+    _save_state(state)
+    if seeded:
+        logger.info("已将本机现有插件计入全局安装热度: %d 个", len(seeded))
+    return seeded
+
+
 def get_install_counts() -> dict[str, int]:
     """配置中心后返回中心下发数据；未配置时回退到当前实例的本地次数。"""
     state = _load_state()
@@ -263,7 +322,8 @@ async def list_store(refresh: bool = True) -> dict[str, Any]:
     refresh=True 实时拉取并刷新缓存；refresh=False 直接返回缓存。
     返回 {ok, repos:int, plugins:[...], errors:[...], last_sync}。
     """
-    if refresh:
+    seeded = seed_installed_plugin_heat()
+    if refresh or seeded:
         await sync_plugin_heat()
     state = _load_state()
     versions: dict[str, str] = state.get("versions") or {}
@@ -379,8 +439,6 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
             result["errors"].append(f"{pid}: {e}")
             continue
         ver = str(plugin.get("version") or "")
-        if ver:
-            versions[pid] = ver
         successful_events.append({
             "event_id": str(uuid.uuid4()),
             "plugin_id": pid,

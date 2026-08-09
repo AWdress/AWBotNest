@@ -556,6 +556,8 @@ async def list_plugins(user=Depends(_auth)):
     from webui import repo_sync
 
     runtime = _get_runtime()
+    if repo_sync.seed_installed_plugin_heat():
+        await repo_sync.sync_plugin_heat()
     install_counts = repo_sync.get_install_counts()
     metas = registry.scan()
     out = []

@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import { Download } from '@lucide/vue'
+import { Flame } from '@lucide/vue'
 import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import RemotePluginConfig from '../components/RemotePluginConfig.vue'
@@ -1126,9 +1126,9 @@ onUnmounted(() => {
           <div v-if="p.error" class="err-msg">{{ p.error }}</div>
 
           <div class="card-meta">
-            <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
-                  :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
-              <Download aria-hidden="true" />
+            <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
+                  :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
+              <Flame aria-hidden="true" />
               <span>{{ formatInstallCount(p.install_count) }}</span>
             </span>
             <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
@@ -1196,9 +1196,9 @@ onUnmounted(() => {
 
               <p class="desc">{{ p.description || '（无描述）' }}</p>
               <div class="card-meta">
-                <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
-                      :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
-                  <Download aria-hidden="true" />
+                <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
+                      :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
+                  <Flame aria-hidden="true" />
                   <span>{{ formatInstallCount(p.install_count) }}</span>
                 </span>
                 <span v-if="p.author" class="meta-item">{{ p.author }}</span>
@@ -1241,9 +1241,9 @@ onUnmounted(() => {
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
           <div class="card-meta">
-            <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
-                  :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
-              <Download aria-hidden="true" />
+            <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
+                  :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
+              <Flame aria-hidden="true" />
               <span>{{ formatInstallCount(p.install_count) }}</span>
             </span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
@@ -1336,9 +1336,9 @@ onUnmounted(() => {
               </div>
               <div class="search-desc">{{ p.description || '暂无说明' }}</div>
               <div class="search-meta">
-                <span class="download-count" :title="`${formatInstallCount(p.install_count)} 次下载`"
-                      :aria-label="`${formatInstallCount(p.install_count)} 次下载`">
-                  <Download aria-hidden="true" />
+                <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
+                      :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
+                  <Flame aria-hidden="true" />
                   <span>{{ formatInstallCount(p.install_count) }}</span>
                 </span>
                 <span class="mono">{{ p.id }}</span>
@@ -1830,12 +1830,12 @@ onUnmounted(() => {
   font-size: 11px; color: var(--text-muted);
   background: var(--bg-elevated); padding: 2px 8px; border-radius: 4px;
 }
-.download-count {
+.heat-count {
   display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto;
   color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.download-count svg { width: 13px; height: 13px; stroke-width: 2.2; }
+.heat-count svg { width: 13px; height: 13px; color: var(--warning); stroke-width: 2.2; }
 
 .card-actions { display: flex; gap: 8px; margin-top: 4px; }
 .btn.sm {
@@ -2059,8 +2059,8 @@ onUnmounted(() => {
 }
 .search-meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; color: var(--text-muted); font-size: 10px; }
 .search-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.search-meta .download-count { font-size: 10px; overflow: visible; }
-.search-meta .download-count svg { width: 12px; height: 12px; }
+.search-meta .heat-count { font-size: 10px; overflow: visible; }
+.search-meta .heat-count svg { width: 12px; height: 12px; }
 .search-action {
   min-width: 62px; padding: 7px 11px; border: 1px solid var(--border-light); border-radius: 8px;
   color: var(--text-secondary); background: var(--bg-elevated); font-size: 12px; cursor: pointer;
