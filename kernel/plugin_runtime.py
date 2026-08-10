@@ -15,6 +15,7 @@ kernel/plugin_runtime.py
 from __future__ import annotations
 
 import asyncio
+import importlib
 import importlib.util
 import sys
 from pathlib import Path
@@ -280,9 +281,9 @@ class PluginRuntime:
 
         mod_name = f"{_MODULE_PREFIX}{plugin_id}"
         # 移除旧模块缓存（含子模块），保证重载拿到新代码
-        for name in list(sys.modules):
-            if name == mod_name or name.startswith(mod_name + "."):
-                sys.modules.pop(name, None)
+        self._cleanup_module(plugin_id)
+        self._purge_bytecode(plugin_id, single, pkg_init)
+        importlib.invalidate_caches()
 
         if single.exists():
             spec = importlib.util.spec_from_file_location(mod_name, single)
@@ -304,7 +305,30 @@ class PluginRuntime:
 
     def _cleanup_module(self, plugin_id: str) -> None:
         """从 sys.modules 移除插件模块（含文件夹形态的子模块）"""
-        mod_name = f"{_MODULE_PREFIX}{plugin_id}"
+        prefixes = (f"{_MODULE_PREFIX}{plugin_id}", f"plugins.{plugin_id}")
         for name in list(sys.modules):
-            if name == mod_name or name.startswith(mod_name + "."):
+            if any(name == prefix or name.startswith(prefix + ".") for prefix in prefixes):
                 sys.modules.pop(name, None)
+
+    @staticmethod
+    def _purge_bytecode(plugin_id: str, single: Path, pkg_init: Path) -> None:
+        """删除当前插件的字节码缓存，避免快速修改后重载仍执行旧代码。
+
+        Python 的时间戳型 pyc 只记录秒级修改时间和源码大小；同一秒内把源码
+        改成相同大小时，即使模块已从 sys.modules 移除，也可能命中旧 pyc。
+        文件夹插件还需要一并清理辅助模块缓存。
+        """
+        candidates: list[Path] = []
+        if single.exists():
+            cache_dir = single.parent / "__pycache__"
+            if cache_dir.is_dir():
+                candidates.extend(cache_dir.glob(f"{plugin_id}.*.pyc"))
+            candidates.append(single.with_suffix(".pyc"))
+        elif pkg_init.exists():
+            candidates.extend(pkg_init.parent.rglob("*.pyc"))
+
+        for cache_file in candidates:
+            try:
+                cache_file.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("清理插件字节码缓存失败 [%s]: %s", plugin_id, exc)

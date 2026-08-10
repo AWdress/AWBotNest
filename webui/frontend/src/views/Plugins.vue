@@ -1578,7 +1578,13 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.plugins { position: relative; min-height: 100%; }
+.plugins {
+  position: relative;
+  width: 100%;
+  max-width: 1720px;
+  min-height: 100%;
+  margin-inline: auto;
+}
 
 .toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; gap: 16px; }
 .plugin-controls {
@@ -1652,11 +1658,13 @@ onUnmounted(() => {
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 380px));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr));
   gap: 18px;
+  align-items: stretch;
 }
 .plugin-card {
-  min-height: 180px; display: flex; flex-direction: column; gap: 14px;
+  width: 100%; min-width: 0; min-height: 180px;
+  display: flex; flex-direction: column; gap: 14px;
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
 .plugin-card:hover {

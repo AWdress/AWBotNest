@@ -24,7 +24,11 @@ const logTime = (item) => item.date ? `${item.date.slice(5)} ${item.time}` : ite
 
 const filtered = computed(() => {
   return logs.value.filter((l) => {
-    if (levelFilter.value !== 'ALL' && l.level !== levelFilter.value) return false
+    if (levelFilter.value === 'ERROR') {
+      if (!['ERROR', 'CRITICAL'].includes(l.level)) return false
+    } else if (levelFilter.value !== 'ALL' && l.level !== levelFilter.value) {
+      return false
+    }
     if (search.value && !(`${l.source} ${l.msg}`.toLowerCase().includes(search.value.toLowerCase()))) return false
     return true
   })

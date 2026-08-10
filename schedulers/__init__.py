@@ -1,4 +1,5 @@
 # 第三方库
+from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # 自定义模块
@@ -6,7 +7,33 @@ from core import logger
 from libs.state import state_manager
 
 
-scheduler = AsyncIOScheduler()
+# 容器启动、插件重载或事件循环短暂繁忙时，任务可能比计划晚几秒。
+# APScheduler 默认只容忍 1 秒，容易把本应执行的任务直接跳过。
+JOB_MISFIRE_GRACE_SECONDS = 300
+
+
+scheduler = AsyncIOScheduler(
+    timezone="Asia/Shanghai",
+    job_defaults={
+        "misfire_grace_time": JOB_MISFIRE_GRACE_SECONDS,
+        "coalesce": True,
+        "max_instances": 1,
+    },
+)
+
+
+def _log_job_event(event) -> None:
+    """把调度失败写入平台日志，避免任务静默失效。"""
+    job_id = str(getattr(event, "job_id", "") or "未知任务")
+    scheduled_time = getattr(event, "scheduled_run_time", None)
+    if event.code == EVENT_JOB_MISSED:
+        logger.warning("定时任务错过执行时间 [%s]：%s", job_id, scheduled_time)
+    elif event.code == EVENT_JOB_ERROR:
+        error = getattr(event, "exception", None)
+        logger.error("定时任务执行失败 [%s]：%r", job_id, error)
+
+
+scheduler.add_listener(_log_job_event, EVENT_JOB_MISSED | EVENT_JOB_ERROR)
 
 
 from .universal.log_cleaner import start_log_cleaner

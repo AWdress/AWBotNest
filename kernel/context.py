@@ -645,9 +645,13 @@ class PlatformContext:
         job id 自动加上 "<插件id>::" 前缀，状态页据此归属到本插件并展示。
         可传 id=... 自定义后半段；不传则用函数名。冲突时自动追加 #n。
         """
-        from schedulers import scheduler
+        from datetime import datetime, timedelta
+
+        from apscheduler.triggers.cron import CronTrigger
+        from schedulers import JOB_MISFIRE_GRACE_SECONDS, scheduler
 
         raw_id = str(trigger_args.pop("id", None) or getattr(func, "__name__", "job"))
+        has_explicit_next_run = "next_run_time" in trigger_args
         job_id = f"{self.plugin_id}::{raw_id}"
         if scheduler.get_job(job_id):
             n = 1
@@ -657,6 +661,17 @@ class PlatformContext:
 
         job = scheduler.add_job(func, trigger, id=job_id, **trigger_args)
         self._cleanups.append(lambda jid=job_id: self._safe_remove_job(jid))
+        # 插件在启动或重载时重新注册 cron。如果刚好比计划时间晚几秒注册，
+        # APScheduler 会直接排到下一个周期；在容忍窗口内补跑刚错过的一次。
+        if isinstance(job.trigger, CronTrigger) and not has_explicit_next_run:
+            now = datetime.now(scheduler.timezone)
+            window_start = now - timedelta(seconds=JOB_MISFIRE_GRACE_SECONDS)
+            missed_run = job.trigger.get_next_fire_time(None, window_start)
+            if missed_run is not None and missed_run <= now:
+                job = scheduler.modify_job(job_id, next_run_time=now)
+        # 动态重载插件时确保 AsyncIOScheduler 立即重新计算最近执行时间。
+        if scheduler.running:
+            scheduler.wakeup()
         return job
 
     @staticmethod

@@ -25,6 +25,7 @@ const expandedNotice = ref('')
 const notificationAction = ref('')
 const logs = ref([])
 const logLevel = ref('ALL')
+const logLevels = ['ALL', 'DEBUG', 'INFO', 'WARNING', 'ERROR']
 const logSearch = ref('')
 const logPaused = ref(false)
 const logConnected = ref(false)
@@ -55,7 +56,11 @@ const modalTitle = computed(() => ({
 }[modal.value] || ''))
 
 const filteredLogs = computed(() => logs.value.filter(item => {
-  if (logLevel.value !== 'ALL' && item.level !== logLevel.value) return false
+  if (logLevel.value === 'ERROR') {
+    if (!['ERROR', 'CRITICAL'].includes(item.level)) return false
+  } else if (logLevel.value !== 'ALL' && item.level !== logLevel.value) {
+    return false
+  }
   const term = logSearch.value.trim().toLowerCase()
   return !term || `${item.source || ''} ${item.msg || ''}`.toLowerCase().includes(term)
 }))
@@ -481,13 +486,15 @@ onUnmounted(() => {
         </button></header>
 
         <div v-if="modal === 'logs'" class="modal-body logs-modal" ref="quickLogsBox">
+          <div class="log-level-tabs" aria-label="日志级别筛选">
+            <button v-for="level in logLevels" :key="level" type="button"
+                    :class="{ active: logLevel === level, [`is-${level.toLowerCase()}`]: true }"
+                    @click="logLevel = level">{{ level }}</button>
+          </div>
           <div class="log-toolbar">
             <span class="live-state" :class="{ on: logConnected }">
               {{ logPaused ? '已暂停' : (logConnected ? '实时' : '连接中') }}
             </span>
-            <select v-model="logLevel" class="select">
-              <option v-for="level in ['ALL','INFO','WARNING','ERROR']" :key="level">{{ level }}</option>
-            </select>
             <input v-model="logSearch" class="input" placeholder="搜索日志内容">
             <button class="btn" :class="{ 'btn-primary': logPaused }" @click="toggleLogPause">{{ logPaused ? '继续' : '暂停' }}</button>
           </div>
@@ -707,8 +714,27 @@ onUnmounted(() => {
 .control-modal > header button:hover { background: var(--bg-hover); color: var(--text-primary); }
 .control-modal .modal-body { overflow-y: auto; padding: 18px 22px 22px; }
 .control-modal .logs-modal { overflow-anchor: none; }
+.log-level-tabs {
+  display: flex; align-items: center; width: fit-content;
+  margin-bottom: 12px; padding: 3px;
+  border: 1px solid var(--border); border-radius: 9px;
+  background: rgba(6,11,19,.62);
+}
+.log-level-tabs button {
+  min-height: 30px; padding: 0 13px;
+  border: 0; border-radius: 6px; background: transparent;
+  color: var(--text-muted); font: 700 10px/1 inherit; cursor: pointer;
+  transition: color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+.log-level-tabs button:hover { color: var(--text-primary); background: var(--bg-hover); }
+.log-level-tabs button.active {
+  color: var(--text-primary); background: var(--bg-elevated);
+  box-shadow: 0 3px 10px rgba(0,0,0,.2);
+}
+.log-level-tabs button.active.is-info { color: var(--accent); }
+.log-level-tabs button.active.is-warning { color: var(--warning); }
+.log-level-tabs button.active.is-error { color: var(--danger); }
 .log-toolbar { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
-.log-toolbar .select { width: 130px; }
 .log-toolbar .input { flex: 1; }
 .live-state { color: var(--text-muted); font-size: 12px; }
 .live-state.on { color: var(--success); }
@@ -811,8 +837,10 @@ onUnmounted(() => {
   .control-modal-mask { padding: 0; }
   .control-modal { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
   .control-modal .modal-body { padding: 14px; }
+  .log-level-tabs { width: 100%; overflow-x: auto; }
+  .log-level-tabs button { flex: 1 0 auto; }
   .log-toolbar { flex-wrap: wrap; }
-  .log-toolbar .input { min-width: 100%; order: 3; }
+  .log-toolbar .input { min-width: 0; }
   .quick-log-row { grid-template-columns: 1fr; gap: 3px; }
   .check-grid { grid-template-columns: 1fr; }
   .job-row { grid-template-columns: 1fr auto; }
