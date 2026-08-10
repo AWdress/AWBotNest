@@ -279,6 +279,10 @@ if ctx.cookies.available:
 
     # 转成 Playwright add_cookies() 可直接使用的格式
     browser_cookies = await ctx.cookies.playwright("www.example.com")
+
+# 平台没有该网站的 Cookie 时，提醒管理员在本地浏览器登录并同步
+if not await ctx.cookies.request_sync("www.example.com"):
+    return
 ```
 
 - `cookie_domains` 必须是列表，最多声明 64 项；支持精确域名和 `*.example.com` 通配形式。
@@ -286,6 +290,7 @@ if ctx.cookies.available:
 - `get(domain, path="/", names=None)` 可按路径和名称筛选，并自动排除过期或不匹配域名的 Cookie。
 - `header(...)` 返回标准 `Cookie` 请求头字符串；`playwright(...)` 返回浏览器 Cookie 列表。
 - 三个读取方法都是 `async`。平台未启用同步或浏览器尚未上传时，读取会抛出错误；调用前可先判断 `ctx.cookies.available`。
+- `request_sync(domain)` 会先检查该域名是否已有可用 Cookie：有则返回 `True`；没有则在通知中心提醒管理员同步并返回 `False`。同一插件和域名半小时内只提醒一次，插件可在下次定时执行时重新读取。
 - 管理员在「系统设置 → Cookie 同步」管理浏览器连接和数据，插件无需提供 CookieCloud 配置项。
 
 ### 平台 AI

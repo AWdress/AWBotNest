@@ -371,7 +371,7 @@ async def setup(ctx):
 | 多账号列表 | `ctx.user_apps`（所有已连接用户账号；未连接时发送代理抛 `RuntimeError`，可判 `ctx.bot/user.connected`） |
 | 通知管理员 | `await ctx.notify(text, level="info", category=None, account=client)`（提交给平台通知中心 → 平台分类+统一格式+标注账号 → Bot 发给管理员，回退主账号收藏夹） |
 | 平台 AI | `ctx.ai.chat/vision/generate_image`（平台统一保管密钥、选择主/备用模型、控制插件权限与并发） |
-| 平台 Cookie | `ctx.cookies.get/header/playwright`（只读，仅限插件在 `cookie_domains` 声明的域名） |
+| 平台 Cookie | `ctx.cookies.get/header/playwright/request_sync`（只读，仅限插件在 `cookie_domains` 声明的域名；缺少 Cookie 时可提醒管理员同步） |
 | 管理员 ID | `ctx.owner_id`（管理员 Telegram 数字 ID，无主账号为 0） |
 | 配置 | `ctx.config`（dict） |
 | 键值存储 | `ctx.kv.get/set/delete/keys`（每插件私有） |

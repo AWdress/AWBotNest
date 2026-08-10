@@ -227,7 +227,7 @@ class PlatformContext:
         self.log = _make_plugin_logger(plugin_id, registry)
         self.kv = _KVStore(kv_dir / f"{plugin_id}.sqlite")
         self.ai = PluginAI(plugin_id, data_root / plugin_id / "ai")
-        self.cookies = PluginCookies(plugin_id)
+        self.cookies = PluginCookies(plugin_id, self._notify_cookie_sync)
         # 主动中断消息传播的信号：handler 内 `raise ctx.StopPropagation` 可阻止
         # 后续（更大 group）的其它插件/handler 再处理这条消息。
         self.StopPropagation = StopPropagation
@@ -305,6 +305,17 @@ class PlatformContext:
             self._accounts, self.plugin_id, plugin_name, text,
             level=level, category=category, account=account, **kwargs,
         )
+
+    async def _notify_cookie_sync(self, domain: str) -> None:
+        text = (
+            f"插件需要 {domain} 的登录 Cookie。请先在本地浏览器登录该网站，"
+            "再使用 CookieCloud 扩展同步到平台。"
+        )
+        try:
+            await self.notify(text, level="warning", category="Cookie 同步")
+        except Exception as exc:  # noqa: BLE001
+            # 通知中心已经留有记录；没有可用外部渠道时不应让插件任务失败。
+            self.log.warning("Cookie 同步提醒未能发送到外部渠道：%s", exc)
 
     # ──────────────────────────────────────────────
     # 配置

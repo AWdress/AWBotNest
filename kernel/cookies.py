@@ -13,10 +13,11 @@ import re
 import secrets
 import tempfile
 import threading
+import time
 from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Awaitable, Callable, Iterable
 from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -37,6 +38,8 @@ _LOCK = threading.RLock()
 _CACHE_FINGERPRINT: tuple[int, int] | None = None
 _CACHE_DATA: dict[str, Any] | None = None
 _LAST_ERROR = ""
+_SYNC_REQUEST_COOLDOWN = 30 * 60
+_SYNC_REQUESTED_AT: dict[tuple[str, str], float] = {}
 
 
 class CookieServiceError(RuntimeError):
@@ -428,8 +431,13 @@ def _cookie_applies(
 class PluginCookies:
     """绑定插件身份的 Cookie 只读接口。"""
 
-    def __init__(self, plugin_id: str):
+    def __init__(
+        self,
+        plugin_id: str,
+        request_notifier: Callable[[str], Awaitable[None]] | None = None,
+    ):
         self.plugin_id = plugin_id
+        self._request_notifier = request_notifier
 
     @property
     def domains(self) -> list[str]:
@@ -447,11 +455,7 @@ class PluginCookies:
             return False
 
     def _authorize(self, domain: Any) -> str:
-        normalized = normalize_domain(domain)
-        if not normalized:
-            raise ValueError("Cookie 域名格式无效")
-        if not _domain_is_allowed(normalized, self.domains):
-            raise CookiePermissionError(f"插件未声明 Cookie 域名权限: {normalized}")
+        normalized = self._authorize_domain(domain)
         if not load_settings()["enabled"]:
             raise CookieServiceError("平台 Cookie 同步尚未启用")
         return normalized
@@ -518,3 +522,63 @@ class PluginCookies:
                 item.pop("sameSite", None)
             result.append(item)
         return result
+
+    async def request_sync(self, domain: str) -> bool:
+        """Cookie 不可用时提醒管理员同步；已有可用 Cookie 时返回 True。"""
+        requested = self._authorize_domain(domain)
+        try:
+            if self._has_cookie_for_domain(requested):
+                return True
+        except CookieServiceError:
+            pass
+
+        key = (self.plugin_id, requested)
+        now = time.monotonic()
+        with _LOCK:
+            last_requested = _SYNC_REQUESTED_AT.get(key, 0.0)
+            if now - last_requested < _SYNC_REQUEST_COOLDOWN:
+                return False
+            _SYNC_REQUESTED_AT[key] = now
+            if len(_SYNC_REQUESTED_AT) > 1024:
+                expired = [
+                    item for item, requested_at in _SYNC_REQUESTED_AT.items()
+                    if now - requested_at >= _SYNC_REQUEST_COOLDOWN
+                ]
+                for item in expired:
+                    _SYNC_REQUESTED_AT.pop(item, None)
+
+        if self._request_notifier is not None:
+            try:
+                await self._request_notifier(requested)
+            except Exception:
+                with _LOCK:
+                    _SYNC_REQUESTED_AT.pop(key, None)
+                raise
+        return False
+
+    def _has_cookie_for_domain(self, requested: str) -> bool:
+        if not load_settings()["enabled"]:
+            return False
+        data = _decoded_snapshot_ref()
+        now = datetime.now().timestamp()
+        for group_domain, items in (data.get("cookie_data") or {}).items():
+            if not isinstance(items, list):
+                continue
+            source_domain = normalize_domain(group_domain)
+            if not source_domain:
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                cookie_path = str(item.get("path") or "/")
+                if _cookie_applies(item, requested, cookie_path, now, source_domain):
+                    return True
+        return False
+
+    def _authorize_domain(self, domain: Any) -> str:
+        normalized = normalize_domain(domain)
+        if not normalized:
+            raise ValueError("Cookie 域名格式无效")
+        if not _domain_is_allowed(normalized, self.domains):
+            raise CookiePermissionError(f"插件未声明 Cookie 域名权限: {normalized}")
+        return normalized
