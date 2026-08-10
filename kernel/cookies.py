@@ -29,10 +29,12 @@ DATA_DIR = Path("data") / "cookiecloud"
 SETTINGS_FILE = DATA_DIR / "settings.bin"
 KEY_FILE = DATA_DIR / ".key"
 SNAPSHOT_FILE = DATA_DIR / "snapshot.json"
+HISTORY_FILE = DATA_DIR / "history.json"
 MASK = "********"
 ALLOWED_CRYPTO_TYPES = {"legacy", "aes-128-cbc-fixed"}
 MAX_ENCRYPTED_BYTES = 16 * 1024 * 1024
 MAX_COOKIE_DOMAINS = 64
+MAX_SYNC_HISTORY = 50
 
 _LOCK = threading.RLock()
 _CACHE_FINGERPRINT: tuple[int, int] | None = None
@@ -248,7 +250,14 @@ def save_snapshot(encrypted: str, crypto_type: str) -> dict[str, Any]:
         _invalidate_cache()
         _LAST_ERROR = ""
         _set_cache(decoded)
-    return snapshot_status(decoded)
+        status = snapshot_status(decoded)
+        _append_sync_history(
+            "success",
+            "浏览器 Cookie 已同步",
+            cookie_count=status["cookie_count"],
+            domain_count=status["domain_count"],
+        )
+    return status
 
 
 def load_snapshot() -> dict[str, Any]:
@@ -349,9 +358,70 @@ def snapshot_status(decoded: dict[str, Any] | None = None) -> dict[str, Any]:
     return status
 
 
+def sync_history(limit: int = 20) -> list[dict[str, Any]]:
+    """读取最近的同步结果，只保存统计信息，不记录 Cookie 内容。"""
+    safe_limit = max(1, min(int(limit or 20), MAX_SYNC_HISTORY))
+    with _LOCK:
+        if not HISTORY_FILE.exists():
+            return []
+        try:
+            history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        if not isinstance(history, list):
+            return []
+        result = []
+        for item in history[-safe_limit:]:
+            if not isinstance(item, dict):
+                continue
+            try:
+                cookie_count = max(0, int(item.get("cookie_count") or 0))
+                domain_count = max(0, int(item.get("domain_count") or 0))
+            except (TypeError, ValueError):
+                cookie_count = 0
+                domain_count = 0
+            result.append({
+                "time": str(item.get("time") or ""),
+                "status": "success" if item.get("status") == "success" else "error",
+                "message": str(item.get("message") or "")[:300],
+                "cookie_count": cookie_count,
+                "domain_count": domain_count,
+            })
+        result.reverse()
+        return result
+
+
+def _append_sync_history(
+    status: str,
+    message: str,
+    *,
+    cookie_count: int = 0,
+    domain_count: int = 0,
+) -> None:
+    entry = {
+        "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "status": "success" if status == "success" else "error",
+        "message": str(message or "")[:300],
+        "cookie_count": max(0, int(cookie_count or 0)),
+        "domain_count": max(0, int(domain_count or 0)),
+    }
+    with _LOCK:
+        history = list(reversed(sync_history(MAX_SYNC_HISTORY)))
+        history.append(entry)
+        try:
+            _atomic_write(
+                HISTORY_FILE,
+                json.dumps(history[-MAX_SYNC_HISTORY:], ensure_ascii=False).encode("utf-8"),
+            )
+        except OSError:
+            # 同步记录是辅助信息，写入失败不能让已经成功的 Cookie 上传失败。
+            return
+
+
 def record_error(message: str) -> None:
     global _LAST_ERROR
     _LAST_ERROR = str(message or "")[:300]
+    _append_sync_history("error", _LAST_ERROR or "浏览器 Cookie 同步失败")
 
 
 def normalize_domain(value: Any, allow_wildcard: bool = False) -> str:

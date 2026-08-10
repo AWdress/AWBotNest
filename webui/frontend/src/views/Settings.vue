@@ -50,6 +50,7 @@ const cookieSaving = ref(false)
 const cookieChecking = ref(false)
 const cookieClearing = ref(false)
 const cookieStatus = ref({})
+const cookieHistory = ref([])
 const cookieServerPath = ref('/cookiecloud')
 const cookieDirty = computed(() => !!cookieSettings.value
   && JSON.stringify(cookieSettings.value) !== cookieSavedSnap.value)
@@ -170,6 +171,7 @@ async function loadCookieSettings() {
     const data = await api.getCookieSettings()
     cookieSettings.value = data.settings
     cookieStatus.value = data.status || {}
+    cookieHistory.value = data.history || []
     cookieServerPath.value = data.server_path || '/cookiecloud'
     cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
   } catch (e) {
@@ -186,6 +188,7 @@ async function saveCookieSettings() {
     const data = await api.saveCookieSettings(cookieSettings.value)
     cookieSettings.value = data.settings
     cookieStatus.value = data.sync_status || {}
+    cookieHistory.value = data.history || cookieHistory.value
     cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
     toast.success('Cookie 同步设置已保存并立即生效')
     return true
@@ -218,6 +221,7 @@ async function checkCookieSync() {
   try {
     const data = await api.checkCookieSync()
     cookieStatus.value = data.status || cookieStatus.value
+    cookieHistory.value = data.history || cookieHistory.value
     if (data.ok) toast.success(data.message)
     else toast.error(data.message)
   } catch (e) {
@@ -239,12 +243,20 @@ async function clearCookieData() {
   try {
     const data = await api.clearCookieData()
     cookieStatus.value = data.sync_status || {}
+    cookieHistory.value = data.history || cookieHistory.value
     toast.success('平台保存的 Cookie 已清空')
   } catch (e) {
     toast.error('清空 Cookie 失败：' + e.message)
   } finally {
     cookieClearing.value = false
   }
+}
+
+function formatCookieSyncTime(value) {
+  if (!value) return '时间未知'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ')
+  return date.toLocaleString('zh-CN', { hour12: false })
 }
 
 function undoCurrent() {
@@ -1815,7 +1827,7 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-section-heading">
               <div>
                 <div class="card-title">扩展连接信息</div>
-                <div class="hint muted">把下面三项填入本地浏览器的 CookieCloud 扩展，工作模式选择“上传到服务器”。</div>
+                <div class="hint muted">把下面三项填入本地浏览器的 CookieCloud 扩展，工作模式选择“上传到服务器”。定时同步的间隔也在浏览器扩展中设置。</div>
               </div>
               <button class="btn sm" @click="generateCookieCredentials">重新生成凭据</button>
             </div>
@@ -1867,7 +1879,7 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-section-heading">
               <div>
                 <div class="card-title">同步状态</div>
-                <div class="hint muted">扩展每次上传后平台立即更新，容器更新不会丢失。</div>
+                <div class="hint muted">扩展到达设定间隔后会自动上传；平台每次收到数据都会写入运行日志和下方记录。</div>
               </div>
               <div class="row gap">
                 <button class="btn sm" @click="checkCookieSync" :disabled="cookieChecking">
@@ -1901,6 +1913,30 @@ onBeforeRouteLeave(async () => {
             </div>
             <div v-if="cookieStatus.last_error" class="alert err cookie-status-error">
               {{ cookieStatus.last_error }}
+            </div>
+
+            <div class="cookie-history">
+              <div class="cookie-history-title">
+                <strong>最近同步记录</strong>
+                <span class="muted small">最多保留 50 条，容器重启后仍可查看</span>
+              </div>
+              <div v-if="!cookieHistory.length" class="cookie-history-empty muted">
+                浏览器完成首次同步后，这里会显示同步结果。
+              </div>
+              <div v-else class="cookie-history-list">
+                <div v-for="(item, index) in cookieHistory" :key="`${item.time}-${index}`"
+                     class="cookie-history-item">
+                  <span class="cookie-history-dot" :class="item.status"></span>
+                  <div class="cookie-history-content">
+                    <div class="cookie-history-message">{{ item.message }}</div>
+                    <div class="muted small">{{ formatCookieSyncTime(item.time) }}</div>
+                  </div>
+                  <div v-if="item.status === 'success'" class="cookie-history-count muted small">
+                    {{ item.cookie_count }} 个 Cookie · {{ item.domain_count }} 个域名
+                  </div>
+                  <div v-else class="cookie-history-count cookie-history-failed">失败</div>
+                </div>
+              </div>
             </div>
           </div>
         </template>
@@ -2384,6 +2420,63 @@ onBeforeRouteLeave(async () => {
 }
 .cookie-status-grid .status-ok { color: var(--accent-2); }
 .cookie-status-error { margin: 0; }
+.cookie-history {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 2px;
+}
+.cookie-history-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cookie-history-list {
+  display: flex;
+  max-height: 300px;
+  flex-direction: column;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.cookie-history-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.cookie-history-item:last-child { border-bottom: 0; }
+.cookie-history-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  box-shadow: 0 0 0 5px var(--danger-dim);
+}
+.cookie-history-dot.success {
+  background: var(--accent-2);
+  box-shadow: 0 0 0 5px var(--accent-2-dim);
+}
+.cookie-history-content { min-width: 0; }
+.cookie-history-message {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cookie-history-count { white-space: nowrap; }
+.cookie-history-failed { color: var(--danger); font-size: 12px; }
+.cookie-history-empty {
+  padding: 24px 14px;
+  border: 1px dashed var(--border-light);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
 .profile-card { margin-bottom: 16px; }
 .profile-settings { display: flex; align-items: center; gap: 18px; }
 .profile-avatar {
@@ -3196,6 +3289,9 @@ onBeforeRouteLeave(async () => {
   .cookie-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cookie-status-grid > div:nth-child(2) { border-right: 0; }
   .cookie-status-grid > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .cookie-history-title { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .cookie-history-item { grid-template-columns: auto minmax(0, 1fr); }
+  .cookie-history-count { grid-column: 2; }
 }
 
 /* 手机适配 */

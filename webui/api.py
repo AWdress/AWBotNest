@@ -606,6 +606,7 @@ async def get_cookie_settings(user=Depends(_auth)):
         return {
             "settings": cookie_kernel.masked_settings(),
             "status": cookie_kernel.snapshot_status(),
+            "history": cookie_kernel.sync_history(),
             "server_path": "/cookiecloud",
         }
     except cookie_kernel.CookieServiceError as exc:
@@ -623,6 +624,7 @@ async def put_cookie_settings(body: Dict[str, Any], user=Depends(_auth_pwc)):
             "status": "success",
             "settings": {**saved, "password": cookie_kernel.MASK if saved["password"] else ""},
             "sync_status": cookie_kernel.snapshot_status(),
+            "history": cookie_kernel.sync_history(),
         }
     except cookie_kernel.CookieServiceError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -639,19 +641,24 @@ async def check_cookie_sync(user=Depends(_auth_pwc)):
         settings = cookie_kernel.load_settings()
         status = cookie_kernel.snapshot_status()
         if not settings["enabled"]:
-            return {"ok": False, "message": "Cookie 同步尚未启用", "status": status}
+            return {"ok": False, "message": "Cookie 同步尚未启用", "status": status,
+                    "history": cookie_kernel.sync_history()}
         if status["has_data"] and not status["last_error"]:
-            return {"ok": True, "message": "同步数据可以正常读取", "status": status}
-        return {"ok": True, "message": "服务已就绪，等待浏览器首次同步", "status": status}
+            return {"ok": True, "message": "同步数据可以正常读取", "status": status,
+                    "history": cookie_kernel.sync_history()}
+        return {"ok": True, "message": "服务已就绪，等待浏览器首次同步", "status": status,
+                "history": cookie_kernel.sync_history()}
     except cookie_kernel.CookieServiceError as exc:
-        return {"ok": False, "message": str(exc), "status": cookie_kernel.snapshot_status()}
+        return {"ok": False, "message": str(exc), "status": cookie_kernel.snapshot_status(),
+                "history": cookie_kernel.sync_history()}
 
 
 @app.delete("/api/cookies/data")
 async def clear_cookie_data(user=Depends(_auth_pwc)):
     cookie_kernel.clear_snapshot()
     logger.info("平台保存的浏览器 Cookie 已清空")
-    return {"status": "success", "sync_status": cookie_kernel.snapshot_status()}
+    return {"status": "success", "sync_status": cookie_kernel.snapshot_status(),
+            "history": cookie_kernel.sync_history()}
 
 
 def _get_runtime():
