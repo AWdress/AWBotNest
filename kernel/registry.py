@@ -67,6 +67,7 @@ class PluginMeta:
     render_mode: str = "schema"
     config_schema: dict[str, Any] = field(default_factory=dict)
     requirements: list[str] = field(default_factory=list)  # 第三方依赖(PEP 508)，启用时由平台代装
+    cookie_domains: list[str] = field(default_factory=list)  # 可通过 ctx.cookies 读取的域名
 
     # 运行时字段（非元数据，由内核填充）
     file: str = ""            # 相对 plugins/ 的文件名
@@ -261,6 +262,7 @@ class PluginRegistry:
             render_mode=render_mode,
             config_schema=raw.get("config_schema", {}) or {},
             requirements=self._coerce_requirements(raw.get("requirements")),
+            cookie_domains=self._coerce_cookie_domains(raw.get("cookie_domains")),
             file=rel,
         )
         # 填充启用状态：已有记录优先，否则用 default_enabled
@@ -277,6 +279,13 @@ class PluginRegistry:
         if not isinstance(raw, list):
             return []
         return [str(x).strip() for x in raw if isinstance(x, str) and x.strip()]
+
+    @staticmethod
+    def _coerce_cookie_domains(raw: Any) -> list[str]:
+        """规范插件声明的 Cookie 域名，畸形值直接忽略。"""
+        from kernel.cookies import normalize_declared_domains
+
+        return normalize_declared_domains(raw)
 
     @staticmethod
     def _extract_plugin_dict(tree: ast.Module) -> Optional[dict[str, Any]]:

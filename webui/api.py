@@ -19,6 +19,7 @@ import json
 import re
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -43,6 +44,7 @@ from webui.backup import (
 )
 from kernel.registry import normalize_bot_choice, registry
 from kernel import ai as ai_kernel
+from kernel import cookies as cookie_kernel
 
 app = FastAPI(title="AWBotNest Platform API")
 
@@ -69,6 +71,10 @@ _RESOURCE_SAMPLE = {
     "wall": time.monotonic(), "cpu": time.process_time(), "cgroup_cpu": None, "result": None,
 }
 _RESOURCE_SAMPLE_LOCK = threading.Lock()
+_COOKIECLOUD_RATE_LOCK = threading.Lock()
+_COOKIECLOUD_RATE: dict[str, list[float]] = {}
+_COOKIECLOUD_RATE_WINDOW = 15 * 60
+_COOKIECLOUD_RATE_LIMIT = 240
 
 
 def _cgroup_roots() -> list[tuple[Path, bool]]:
@@ -488,6 +494,164 @@ async def clear_ui_notifications(user=Depends(_auth_pwc)):
     notifier.clear_history()
     _write_notification_state({"read_at": time.time()})
     return {"status": "success"}
+
+
+# ──────────────────────────────────────────────
+# CookieCloud 兼容服务与平台 Cookie 设置
+# ──────────────────────────────────────────────
+def _cookiecloud_headers() -> dict[str, str]:
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+        "Cache-Control": "no-store",
+    }
+
+
+def _cookiecloud_response(payload: Any, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(payload, status_code=status_code, headers=_cookiecloud_headers())
+
+
+def _check_cookiecloud_rate(request: Request) -> None:
+    client = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _COOKIECLOUD_RATE_LOCK:
+        if len(_COOKIECLOUD_RATE) > 1024:
+            stale_clients = [
+                key for key, stamps in _COOKIECLOUD_RATE.items()
+                if not stamps or now - stamps[-1] >= _COOKIECLOUD_RATE_WINDOW
+            ]
+            for key in stale_clients:
+                _COOKIECLOUD_RATE.pop(key, None)
+        recent = [stamp for stamp in _COOKIECLOUD_RATE.get(client, [])
+                  if now - stamp < _COOKIECLOUD_RATE_WINDOW]
+        if len(recent) >= _COOKIECLOUD_RATE_LIMIT:
+            raise HTTPException(status_code=429, detail="Cookie 同步请求过于频繁")
+        recent.append(now)
+        _COOKIECLOUD_RATE[client] = recent
+
+
+async def _cookiecloud_body(request: Request) -> dict[str, Any]:
+    try:
+        content_length = int(request.headers.get("content-length") or 0)
+    except ValueError:
+        content_length = 0
+    if content_length > cookie_kernel.MAX_ENCRYPTED_BYTES * 2:
+        raise HTTPException(status_code=413, detail="Cookie 数据超过平台允许的大小")
+    content_type = request.headers.get("content-type", "").lower()
+    try:
+        if "application/json" in content_type:
+            body = await request.json()
+        else:
+            form = await request.form()
+            body = dict(form)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=400, detail="CookieCloud 请求格式无效") from exc
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="CookieCloud 请求格式无效")
+    return body
+
+
+@app.options("/cookiecloud/{path:path}")
+async def cookiecloud_options(path: str):
+    return Response(status_code=204, headers=_cookiecloud_headers())
+
+
+@app.get("/cookiecloud/health")
+async def cookiecloud_health(request: Request):
+    _check_cookiecloud_rate(request)
+    try:
+        settings = cookie_kernel.load_settings()
+        return _cookiecloud_response({
+            "status": "OK" if settings["enabled"] else "DISABLED",
+            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+        })
+    except cookie_kernel.CookieServiceError as exc:
+        return _cookiecloud_response({"status": "ERROR", "message": str(exc)}, 503)
+
+
+@app.post("/cookiecloud/update")
+async def cookiecloud_update(request: Request):
+    _check_cookiecloud_rate(request)
+    body = await _cookiecloud_body(request)
+    try:
+        settings = cookie_kernel.load_settings()
+        uuid = str(body.get("uuid") or "")
+        if (not settings["enabled"] or not settings["uuid"]
+                or not hmac.compare_digest(uuid.encode("utf-8"), settings["uuid"].encode("utf-8"))):
+            return _cookiecloud_response({"detail": "Not Found"}, 404)
+        crypto_type = str(body.get("crypto_type") or "legacy")
+        status = cookie_kernel.save_snapshot(str(body.get("encrypted") or ""), crypto_type)
+        logger.info("CookieCloud 已接收浏览器同步：%d 个 Cookie，%d 个域名",
+                    status["cookie_count"], status["domain_count"])
+        return _cookiecloud_response({"action": "done"})
+    except cookie_kernel.CookieServiceError as exc:
+        cookie_kernel.record_error(str(exc))
+        logger.warning("CookieCloud 浏览器同步失败：%s", exc)
+        return _cookiecloud_response({"detail": str(exc)}, 400)
+
+
+@app.api_route("/cookiecloud/get/{uuid}", methods=["GET", "POST"])
+async def cookiecloud_get(uuid: str, request: Request):
+    _check_cookiecloud_rate(request)
+    try:
+        return _cookiecloud_response(cookie_kernel.encrypted_snapshot(uuid))
+    except (FileNotFoundError, cookie_kernel.CookieServiceError):
+        return _cookiecloud_response({"detail": "Not Found"}, 404)
+
+
+@app.get("/api/cookies/settings")
+async def get_cookie_settings(user=Depends(_auth)):
+    try:
+        return {
+            "settings": cookie_kernel.masked_settings(),
+            "status": cookie_kernel.snapshot_status(),
+            "server_path": "/cookiecloud",
+        }
+    except cookie_kernel.CookieServiceError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.put("/api/cookies/settings")
+async def put_cookie_settings(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    incoming = body.get("settings") or body
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="Cookie 同步设置必须是对象")
+    try:
+        saved = cookie_kernel.save_settings(incoming)
+        return {
+            "status": "success",
+            "settings": {**saved, "password": cookie_kernel.MASK if saved["password"] else ""},
+            "sync_status": cookie_kernel.snapshot_status(),
+        }
+    except cookie_kernel.CookieServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/cookies/credentials")
+async def generate_cookie_credentials(user=Depends(_auth_pwc)):
+    return cookie_kernel.generate_credentials()
+
+
+@app.post("/api/cookies/check")
+async def check_cookie_sync(user=Depends(_auth_pwc)):
+    try:
+        settings = cookie_kernel.load_settings()
+        status = cookie_kernel.snapshot_status()
+        if not settings["enabled"]:
+            return {"ok": False, "message": "Cookie 同步尚未启用", "status": status}
+        if status["has_data"] and not status["last_error"]:
+            return {"ok": True, "message": "同步数据可以正常读取", "status": status}
+        return {"ok": True, "message": "服务已就绪，等待浏览器首次同步", "status": status}
+    except cookie_kernel.CookieServiceError as exc:
+        return {"ok": False, "message": str(exc), "status": cookie_kernel.snapshot_status()}
+
+
+@app.delete("/api/cookies/data")
+async def clear_cookie_data(user=Depends(_auth_pwc)):
+    cookie_kernel.clear_snapshot()
+    logger.info("平台保存的浏览器 Cookie 已清空")
+    return {"status": "success", "sync_status": cookie_kernel.snapshot_status()}
 
 
 def _get_runtime():

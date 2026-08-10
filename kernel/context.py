@@ -20,6 +20,7 @@ from core import logger as _root_logger
 from pyrogram.handlers import MessageHandler, EditedMessageHandler, CallbackQueryHandler
 from pyrogram import StopPropagation, ContinuePropagation
 from kernel.ai import PluginAI
+from kernel.cookies import PluginCookies
 
 
 class _PluginLoggerAdapter:
@@ -226,6 +227,7 @@ class PlatformContext:
         self.log = _make_plugin_logger(plugin_id, registry)
         self.kv = _KVStore(kv_dir / f"{plugin_id}.sqlite")
         self.ai = PluginAI(plugin_id, data_root / plugin_id / "ai")
+        self.cookies = PluginCookies(plugin_id)
         # 主动中断消息传播的信号：handler 内 `raise ctx.StopPropagation` 可阻止
         # 后续（更大 group）的其它插件/handler 再处理这条消息。
         self.StopPropagation = StopPropagation

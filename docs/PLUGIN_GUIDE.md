@@ -40,6 +40,9 @@ __plugin__ = {
     "requirements": [             # 可选，第三方依赖；启用时由平台代装
         "httpx>=0.27",
     ],
+    "cookie_domains": [           # 可选，只能读取这里声明的域名
+        "example.com", "*.example.com",
+    ],
 }
 
 async def setup(ctx):
@@ -253,6 +256,37 @@ data = await ctx.browser.run("https://example.com", grab, headless=True)
 - `ctx.browser.run` 的 `action` 是**同步函数**，收到同步 `page` 对象（`goto`/`click`/`fill`/`content`/`inner_text`/`screenshot` 等），页面用完平台自动关闭。
 - `ctx.browser.engine` 返回当前引擎名（`"cloakbrowser"` / `"playwright"` / `None`）。
 - 为减小镜像体积，浏览器内核不随镜像发布，也不在启动时下载：**插件首次调用 `ctx.browser` 时**才下载到 `data/browser_cache`（随卷持久化，容器重建不必重下）。所以首次调用会多花一次下载时间，之后就快了；不用浏览器的部署零开销。出站默认走平台代理。
+
+### 平台 Cookie
+
+需要登录网站时，优先使用 `ctx.cookies` 读取管理员通过 CookieCloud 同步到平台的 Cookie。插件不保存 CookieCloud 的 UUID、加密密码或原始快照，也没有写入和删除权限。
+
+先在 `__plugin__` 中声明插件需要访问的域名：
+
+```python
+"cookie_domains": ["example.com", "*.example.com"],
+```
+
+然后按需读取：
+
+```python
+if ctx.cookies.available:
+    # 适合 httpx、requests、aiohttp 等 HTTP 客户端
+    cookie_header = await ctx.cookies.header("www.example.com", path="/account")
+
+    # 返回当前域名和路径可用的 Cookie 列表，不包含其它域名
+    cookies = await ctx.cookies.get("www.example.com")
+
+    # 转成 Playwright add_cookies() 可直接使用的格式
+    browser_cookies = await ctx.cookies.playwright("www.example.com")
+```
+
+- `cookie_domains` 必须是列表，最多声明 64 项；支持精确域名和 `*.example.com` 通配形式。
+- 未声明的域名会被平台拒绝，插件不能枚举或读取其它插件所需的 Cookie。
+- `get(domain, path="/", names=None)` 可按路径和名称筛选，并自动排除过期或不匹配域名的 Cookie。
+- `header(...)` 返回标准 `Cookie` 请求头字符串；`playwright(...)` 返回浏览器 Cookie 列表。
+- 三个读取方法都是 `async`。平台未启用同步或浏览器尚未上传时，读取会抛出错误；调用前可先判断 `ctx.cookies.available`。
+- 管理员在「系统设置 → Cookie 同步」管理浏览器连接和数据，插件无需提供 CookieCloud 配置项。
 
 ### 平台 AI
 

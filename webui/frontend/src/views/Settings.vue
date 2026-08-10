@@ -7,12 +7,13 @@ import { confirm } from '../composables/confirm'
 import { applyUiProfile, uiProfile } from '../composables/uiProfile'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 
-const tab = ref('login')   // login | notify | ai | api | system | maint
+const tab = ref('login')   // login | notify | ai | cookies | api | system | maint
 
 const TABS = [
   { key: 'login',  label: '安全认证' },
   { key: 'notify', label: '通知推送' },
   { key: 'ai',     label: 'AI 服务' },
+  { key: 'cookies', label: 'Cookie 同步' },
   { key: 'api',    label: '开放接口' },
   { key: 'system', label: '系统配置' },
   { key: 'maint',  label: '维护' },
@@ -42,9 +43,28 @@ const aiModelDropdown = ref('')
 const aiModelLoading = ref({})
 const aiTesting = ref({})
 const aiDirty = computed(() => !!ai.value && JSON.stringify(ai.value) !== aiSavedSnap.value)
-const currentDirty = computed(() => tab.value === 'ai' ? aiDirty.value : dirty.value)
-const currentSaving = computed(() => tab.value === 'ai' ? aiSaving.value : saving.value)
-const anyDirty = computed(() => dirty.value || aiDirty.value)
+const cookieSettings = ref(null)
+const cookieSavedSnap = ref('')
+const cookieLoading = ref(false)
+const cookieSaving = ref(false)
+const cookieChecking = ref(false)
+const cookieClearing = ref(false)
+const cookieStatus = ref({})
+const cookieServerPath = ref('/cookiecloud')
+const cookieDirty = computed(() => !!cookieSettings.value
+  && JSON.stringify(cookieSettings.value) !== cookieSavedSnap.value)
+const cookieServerUrl = computed(() => `${window.location.origin}${cookieServerPath.value}`)
+const currentDirty = computed(() => {
+  if (tab.value === 'ai') return aiDirty.value
+  if (tab.value === 'cookies') return cookieDirty.value
+  return dirty.value
+})
+const currentSaving = computed(() => {
+  if (tab.value === 'ai') return aiSaving.value
+  if (tab.value === 'cookies') return cookieSaving.value
+  return saving.value
+})
+const anyDirty = computed(() => dirty.value || aiDirty.value || cookieDirty.value)
 // 保存后需重启提示
 const restartHint = ref(false)
 const restarting = ref(false)
@@ -144,16 +164,103 @@ async function saveAiSettings() {
   }
 }
 
+async function loadCookieSettings() {
+  cookieLoading.value = true
+  try {
+    const data = await api.getCookieSettings()
+    cookieSettings.value = data.settings
+    cookieStatus.value = data.status || {}
+    cookieServerPath.value = data.server_path || '/cookiecloud'
+    cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
+  } catch (e) {
+    toast.error('读取 Cookie 同步设置失败：' + e.message)
+  } finally {
+    cookieLoading.value = false
+  }
+}
+
+async function saveCookieSettings() {
+  if (!cookieSettings.value || cookieSaving.value) return false
+  cookieSaving.value = true
+  try {
+    const data = await api.saveCookieSettings(cookieSettings.value)
+    cookieSettings.value = data.settings
+    cookieStatus.value = data.sync_status || {}
+    cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
+    toast.success('Cookie 同步设置已保存并立即生效')
+    return true
+  } catch (e) {
+    toast.error('保存 Cookie 同步设置失败：' + e.message)
+    return false
+  } finally {
+    cookieSaving.value = false
+  }
+}
+
+async function generateCookieCredentials() {
+  try {
+    const credentials = await api.generateCookieCredentials()
+    cookieSettings.value.uuid = credentials.uuid
+    cookieSettings.value.password = credentials.password
+    toast.success('已生成新的同步凭据，保存后生效')
+  } catch (e) {
+    toast.error('生成同步凭据失败：' + e.message)
+  }
+}
+
+async function copyCookieValue(value, label) {
+  if (await copyText(value)) toast.success(`已复制${label}`)
+  else toast.error('复制失败，请手动选择复制')
+}
+
+async function checkCookieSync() {
+  cookieChecking.value = true
+  try {
+    const data = await api.checkCookieSync()
+    cookieStatus.value = data.status || cookieStatus.value
+    if (data.ok) toast.success(data.message)
+    else toast.error(data.message)
+  } catch (e) {
+    toast.error('检查同步状态失败：' + e.message)
+  } finally {
+    cookieChecking.value = false
+  }
+}
+
+async function clearCookieData() {
+  const accepted = await confirm({
+    title: '清空浏览器 Cookie',
+    message: '平台保存的 Cookie 将被删除，插件会暂时无法读取。浏览器下次同步后会重新写入。',
+    confirmText: '确认清空',
+    danger: true,
+  })
+  if (!accepted) return
+  cookieClearing.value = true
+  try {
+    const data = await api.clearCookieData()
+    cookieStatus.value = data.sync_status || {}
+    toast.success('平台保存的 Cookie 已清空')
+  } catch (e) {
+    toast.error('清空 Cookie 失败：' + e.message)
+  } finally {
+    cookieClearing.value = false
+  }
+}
+
 function undoCurrent() {
   if (tab.value === 'ai') {
     loadAiSettings()
+  } else if (tab.value === 'cookies') {
+    loadCookieSettings()
   } else {
     load()
   }
 }
 
 function saveCurrent() {
-  return tab.value === 'ai' ? saveAiSettings() : save()
+  if (tab.value === 'ai') return saveAiSettings()
+  if (tab.value === 'cookies') return saveCookieSettings()
+  return save()
 }
 
 function addAiProvider() {
@@ -1097,6 +1204,7 @@ function goTab(k) {
   tab.value = k
   if (k === 'notify' && routing.value.plugins.length === 0) loadRouting()
   if (k === 'ai' && !ai.value && !aiLoading.value) loadAiSettings()
+  if (k === 'cookies' && !cookieSettings.value && !cookieLoading.value) loadCookieSettings()
 }
 
 // ── 登录凭据修改 ──
@@ -1680,6 +1788,124 @@ onBeforeRouteLeave(async () => {
         </template>
       </template>
 
+      <!-- CookieCloud 浏览器同步 -->
+      <template v-if="tab === 'cookies'">
+        <div v-if="cookieLoading" class="card center muted">正在读取 Cookie 同步设置…</div>
+        <template v-else-if="cookieSettings">
+          <div class="card cookie-overview">
+            <div class="cookie-overview-main">
+              <div class="cookie-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+                     stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M20.8 13.2A9 9 0 1 1 10.8 3a4.5 4.5 0 0 0 5.2 5.2 4.5 4.5 0 0 0 4.8 5Z"/>
+                  <path d="M8.5 10.5h.01M12.5 15h.01M7.5 16.5h.01"/>
+                </svg>
+              </div>
+              <div>
+                <div class="card-title">浏览器 Cookie 同步</div>
+                <div class="hint muted">本地电脑的 CookieCloud 扩展直接连接平台，插件只读取获准域名。</div>
+              </div>
+            </div>
+            <button type="button" class="toggle" :class="{ on: cookieSettings.enabled }"
+                    :aria-pressed="cookieSettings.enabled" aria-label="启用 Cookie 同步"
+                    @click="cookieSettings.enabled = !cookieSettings.enabled"></button>
+          </div>
+
+          <div class="card cookie-setup" style="margin-top:16px">
+            <div class="cookie-section-heading">
+              <div>
+                <div class="card-title">扩展连接信息</div>
+                <div class="hint muted">把下面三项填入本地浏览器的 CookieCloud 扩展，工作模式选择“上传到服务器”。</div>
+              </div>
+              <button class="btn sm" @click="generateCookieCredentials">重新生成凭据</button>
+            </div>
+
+            <div class="cookie-connect-fields">
+              <div class="field cookie-server-field">
+                <label>服务器地址</label>
+                <div class="input-action">
+                  <input class="input mono" :value="cookieServerUrl" readonly />
+                  <button class="btn sm" @click="copyCookieValue(cookieServerUrl, '服务器地址')">复制</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>用户 KEY · UUID</label>
+                <div class="input-action">
+                  <input class="input mono" v-model="cookieSettings.uuid" autocomplete="off"
+                         placeholder="点击重新生成凭据" />
+                  <button class="btn sm" :disabled="!cookieSettings.uuid"
+                          @click="copyCookieValue(cookieSettings.uuid, 'UUID')">复制</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>端到端加密密码</label>
+                <div class="input-action">
+                  <input class="input mono" type="password" v-model="cookieSettings.password"
+                         autocomplete="new-password" placeholder="点击重新生成凭据" />
+                  <button class="btn sm"
+                          :disabled="!cookieSettings.password || cookieSettings.password === '********'"
+                          @click="copyCookieValue(cookieSettings.password, '加密密码')">复制</button>
+                </div>
+                <div v-if="cookieSettings.password === '********'" class="hint muted small">
+                  密码已安全保存且不会回显；需要重新配置浏览器时请生成新凭据。
+                </div>
+              </div>
+              <div class="field">
+                <label>加密算法</label>
+                <select class="select" v-model="cookieSettings.crypto_type">
+                  <option value="aes-128-cbc-fixed">AES-128-CBC（固定 IV）</option>
+                  <option value="legacy">CryptoJS（兼容模式）</option>
+                </select>
+              </div>
+            </div>
+            <div class="cookie-security-note">
+              Cookie 内容由浏览器扩展端到端加密后上传。保存新凭据前，请先复制到浏览器扩展；更换凭据会清除旧快照。
+            </div>
+          </div>
+
+          <div class="card" style="margin-top:16px">
+            <div class="cookie-section-heading">
+              <div>
+                <div class="card-title">同步状态</div>
+                <div class="hint muted">扩展每次上传后平台立即更新，容器更新不会丢失。</div>
+              </div>
+              <div class="row gap">
+                <button class="btn sm" @click="checkCookieSync" :disabled="cookieChecking">
+                  {{ cookieChecking ? '检查中…' : '检查状态' }}
+                </button>
+                <button class="btn sm danger" @click="clearCookieData"
+                        :disabled="cookieClearing || !cookieStatus.has_data">
+                  {{ cookieClearing ? '清空中…' : '清空数据' }}
+                </button>
+              </div>
+            </div>
+            <div class="cookie-status-grid">
+              <div>
+                <span class="muted small">服务状态</span>
+                <strong :class="cookieSettings.enabled ? 'status-ok' : 'muted'">
+                  {{ cookieSettings.enabled ? (cookieStatus.has_data ? '同步正常' : '等待浏览器同步') : '已停用' }}
+                </strong>
+              </div>
+              <div>
+                <span class="muted small">最近同步</span>
+                <strong>{{ cookieStatus.last_sync || '尚未同步' }}</strong>
+              </div>
+              <div>
+                <span class="muted small">Cookie</span>
+                <strong>{{ cookieStatus.cookie_count || 0 }} 个</strong>
+              </div>
+              <div>
+                <span class="muted small">域名</span>
+                <strong>{{ cookieStatus.domain_count || 0 }} 个</strong>
+              </div>
+            </div>
+            <div v-if="cookieStatus.last_error" class="alert err cookie-status-error">
+              {{ cookieStatus.last_error }}
+            </div>
+          </div>
+        </template>
+      </template>
+
       <!-- Webhook -->
       <div v-if="tab === 'api'" class="card">
         <div class="card-title">Webhook 入站</div>
@@ -2081,6 +2307,83 @@ onBeforeRouteLeave(async () => {
 .alert.ok { background: var(--accent-2-dim); color: var(--accent-2); }
 .card { display: flex; flex-direction: column; gap: 14px; }
 .card-title { font-size: 14px; font-weight: 600; color: var(--accent); }
+.cookie-overview {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.cookie-overview-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+.cookie-mark {
+  display: grid;
+  flex: 0 0 46px;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--border));
+  border-radius: 13px;
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.cookie-mark svg { width: 24px; height: 24px; }
+.cookie-section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cookie-connect-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.cookie-server-field { grid-column: 1 / -1; }
+.input-action {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
+}
+.input-action .input { min-width: 0; flex: 1; }
+.input-action .btn { flex: 0 0 auto; }
+.cookie-security-note {
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent);
+  color: var(--text-secondary);
+  background: var(--accent-dim);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.cookie-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.cookie-status-grid > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+  padding: 13px 14px;
+  border-right: 1px solid var(--border);
+}
+.cookie-status-grid > div:last-child { border-right: 0; }
+.cookie-status-grid strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cookie-status-grid .status-ok { color: var(--accent-2); }
+.cookie-status-error { margin: 0; }
 .profile-card { margin-bottom: 16px; }
 .profile-settings { display: flex; align-items: center; gap: 18px; }
 .profile-avatar {
@@ -2886,6 +3189,13 @@ onBeforeRouteLeave(async () => {
   .ai-overview { align-items: flex-start; }
   .ai-status-strip { position: static; flex-basis: 100%; }
   .ai-overview { flex-wrap: wrap; }
+  .cookie-overview { align-items: flex-start; }
+  .cookie-section-heading { flex-direction: column; }
+  .cookie-connect-fields { grid-template-columns: 1fr; }
+  .cookie-server-field { grid-column: auto; }
+  .cookie-status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cookie-status-grid > div:nth-child(2) { border-right: 0; }
+  .cookie-status-grid > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
 
 /* 手机适配 */
