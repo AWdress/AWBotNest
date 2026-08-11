@@ -128,6 +128,54 @@ def text_to_rich_html(text: str) -> str:
     return html.escape(str(text or "")).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 
 
+def text_to_notification_rich_html(text: str) -> str:
+    """识别常见的多行通知明细，让旧插件的普通文本也能自动显示为表格。"""
+    raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = [line.strip() for line in raw.split("\n") if line.strip()]
+    if len(lines) < 2:
+        return text_to_rich_html(raw)
+
+    patterns = [
+        (
+            re.compile(r"^(?:账号|账户)\s*[：:]?\s*(\S+)\s+(.+)$"),
+            ["账号", "结果"],
+        ),
+        (
+            re.compile(r"^[\[【]([^\]】]+)[\]】]\s*(.+)$"),
+            ["项目", "结果"],
+        ),
+        (
+            re.compile(r"^([^：:]{1,12})[：:]\s*(.+)$"),
+            ["项目", "内容"],
+        ),
+    ]
+    for pattern, headers in patterns:
+        rows: list[list[str]] = []
+        summary: list[str] = []
+        for line in lines:
+            match = pattern.match(line)
+            if match:
+                rows.append([match.group(1).strip(), match.group(2).strip()])
+            else:
+                summary.append(line)
+        if len(rows) < 2:
+            continue
+
+        table = build_rich_table(
+            headers,
+            rows,
+            caption="明细",
+            bordered=True,
+            striped=True,
+            align=["left", "left"],
+        )
+        if not summary:
+            return table
+        return f"{text_to_rich_html(chr(10).join(summary))}<br><br>{table}"
+
+    return text_to_rich_html(raw)
+
+
 def _normalise_rows(rows: Iterable[Sequence[Any]]) -> list[list[str]]:
     values: list[list[str]] = []
     for row in rows:

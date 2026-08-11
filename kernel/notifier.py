@@ -19,7 +19,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from core import logger
-from kernel.rich_text import rich_html_to_plain, sanitize_rich_html, text_to_rich_html
+from kernel.rich_text import (
+    rich_html_to_plain,
+    sanitize_rich_html,
+    text_to_notification_rich_html,
+)
 
 # 级别 → 图标标签（分类的可视化）
 _LEVEL_CN = {
@@ -197,7 +201,7 @@ async def submit(
         rich_content = sanitize_rich_html(text)
         plain_content = rich_html_to_plain(rich_content)
     else:
-        rich_content = text_to_rich_html(text)
+        rich_content = text_to_notification_rich_html(text)
         plain_content = text.strip()
     if not plain_content:
         raise ValueError("通知内容不能为空")
