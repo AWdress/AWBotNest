@@ -255,24 +255,53 @@ def _evp_bytes_to_key(
     return output[:key_length], output[key_length:key_length + iv_length]
 
 
+def _decode_encrypted_value(encrypted: str) -> bytes:
+    """Decode CookieCloud's Base64 output, including wrapped or unpadded values."""
+    value = re.sub(r"\s+", "", str(encrypted or ""))
+    if not value:
+        raise ValueError("encrypted payload is empty")
+    value += "=" * (-len(value) % 4)
+    return base64.b64decode(value, validate=True)
+
+
+def _decrypt_aes_cbc(ciphertext: bytes, key: bytes, iv: bytes) -> bytes:
+    if not ciphertext or len(ciphertext) % 16:
+        raise ValueError("encrypted payload has an invalid length")
+    decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
+    return _pkcs7_unpad(decryptor.update(ciphertext) + decryptor.finalize())
+
+
 def decrypt_payload(encrypted: str, uuid: str, password: str, crypto_type: str) -> dict[str, Any]:
     try:
-        raw = base64.b64decode(encrypted, validate=True)
-        passphrase = hashlib.md5(f"{uuid}-{password}".encode()).hexdigest()[:16]  # noqa: S324
+        raw = _decode_encrypted_value(encrypted)
+        credential_hash = hashlib.md5(f"{uuid}-{password}".encode()).hexdigest()  # noqa: S324
+        passphrase = credential_hash[:16]
         if crypto_type == "aes-128-cbc-fixed":
             key = passphrase.encode("utf-8")
-            iv = b"\0" * 16
-            ciphertext = raw
+            # CookieCloud's fixed-IV proposal derives the IV from the credential
+            # hash. Older AWBotNest clients used a zero IV, so retain that fallback.
+            result = None
+            last_error: Exception | None = None
+            for iv in (credential_hash[8:24].encode("utf-8"), b"\0" * 16):
+                try:
+                    plaintext = _decrypt_aes_cbc(raw, key, iv)
+                    candidate = json.loads(plaintext.decode("utf-8"))
+                    if not isinstance(candidate, dict):
+                        raise ValueError("decrypted payload is not an object")
+                    result = candidate
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_error = exc
+            if result is None:
+                raise ValueError("fixed-IV payload could not be decrypted") from last_error
         elif crypto_type == "legacy":
             if len(raw) < 16 or raw[:8] != b"Salted__":
                 raise ValueError("legacy payload is missing the OpenSSL salt")
             key, iv = _evp_bytes_to_key(passphrase.encode("utf-8"), raw[8:16])
-            ciphertext = raw[16:]
+            plaintext = _decrypt_aes_cbc(raw[16:], key, iv)
+            result = json.loads(plaintext.decode("utf-8"))
         else:
             raise ValueError("unsupported crypto type")
-        decryptor = Cipher(algorithms.AES(key), modes.CBC(iv)).decryptor()
-        plaintext = _pkcs7_unpad(decryptor.update(ciphertext) + decryptor.finalize())
-        result = json.loads(plaintext.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
         raise CookieServiceError("Cookie 数据解密失败，请检查 UUID、密码和加密算法") from exc
     if not isinstance(result, dict) or not isinstance(result.get("cookie_data", {}), dict):
@@ -505,7 +534,7 @@ def _detect_crypto_type(encrypted: str, configured: str) -> str:
     if configured in ALLOWED_CRYPTO_TYPES:
         return configured
     try:
-        raw = base64.b64decode(encrypted, validate=True)
+        raw = _decode_encrypted_value(encrypted)
     except Exception as exc:  # noqa: BLE001
         raise CookieServiceError("远程 CookieCloud 返回的加密数据无效") from exc
     return "legacy" if raw.startswith(b"Salted__") else "aes-128-cbc-fixed"
@@ -518,6 +547,9 @@ def _decrypt_remote_payload(
         return payload, "plain"
 
     encrypted = str(payload.get("encrypted") or "").strip()
+    # MoviePilot trims both values before deriving the CookieCloud key.
+    uuid = str(uuid).strip()
+    password = str(password).strip()
     if not encrypted:
         raise CookieServiceError("远程 CookieCloud 中还没有可用数据")
 
