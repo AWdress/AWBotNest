@@ -2006,6 +2006,7 @@ onBeforeRouteLeave(async () => {
               <div>
                 <div class="card-title">远程 CookieCloud</div>
                 <div class="hint muted">从已有 CookieCloud 服务器自动拉取数据，解密后再由平台加密保存。</div>
+                <div class="hint muted small">平台会优先在本地解密；遇到 MoviePilot 等兼容服务时，本地解密失败后会通过安全连接请远程服务完成解密。</div>
               </div>
               <div class="row gap cookie-remote-actions">
                 <button class="btn sm" :disabled="!cookieSettings.remote_enabled || cookieRemoteSyncing"

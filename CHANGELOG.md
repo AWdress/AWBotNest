@@ -9,6 +9,7 @@
 这一版修复了 CookieCloud 无法正常使用的问题，浏览器可以直接同步，平台也可以读取 MoviePilot 中已有的 Cookie。
 
 **CookieCloud：**
+- 读取 MoviePilot 的 CookieCloud 时，如果本地无法识别密文，平台会自动使用 MoviePilot 官方兼容接口完成解密。
 - 浏览器 CookieCloud 扩展可以正常完成连接检测、跨域访问和压缩上传，不会再出现地址能打开但同步失败的问题。
 - 从 MoviePilot 或其他 CookieCloud 服务读取数据时，平台会根据实际密文自动识别格式，不再依赖可能缺失或错误的格式标记。
 - 兼容不同版本 CookieCloud 扩展保存的数据，原有平台 Cookie 数据仍然可以继续使用。

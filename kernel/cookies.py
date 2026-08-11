@@ -609,6 +609,47 @@ def _proxy_for_remote(url: str) -> str | None:
     return proxy_url()
 
 
+def _allow_remote_server_decrypt(url: str) -> bool:
+    """Only send the password over HTTPS or to an explicitly local IP address."""
+    parsed = urlsplit(url)
+    if parsed.scheme == "https":
+        return True
+    hostname = parsed.hostname or ""
+    if hostname.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_private
+    except ValueError:
+        return False
+
+
+async def _read_remote_json(response: httpx.Response) -> Any:
+    if response.status_code != 200:
+        raise CookieServiceError(f"远程 CookieCloud 返回 HTTP {response.status_code}")
+    content = bytearray()
+    async for chunk in response.aiter_bytes():
+        content.extend(chunk)
+        if len(content) > MAX_ENCRYPTED_BYTES + 1024 * 1024:
+            raise CookieServiceError("远程 CookieCloud 返回的数据过大")
+    try:
+        return json.loads(bytes(content))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise CookieServiceError("远程 CookieCloud 返回的不是有效数据") from exc
+
+
+def _normalize_decrypted_remote_data(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict) or not payload:
+        raise CookieServiceError(
+            "远程服务也无法解密 Cookie，请确认 UUID 和密码与浏览器上传时一致"
+        )
+    if isinstance(payload.get("cookie_data"), dict):
+        return payload
+    # Older CookieCloud servers can return the domain map directly.
+    if all(isinstance(items, list) for items in payload.values()):
+        return {"cookie_data": payload, "local_storage_data": {}}
+    raise CookieServiceError("远程 CookieCloud 返回的 Cookie 格式无效")
+
+
 async def pull_remote_snapshot() -> dict[str, Any]:
     """从外部 CookieCloud 拉取数据，转换为平台自己的加密快照。"""
     settings = load_settings()
@@ -629,28 +670,33 @@ async def pull_remote_snapshot() -> dict[str, Any]:
             async with client.stream(
                 "GET", endpoint, headers={"Accept": "application/json"}
             ) as response:
-                if response.status_code != 200:
-                    raise CookieServiceError(
-                        f"远程 CookieCloud 返回 HTTP {response.status_code}"
-                    )
-                content = bytearray()
-                async for chunk in response.aiter_bytes():
-                    content.extend(chunk)
-                    if len(content) > MAX_ENCRYPTED_BYTES + 1024 * 1024:
-                        raise CookieServiceError("远程 CookieCloud 返回的数据过大")
-        try:
-            payload = json.loads(bytes(content))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise CookieServiceError("远程 CookieCloud 返回的不是有效数据") from exc
-        if not isinstance(payload, dict):
-            raise CookieServiceError("远程 CookieCloud 中还没有可用数据")
+                payload = await _read_remote_json(response)
+            if not isinstance(payload, dict):
+                raise CookieServiceError("远程 CookieCloud 中还没有可用数据")
 
-        decoded, _ = _decrypt_remote_payload(
-            payload,
-            remote_uuid,
-            settings["remote_password"],
-            settings["remote_crypto_type"],
-        )
+            try:
+                decoded, _ = _decrypt_remote_payload(
+                    payload,
+                    remote_uuid,
+                    settings["remote_password"],
+                    settings["remote_crypto_type"],
+                )
+            except CookieServiceError as local_error:
+                if not _allow_remote_server_decrypt(remote_url):
+                    raise
+                # MoviePilot and the official CookieCloud server both provide
+                # this compatibility endpoint for server-side decryption.
+                async with client.stream(
+                    "POST",
+                    endpoint,
+                    headers={"Accept": "application/json"},
+                    json={"password": settings["remote_password"].strip()},
+                ) as response:
+                    server_payload = await _read_remote_json(response)
+                try:
+                    decoded = _normalize_decrypted_remote_data(server_payload)
+                except CookieServiceError as server_error:
+                    raise server_error from local_error
         decoded = _filter_remote_data(decoded, settings["remote_domains"])
         local_encrypted = encrypt_payload(
             decoded,
