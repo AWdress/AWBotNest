@@ -1465,6 +1465,59 @@ _CHANNEL_SECRET_FIELDS = {
 }
 
 
+def _secret_response(value: Any) -> JSONResponse:
+    return JSONResponse(
+        {"value": str(value or "")},
+        headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+    )
+
+
+@app.post("/api/settings/reveal-secret")
+async def reveal_settings_secret(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    kind = str(body.get("kind") or "").strip()
+    field = str(body.get("field") or "").strip()
+    item_id = str(body.get("id") or "").strip()
+
+    if kind == "cookie" and field in {"password", "remote_password"}:
+        return _secret_response(cookie_kernel.load_settings().get(field))
+
+    if kind == "ai" and field == "api_key" and item_id:
+        provider = next(
+            (item for item in ai_kernel.load_ai_settings().get("providers", [])
+             if str(item.get("id") or "") == item_id),
+            None,
+        )
+        if provider is None:
+            raise HTTPException(status_code=404, detail="AI 服务不存在")
+        return _secret_response(provider.get("api_key"))
+
+    import config.config as cfg
+    settings = cfg.load()
+    if kind == "system":
+        if field in _SECRET_FIELDS:
+            return _secret_response(settings.get(field))
+        if field == "proxy_password":
+            return _secret_response(
+                ((settings.get("proxy_set") or {}).get("proxy") or {}).get("password")
+            )
+        if field == "db_password":
+            return _secret_response((settings.get("DB_INFO") or {}).get("password"))
+
+    if kind == "channel" and item_id:
+        channel = next(
+            (item for item in settings.get("NOTIFICATION_CHANNELS") or []
+             if isinstance(item, dict) and str(item.get("id") or "") == item_id),
+            None,
+        )
+        if channel is None:
+            raise HTTPException(status_code=404, detail="通知渠道不存在")
+        allowed = _CHANNEL_SECRET_FIELDS.get(str(channel.get("type") or ""), set())
+        if field in allowed:
+            return _secret_response((channel.get("config") or {}).get(field))
+
+    raise HTTPException(status_code=400, detail="不支持查看这个敏感字段")
+
+
 def _mask(val: str) -> str:
     if not val:
         return ""

@@ -9,6 +9,7 @@ import { computed, onMounted, ref } from 'vue'
 import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
+import SecretInput from './SecretInput.vue'
 
 const props = defineProps({
   spec: { type: Object, required: true },
@@ -257,8 +258,9 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
            :value="value" @input="set(Number($event.target.value))" />
 
     <!-- password -->
-    <input v-else-if="spec.type === 'password'" class="input" type="password"
-           :value="value" @input="set($event.target.value)" />
+    <SecretInput v-else-if="spec.type === 'password'"
+                 :model-value="String(value ?? '')"
+                 @update:model-value="set" />
 
     <!-- text 多行 -->
     <textarea v-else-if="spec.type === 'text'" class="textarea"

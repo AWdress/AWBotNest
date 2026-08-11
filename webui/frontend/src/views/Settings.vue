@@ -6,6 +6,7 @@ import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
 import { applyUiProfile, uiProfile } from '../composables/uiProfile'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
+import SecretInput from '../components/SecretInput.vue'
 
 const tab = ref('login')   // login | notify | ai | cookies | api | system | maint
 
@@ -220,6 +221,93 @@ async function generateCookieCredentials() {
   } catch (e) {
     toast.error('生成同步凭据失败：' + e.message)
   }
+}
+
+function updateSnapshot(snapshot, update) {
+  if (!snapshot.value) return
+  try {
+    const value = JSON.parse(snapshot.value)
+    update(value)
+    snapshot.value = JSON.stringify(value)
+  } catch (_) {}
+}
+
+async function revealCookieSecret(field) {
+  try {
+    const data = await api.revealSecret('cookie', field)
+    cookieSettings.value[field] = data.value || ''
+    updateSnapshot(cookieSavedSnap, (value) => { value[field] = data.value || '' })
+  } catch (e) {
+    toast.error('读取已保存内容失败：' + e.message)
+  }
+}
+
+async function revealAiSecret(provider) {
+  try {
+    const data = await api.revealSecret('ai', 'api_key', provider.id)
+    provider.api_key = data.value || ''
+    updateSnapshot(aiSavedSnap, (value) => {
+      const saved = (value.providers || []).find((item) => item.id === provider.id)
+      if (saved) saved.api_key = data.value || ''
+    })
+  } catch (e) {
+    toast.error('读取 API Key 失败：' + e.message)
+  }
+}
+
+async function revealSystemSecret(field, apply) {
+  try {
+    const data = await api.revealSecret('system', field)
+    apply(s.value, data.value || '')
+    updateSnapshot(savedSnap, (value) => apply(value, data.value || ''))
+    return data.value || ''
+  } catch (e) {
+    toast.error('读取已保存内容失败：' + e.message)
+    return ''
+  }
+}
+
+async function revealChannelSecret(field) {
+  try {
+    const data = await api.revealSecret('channel', field, channelForm.value.id)
+    channelForm.value.config[field] = data.value || ''
+  } catch (e) {
+    toast.error('读取渠道密钥失败：' + e.message)
+  }
+}
+
+async function ensureCookieCredentials() {
+  if (cookieSettings.value.uuid && cookieSettings.value.password) return true
+  try {
+    const credentials = await api.generateCookieCredentials()
+    cookieSettings.value.uuid = credentials.uuid
+    cookieSettings.value.password = credentials.password
+    toast.success('已自动生成平台 Cookie 凭据')
+    return true
+  } catch (e) {
+    toast.error('生成同步凭据失败：' + e.message)
+    return false
+  }
+}
+
+async function toggleCookieService() {
+  if (cookieSettings.value.enabled) {
+    cookieSettings.value.enabled = false
+    cookieSettings.value.remote_enabled = false
+    return
+  }
+  if (!await ensureCookieCredentials()) return
+  cookieSettings.value.enabled = true
+}
+
+async function toggleRemoteCookieService() {
+  if (cookieSettings.value.remote_enabled) {
+    cookieSettings.value.remote_enabled = false
+    return
+  }
+  if (!await ensureCookieCredentials()) return
+  cookieSettings.value.enabled = true
+  cookieSettings.value.remote_enabled = true
 }
 
 async function copyCookieValue(value, label) {
@@ -869,11 +957,17 @@ async function copyText(text) {
   } catch { return false }
 }
 async function copyPlatformWebhook() {
+  if (s.value?.WEBHOOK_SECRET === '********') {
+    await revealSystemSecret('WEBHOOK_SECRET', (value, secret) => { value.WEBHOOK_SECRET = secret })
+  }
   if (!platformWebhookUrl.value) return
   if (await copyText(platformWebhookUrl.value)) toast.success('已复制 webhook 地址')
   else toast.error('复制失败，请手动选择复制')
 }
 async function copyApiKey() {
+  if (s.value?.API_KEY === '********') {
+    await revealSystemSecret('API_KEY', (value, secret) => { value.API_KEY = secret })
+  }
   if (!s.value?.API_KEY) return
   if (await copyText(s.value.API_KEY)) toast.success('已复制 API Key')
   else toast.error('复制失败，请手动选择复制')
@@ -1411,12 +1505,13 @@ onBeforeRouteLeave(async () => {
       <!-- Telegram 凭据 -->
       <div v-if="tab === 'login'" class="card" style="margin-top:16px">
         <div class="card-title">Telegram 凭据</div>
-        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知推送」页配置。敏感值显示为打码，不改就留着。</div>
+        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知推送」页配置；点击眼睛可查看已保存的敏感值。</div>
         <div class="grid2">
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
           <div class="field"><label>API HASH</label>
-            <input class="input" v-model="s.API_HASH" /></div>
+            <SecretInput v-model="s.API_HASH"
+                         @reveal="revealSystemSecret('API_HASH', (value, secret) => { value.API_HASH = secret })" /></div>
         </div>
       </div>
 
@@ -1586,7 +1681,7 @@ onBeforeRouteLeave(async () => {
                 </div>
                 <div class="field">
                   <label>API Key</label>
-                  <input class="input" type="password" v-model="provider.api_key"
+                  <SecretInput v-model="provider.api_key" @reveal="revealAiSecret(provider)"
                          placeholder="本地服务不需要时可留空" />
                 </div>
                 <button class="btn sm" @click="fetchAiModels(provider)"
@@ -1851,7 +1946,7 @@ onBeforeRouteLeave(async () => {
             </div>
             <button type="button" class="toggle" :class="{ on: cookieSettings.enabled }"
                     :aria-pressed="cookieSettings.enabled" aria-label="启用平台 Cookie 服务"
-                    @click="cookieSettings.enabled = !cookieSettings.enabled"></button>
+                    @click="toggleCookieService"></button>
           </div>
 
           <div class="card cookie-setup" style="margin-top:16px">
@@ -1883,14 +1978,14 @@ onBeforeRouteLeave(async () => {
               <div class="field">
                 <label>端到端加密密码</label>
                 <div class="input-action">
-                  <input class="input mono" type="password" v-model="cookieSettings.password"
+                  <SecretInput v-model="cookieSettings.password" mono @reveal="revealCookieSecret('password')"
                          autocomplete="new-password" placeholder="点击重新生成凭据" />
                   <button class="btn sm"
                           :disabled="!cookieSettings.password || cookieSettings.password === '********'"
                           @click="copyCookieValue(cookieSettings.password, '加密密码')">复制</button>
                 </div>
                 <div v-if="cookieSettings.password === '********'" class="hint muted small">
-                  密码已安全保存且不会回显；需要重新配置浏览器时请生成新凭据。
+                  密码已安全保存，点击输入框右侧的眼睛可以查看和复制。
                 </div>
               </div>
               <div class="field">
@@ -1919,7 +2014,7 @@ onBeforeRouteLeave(async () => {
                 </button>
                 <button type="button" class="toggle" :class="{ on: cookieSettings.remote_enabled }"
                         :aria-pressed="cookieSettings.remote_enabled" aria-label="启用远程 CookieCloud"
-                        @click="cookieSettings.remote_enabled = !cookieSettings.remote_enabled"></button>
+                        @click="toggleRemoteCookieService"></button>
               </div>
             </div>
 
@@ -1937,10 +2032,10 @@ onBeforeRouteLeave(async () => {
               </div>
               <div class="field">
                 <label>远程端到端加密密码</label>
-                <input class="input mono" type="password" v-model="cookieSettings.remote_password"
+                <SecretInput v-model="cookieSettings.remote_password" mono @reveal="revealCookieSecret('remote_password')"
                        autocomplete="new-password" placeholder="CookieCloud 浏览器扩展中的加密密码" />
                 <div v-if="cookieSettings.remote_password === '********'" class="hint muted small">
-                  远程密码已安全保存且不会回显。
+                  远程密码已安全保存，点击输入框右侧的眼睛可以查看。
                 </div>
               </div>
               <div class="field">
@@ -2051,7 +2146,8 @@ onBeforeRouteLeave(async () => {
           系统会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
         </div>
         <div class="row gap">
-          <input class="input" style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥" />
+          <SecretInput style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥"
+                       @reveal="revealSystemSecret('WEBHOOK_SECRET', (value, secret) => { value.WEBHOOK_SECRET = secret })" />
           <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">
             <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -2076,7 +2172,8 @@ onBeforeRouteLeave(async () => {
           </a>
         </div>
         <div class="row gap">
-          <input class="input" style="flex:1" v-model="s.API_KEY" placeholder="点右侧随机生成，或自定义密钥" />
+          <SecretInput style="flex:1" v-model="s.API_KEY" placeholder="点右侧随机生成，或自定义密钥"
+                       @reveal="revealSystemSecret('API_KEY', (value, secret) => { value.API_KEY = secret })" />
           <button class="btn sm" @click="genApiKey" title="随机生成 API Key">
             <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -2126,7 +2223,8 @@ onBeforeRouteLeave(async () => {
             <div class="field"><label>用户名 (可空)</label>
               <input class="input" v-model="s.proxy_set.proxy.username" /></div>
             <div class="field"><label>密码 (可空)</label>
-              <input class="input" type="password" v-model="s.proxy_set.proxy.password" /></div>
+              <SecretInput v-model="s.proxy_set.proxy.password"
+                           @reveal="revealSystemSecret('proxy_password', (value, secret) => { value.proxy_set.proxy.password = secret })" /></div>
           </div>
           <div class="test-row">
             <button class="btn sm" @click="testProxy" :disabled="proxyTesting">
@@ -2160,7 +2258,8 @@ onBeforeRouteLeave(async () => {
             <div class="field"><label>端口</label><input class="input" type="number" v-model.number="s.DB_INFO.port" /></div>
             <div class="field"><label>用户</label><input class="input" v-model="s.DB_INFO.user" /></div>
             <div class="field"><label>密码</label>
-              <input class="input" type="password" v-model="s.DB_INFO.password" /></div>
+              <SecretInput v-model="s.DB_INFO.password"
+                           @reveal="revealSystemSecret('db_password', (value, secret) => { value.DB_INFO.password = secret })" /></div>
           </div>
         </template>
         <div class="test-row">
@@ -2331,7 +2430,7 @@ onBeforeRouteLeave(async () => {
         <template v-if="channelForm.type === 'telegram'">
           <div class="field">
             <label>Bot Token</label>
-            <input class="input" v-model="channelForm.config.token"
+            <SecretInput v-model="channelForm.config.token" @reveal="revealChannelSecret('token')"
                    placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
             <div class="hint muted small">Telegram机器人token，格式：123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11</div>
           </div>
@@ -2359,7 +2458,7 @@ onBeforeRouteLeave(async () => {
           </div>
           <div class="field">
             <label>应用Secret</label>
-            <input class="input" v-model="channelForm.config.secret"
+            <SecretInput v-model="channelForm.config.secret" @reveal="revealChannelSecret('secret')"
                    placeholder="企业微信自建应用的Secret" />
             <div class="hint muted small">企业微信自建应用的Secret</div>
           </div>
@@ -2387,7 +2486,7 @@ onBeforeRouteLeave(async () => {
           </div>
           <div class="field">
             <label>设备密钥</label>
-            <input class="input" v-model="channelForm.config.device_key"
+            <SecretInput v-model="channelForm.config.device_key" @reveal="revealChannelSecret('device_key')"
                    placeholder="从 Bark App 中获取" />
             <div class="hint muted small">从 Bark App 中获取的设备密钥</div>
           </div>

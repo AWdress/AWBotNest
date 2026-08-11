@@ -159,6 +159,7 @@ export const api = {
   // 系统设置（config.json）
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
+  revealSecret: (kind, field, id = '') => request('POST', '/api/settings/reveal-secret', { kind, field, id }),
   saveNotificationChannels: (channels) => request('PUT', '/api/settings/notification-channels', { channels }),
   getAiSettings: () => request('GET', '/api/ai/settings'),
   saveAiSettings: (settings) => request('PUT', '/api/ai/settings', { settings }),

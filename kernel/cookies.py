@@ -511,6 +511,32 @@ def _detect_crypto_type(encrypted: str, configured: str) -> str:
     return "legacy" if raw.startswith(b"Salted__") else "aes-128-cbc-fixed"
 
 
+def _decrypt_remote_payload(
+    payload: dict[str, Any], uuid: str, password: str, configured: str,
+) -> tuple[dict[str, Any], str]:
+    if isinstance(payload.get("cookie_data"), dict):
+        return payload, "plain"
+
+    encrypted = str(payload.get("encrypted") or "").strip()
+    if not encrypted:
+        raise CookieServiceError("远程 CookieCloud 中还没有可用数据")
+
+    candidates: list[str] = []
+    declared = str(payload.get("crypto_type") or payload.get("cryptoType") or "").strip()
+    detected = _detect_crypto_type(encrypted, "auto")
+    for crypto_type in (declared, configured, detected, "aes-128-cbc-fixed", "legacy"):
+        if crypto_type in ALLOWED_CRYPTO_TYPES and crypto_type not in candidates:
+            candidates.append(crypto_type)
+
+    last_error: CookieServiceError | None = None
+    for crypto_type in candidates:
+        try:
+            return decrypt_payload(encrypted, uuid, password, crypto_type), crypto_type
+        except CookieServiceError as exc:
+            last_error = exc
+    raise CookieServiceError("Cookie 数据解密失败，请检查 UUID 和密码") from last_error
+
+
 def _filter_remote_data(data: dict[str, Any], domains: list[str]) -> dict[str, Any]:
     if not domains:
         return data
@@ -577,19 +603,14 @@ async def pull_remote_snapshot() -> dict[str, Any]:
             payload = json.loads(bytes(content))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise CookieServiceError("远程 CookieCloud 返回的不是有效数据") from exc
-        if not isinstance(payload, dict) or not payload.get("encrypted"):
+        if not isinstance(payload, dict):
             raise CookieServiceError("远程 CookieCloud 中还没有可用数据")
 
-        encrypted = str(payload["encrypted"])
-        remote_crypto_type = _detect_crypto_type(
-            encrypted,
-            settings["remote_crypto_type"],
-        )
-        decoded = decrypt_payload(
-            encrypted,
+        decoded, _ = _decrypt_remote_payload(
+            payload,
             remote_uuid,
             settings["remote_password"],
-            remote_crypto_type,
+            settings["remote_crypto_type"],
         )
         decoded = _filter_remote_data(decoded, settings["remote_domains"])
         local_encrypted = encrypt_payload(
