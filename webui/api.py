@@ -1465,6 +1465,10 @@ _CHANNEL_SECRET_FIELDS = {
 }
 
 
+def _is_masked_secret(value: Any) -> bool:
+    return value == _MASK or (isinstance(value, str) and _MASK in value)
+
+
 def _secret_response(value: Any) -> JSONResponse:
     return JSONResponse(
         {"value": str(value or "")},
@@ -1513,7 +1517,17 @@ async def reveal_settings_secret(body: Dict[str, Any], user=Depends(_auth_pwc)):
             raise HTTPException(status_code=404, detail="通知渠道不存在")
         allowed = _CHANNEL_SECRET_FIELDS.get(str(channel.get("type") or ""), set())
         if field in allowed:
-            return _secret_response((channel.get("config") or {}).get(field))
+            value = (channel.get("config") or {}).get(field)
+            if field == "token" and channel.get("type") == "telegram" and _is_masked_secret(value):
+                if item_id == "default":
+                    value = settings.get("BOT_TOKEN", "")
+                else:
+                    value = next((
+                        bot.get("token", "")
+                        for bot in settings.get("BOTS") or []
+                        if isinstance(bot, dict) and str(bot.get("id") or "") == item_id
+                    ), "")
+            return _secret_response("" if _is_masked_secret(value) else value)
 
     raise HTTPException(status_code=400, detail="不支持查看这个敏感字段")
 
@@ -1554,8 +1568,10 @@ def _clean_notification_channels(value: Any, current: Any,
         old_config = old_channels.get(channel_id, {}).get("config") or {}
         for field in _CHANNEL_SECRET_FIELDS[channel_type]:
             value_now = channel_config.get(field, "")
-            if value_now == _MASK or (isinstance(value_now, str) and _MASK in value_now):
+            if _is_masked_secret(value_now):
                 original = old_config.get(field, "")
+                if _is_masked_secret(original):
+                    original = ""
                 # 第一次从旧 Bot 配置迁移时，新渠道尚无原值，需按相同 id 回填旧 Token。
                 if not original and field == "token" and channel_type == "telegram" and legacy_settings:
                     if channel_id == "default":
