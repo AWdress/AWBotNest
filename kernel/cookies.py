@@ -378,15 +378,17 @@ def load_snapshot() -> dict[str, Any]:
     return data
 
 
-def encrypted_snapshot(uuid: str) -> dict[str, str]:
+def encrypted_snapshot(uuid: str) -> dict[str, Any]:
     with _LOCK:
         settings = load_settings()
         if not settings["enabled"] or not secrets.compare_digest(uuid, settings["uuid"]):
             raise FileNotFoundError("Cookie 同步配置不存在")
         snapshot = load_snapshot()
+        crypto_type = str(snapshot.get("crypto_type") or "legacy")
         return {
             "encrypted": str(snapshot["encrypted"]),
-            "crypto_type": str(snapshot.get("crypto_type") or "legacy"),
+            "crypto_type": crypto_type,
+            "iv": crypto_type == "aes-128-cbc-fixed",
         }
 
 
@@ -538,6 +540,11 @@ def _detect_crypto_type(encrypted: str, configured: str) -> str:
     except Exception as exc:  # noqa: BLE001
         raise CookieServiceError("远程 CookieCloud 返回的加密数据无效") from exc
     return "legacy" if raw.startswith(b"Salted__") else "aes-128-cbc-fixed"
+
+
+def detect_crypto_type(encrypted: str, configured: str = "auto") -> str:
+    """Return the effective CookieCloud encryption format."""
+    return _detect_crypto_type(encrypted, configured)
 
 
 def _decrypt_remote_payload(

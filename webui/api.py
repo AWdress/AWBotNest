@@ -19,6 +19,7 @@ import json
 import re
 import threading
 import time
+import zlib
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -522,7 +523,11 @@ def _cookiecloud_headers() -> dict[str, str]:
     return {
         "Access-Control-Allow-Origin": "*",
         "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
+        "Access-Control-Allow-Headers": (
+            "Content-Type, Content-Encoding, X-CookieCloud-Auth"
+        ),
+        "Access-Control-Allow-Private-Network": "true",
+        "Access-Control-Max-Age": "86400",
         "Cache-Control": "no-store",
     }
 
@@ -551,19 +556,37 @@ def _check_cookiecloud_rate(request: Request) -> None:
 
 
 async def _cookiecloud_body(request: Request) -> dict[str, Any]:
+    size_limit = cookie_kernel.MAX_ENCRYPTED_BYTES * 2
     try:
         content_length = int(request.headers.get("content-length") or 0)
     except ValueError:
         content_length = 0
-    if content_length > cookie_kernel.MAX_ENCRYPTED_BYTES * 2:
+    if content_length > size_limit:
         raise HTTPException(status_code=413, detail="Cookie 数据超过平台允许的大小")
     content_type = request.headers.get("content-type", "").lower()
     try:
-        if "application/json" in content_type:
-            body = await request.json()
+        if "gzip" in request.headers.get("content-encoding", "").lower():
+            compressed = await request.body()
+            if len(compressed) > size_limit:
+                raise HTTPException(status_code=413, detail="Cookie 数据超过平台允许的大小")
+            decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+            raw = decompressor.decompress(compressed, size_limit + 1)
+            if len(raw) > size_limit or decompressor.unconsumed_tail:
+                raise HTTPException(status_code=413, detail="Cookie 数据超过平台允许的大小")
+            raw += decompressor.flush(size_limit + 1 - len(raw))
+            if len(raw) > size_limit or not decompressor.eof:
+                raise HTTPException(status_code=400, detail="CookieCloud 压缩数据不完整")
+            body = json.loads(raw)
+        elif "application/json" in content_type:
+            raw = await request.body()
+            if len(raw) > size_limit:
+                raise HTTPException(status_code=413, detail="Cookie 数据超过平台允许的大小")
+            body = json.loads(raw)
         else:
             form = await request.form()
             body = dict(form)
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=400, detail="CookieCloud 请求格式无效") from exc
     if not isinstance(body, dict):
@@ -571,9 +594,23 @@ async def _cookiecloud_body(request: Request) -> dict[str, Any]:
     return body
 
 
+@app.options("/cookiecloud")
+async def cookiecloud_root_options():
+    return Response(status_code=204, headers=_cookiecloud_headers())
+
+
 @app.options("/cookiecloud/{path:path}")
 async def cookiecloud_options(path: str):
     return Response(status_code=204, headers=_cookiecloud_headers())
+
+
+@app.api_route("/cookiecloud", methods=["GET", "POST"])
+@app.api_route("/cookiecloud/", methods=["GET", "POST"])
+async def cookiecloud_root():
+    return PlainTextResponse(
+        "Hello AWBotNest! COOKIECLOUD API ROOT = /cookiecloud",
+        headers=_cookiecloud_headers(),
+    )
 
 
 @app.get("/cookiecloud/health")
@@ -599,8 +636,10 @@ async def cookiecloud_update(request: Request):
         if (not settings["enabled"] or not settings["uuid"]
                 or not hmac.compare_digest(uuid.encode("utf-8"), settings["uuid"].encode("utf-8"))):
             return _cookiecloud_response({"detail": "Not Found"}, 404)
-        crypto_type = str(body.get("crypto_type") or "legacy")
-        status = cookie_kernel.save_snapshot(str(body.get("encrypted") or ""), crypto_type)
+        encrypted = str(body.get("encrypted") or "")
+        declared_crypto_type = str(body.get("crypto_type") or "auto")
+        crypto_type = cookie_kernel.detect_crypto_type(encrypted, declared_crypto_type)
+        status = cookie_kernel.save_snapshot(encrypted, crypto_type)
         logger.info("CookieCloud 已接收浏览器同步：%d 个 Cookie，%d 个域名",
                     status["cookie_count"], status["domain_count"])
         return _cookiecloud_response({"action": "done"})
