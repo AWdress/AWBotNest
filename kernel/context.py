@@ -195,22 +195,9 @@ class _ClientProxy:
         fallback_content = content
         parse_mode = None
         if rich_format == "html":
-            import re
-            from bs4 import BeautifulSoup
+            from kernel.rich_text import rich_html_to_plain
 
-            soup = BeautifulSoup(content, "html.parser")
-            for br in soup.find_all("br"):
-                br.replace_with("\n")
-            for item in soup.find_all("li"):
-                item.insert_before("• ")
-                item.append("\n")
-            block_tags = [
-                "p", "div", "section", "article", "blockquote", "pre", "tr",
-                *[f"h{i}" for i in range(1, 7)],
-            ]
-            for block in soup.find_all(block_tags):
-                block.append("\n")
-            fallback_content = re.sub(r"\n{3,}", "\n\n", soup.get_text()).strip()
+            fallback_content = rich_html_to_plain(content)
             if not fallback_content:
                 fallback_content = "当前账号不支持这条 Rich Message 的内容格式。"
         else:
@@ -406,7 +393,7 @@ class PlatformContext:
             return 0
 
     async def notify(self, text: str, level: str = "info", category: str | None = None,
-                     account: Any = None, **kwargs) -> Any:
+                     account: Any = None, format: str = "text", **kwargs) -> Any:
         """
         提交一条通知给平台通知中心。插件只管「内容 + 级别 + 分类 + 哪个账号」，
         平台统一分类（打级别标签 + 插件名 + 账号名）、套格式，再通过 Bot 发给管理员
@@ -416,13 +403,51 @@ class PlatformContext:
         category: 可选业务分类（如「订单」「签到」），显示在标签里
         account: 多账号场景下标明「这条是哪个账号的」。在 handler 里直接传 client：
                  `await ctx.notify("...", account=client)`，平台会显示该账号名。
+        format: text（默认）或 rich。rich 支持平台白名单内的表格和文字样式，
+                非会员用户账号及非 Telegram 渠道会自动转换为兼容文本。
         """
         from kernel import notifier
         meta = self._registry.get_meta(self.plugin_id)
         plugin_name = meta.name if meta else self.plugin_id
         return await notifier.submit(
             self._accounts, self.plugin_id, plugin_name, text,
-            level=level, category=category, account=account, **kwargs,
+            level=level, category=category, account=account, format=format, **kwargs,
+        )
+
+    async def notify_table(
+        self,
+        headers,
+        rows,
+        *,
+        caption: str | None = None,
+        level: str = "info",
+        category: str | None = None,
+        account: Any = None,
+        bordered: bool = True,
+        striped: bool = True,
+        align="left",
+        valign: str = "middle",
+        **kwargs,
+    ) -> Any:
+        """发送结构化表格通知；平台负责富文本显示和非会员兼容排版。"""
+        from kernel.rich_text import build_rich_table
+
+        content = build_rich_table(
+            headers,
+            rows,
+            caption=caption,
+            bordered=bordered,
+            striped=striped,
+            align=align,
+            valign=valign,
+        )
+        return await self.notify(
+            content,
+            level=level,
+            category=category,
+            account=account,
+            format="rich",
+            **kwargs,
         )
 
     async def _notify_cookie_sync(self, domain: str) -> None:

@@ -178,6 +178,19 @@ await ctx.notify("有新订单")
 await ctx.notify("磁盘空间不足", level="warning")
 await ctx.notify("任务失败", level="error", category="备份")
 
+# 结构化表格：Telegram Bot/会员账号显示原生表格，其他渠道自动转成分组文本
+await ctx.notify_table(
+    ["账号", "状态", "积分"],
+    [
+        ["账号一", "成功", 37298],
+        ["账号二", "失败", 1260],
+    ],
+    caption="签到结果",
+    level="success",
+    category="每日签到",
+    align=["left", "center", "right"],
+)
+
 @ctx.on_message(ctx.filters.text)
 async def h(client, message):
     await ctx.notify("已抢到红包", account=client)
@@ -186,9 +199,31 @@ async def h(client, message):
 - `level`：`info` / `success` / `warning` / `error`，平台按级别加标签。
 - `category`：可选业务分类（如「订单」「签到」），显示于标签中。
 - `account`：多账号场景下传入处理器收到的 `client`，平台自动标注来源账号名。
+- `format="rich"`：发送复杂富文本通知，可使用安全白名单内的表格标签和文字样式。
+- `notify_table(headers, rows, ...)`：推荐的表格通知接口，默认带边框和隔行底色，支持每列对齐。
 - 平台优先经 Bot 私聊管理员（需管理员已 `/start` 过 Bot），不可用时回退至主账号收藏夹；每条通知同时写入运行日志。
 - 具体走哪个 Bot 由平台按插件分配（见上「多 Bot」），插件无需关心。
+- Telegram Bot 和 Premium 用户账号使用原生 Rich Message；普通用户账号、企业微信和 Bark 会由平台自动转换成清晰的兼容文本，插件不要自行判断会员状态。
 - 推送通知一律走 `ctx.notify`，不要自行调用 `ctx.bot.send` 实现。
+
+复杂表格可直接提交 Rich Message HTML：
+
+```python
+await ctx.notify(
+    """
+    <table bordered striped>
+      <caption>任务统计</caption>
+      <tr><th>任务</th><th align="right">数量</th></tr>
+      <tr><td><b>已完成</b></td><td align="right">20</td></tr>
+    </table>
+    """,
+    format="rich",
+)
+```
+
+允许的表格能力包括 `bordered`、`striped`、`caption`、`th`、水平/垂直对齐、
+`colspan`、`rowspan`，以及单元格内的 `b`、`i`、`mark`。平台会移除脚本、事件属性和
+不支持的标签，避免通知内容影响客户端安全。
 
 若需管理员的 Telegram 数字 ID（如直接发送至特定会话），用 `ctx.owner_id`（无主账号时为 `0`）。
 

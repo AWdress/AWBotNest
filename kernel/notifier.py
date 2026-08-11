@@ -13,11 +13,13 @@ import time
 import threading
 import json
 import os
+import html
 from collections import deque
 from pathlib import Path
 from typing import Any, Optional
 
 from core import logger
+from kernel.rich_text import rich_html_to_plain, sanitize_rich_html, text_to_rich_html
 
 # 级别 → 图标标签（分类的可视化）
 _LEVEL_CN = {
@@ -25,6 +27,12 @@ _LEVEL_CN = {
     "success": "成功",
     "warning": "警告",
     "error": "错误",
+}
+_LEVEL_ICON = {
+    "info": "🔔",
+    "success": "✅",
+    "warning": "⚠️",
+    "error": "❌",
 }
 
 # 通知中心历史保存在 data 卷中，容器更新后仍可恢复。
@@ -85,18 +93,66 @@ def _account_label(account: Any) -> Optional[str]:
     return getattr(account, "name", None) or None
 
 
-def _format(plugin_name: str, text: str, level: str, category: Optional[str],
-            account_label: Optional[str]) -> str:
-    """统一格式：【图标 插件名 · 级别(· 分类)】(换行 账号)换行正文。"""
+def _format_plain(plugin_name: str, text: str, level: str, category: Optional[str],
+                  account_label: Optional[str]) -> str:
+    """为普通账号和非 Telegram 渠道生成层次清晰的兼容文本。"""
     level_cn = _LEVEL_CN.get(level, level)
-    head = f"【{level_cn}】{plugin_name}"
+    icon = _LEVEL_ICON.get(level, "🔔")
+    lines = [f"{icon} {plugin_name}"]
+    details = [level_cn]
     if category:
-        head += f" · {category}"
-    lines = [head]
+        details.append(category)
     if account_label:
-        lines.append(f"账号：{account_label}")
-    lines.append(text)
+        details.append(f"账号：{account_label}")
+    lines.extend([" · ".join(details), "────────────", text])
     return "\n".join(lines)
+
+
+def _format_rich(plugin_name: str, content: str, level: str, category: Optional[str],
+                 account_label: Optional[str]) -> str:
+    """为 Telegram 原生 Rich Message 生成统一标题和正文。"""
+    level_cn = _LEVEL_CN.get(level, level)
+    icon = _LEVEL_ICON.get(level, "🔔")
+    details = [f"<mark>{html.escape(level_cn)}</mark>"]
+    if category:
+        details.append(f"<b>{html.escape(category)}</b>")
+    if account_label:
+        details.append(f"<i>账号：{html.escape(account_label)}</i>")
+    return (
+        f"<b>{icon} {html.escape(plugin_name)}</b><br>"
+        f"{' · '.join(details)}<br><br>{content}"
+    )
+
+
+async def _supports_native_rich(client: Any) -> bool:
+    if not client or not getattr(client, "is_connected", False):
+        return False
+    if not callable(getattr(client, "send_rich_message", None)):
+        return False
+    me = getattr(client, "me", None)
+    if me is None:
+        try:
+            me = await client.get_me()
+        except Exception:  # noqa: BLE001
+            return False
+    return bool(getattr(me, "is_bot", False) or getattr(me, "is_premium", False))
+
+
+async def _send_telegram(client: Any, target: Any, rich_body: str, plain_body: str,
+                         send_kwargs: dict[str, Any]) -> Any:
+    """优先发送原生富文本；普通用户或发送不兼容时自动使用美观文本。"""
+    kwargs = dict(send_kwargs)
+    kwargs.pop("parse_mode", None)
+    if await _supports_native_rich(client):
+        try:
+            from pyrogram import types
+            from pyrogram.errors import RPCError
+
+            message = types.InputRichMessage(html=rich_body)
+            return await client.send_rich_message(target, message, **kwargs)
+        except (RPCError, TypeError, ValueError) as exc:
+            logger.warning("Rich Message 发送失败，已自动改用兼容文本: %r", exc)
+    return await client.send_message(target, plain_body, parse_mode=None, **kwargs)
 
 
 def _owner_id() -> int:
@@ -115,6 +171,7 @@ async def submit(
     level: str = "info",
     category: Optional[str] = None,
     account: Any = None,
+    format: str = "text",
     **send_kwargs,
 ) -> Any:
     """
@@ -133,7 +190,23 @@ async def submit(
     text = str(text or "")
     category = str(category).strip() if category is not None else None
     account_label = _account_label(account)
-    body = _format(plugin_name, text, level, category, account_label)
+    content_format = str(format or "text").strip().lower()
+    if content_format not in {"text", "rich"}:
+        raise ValueError("通知格式只支持 text 或 rich")
+    if content_format == "rich":
+        rich_content = sanitize_rich_html(text)
+        plain_content = rich_html_to_plain(rich_content)
+    else:
+        rich_content = text_to_rich_html(text)
+        plain_content = text.strip()
+    if not plain_content:
+        raise ValueError("通知内容不能为空")
+    rich_body = _format_rich(
+        plugin_name, rich_content, level, category, account_label,
+    )
+    plain_body = _format_plain(
+        plugin_name, plain_content, level, category, account_label,
+    )
 
     # 记入通知中心历史
     with _HISTORY_LOCK:
@@ -147,7 +220,7 @@ async def submit(
             "level": level,
             "category": category,
             "account": account_label,
-            "text": text,
+            "text": plain_content,
         })
         try:
             _save_history_locked()
@@ -155,13 +228,18 @@ async def submit(
             pass
     # 同时进运行日志（前端日志页可见，带插件名 + 账号）
     acc_tag = f"[{account_label}]" if account_label else ""
-    logger.info("[通知][%s]%s %s%s", plugin_name, acc_tag, f"({category}) " if category else "", text)
+    logger.info(
+        "[通知][%s]%s %s%s",
+        plugin_name, acc_tag, f"({category}) " if category else "", plain_content,
+    )
 
     channel_ids = _plugin_channel_ids(plugin_id)
     delivered = False
     for channel_id in channel_ids:
         try:
-            if await _send_to_channel(accounts, channel_id, body, send_kwargs):
+            if await _send_to_channel(
+                accounts, channel_id, rich_body, plain_body, send_kwargs,
+            ):
                 delivered = True
         except Exception as e:  # noqa: BLE001
             logger.warning("通知渠道 [%s] 发送失败: %r", channel_id or "默认", e)
@@ -172,7 +250,7 @@ async def submit(
     # 所有渠道都不可用时保留原有兜底：发到主用户账号收藏夹。
     user = getattr(accounts, "primary_user_app", None)
     if accounts.connection_ready(user):
-        return await user.send_message("me", body, **send_kwargs)
+        return await _send_telegram(user, "me", rich_body, plain_body, send_kwargs)
     raise RuntimeError("无可用通知渠道，且没有在线用户账号可用于保底投递")
 
 
@@ -197,8 +275,8 @@ def _plugin_channel_ids(plugin_id: str) -> list[str]:
     return ids if ids else [""]
 
 
-async def _send_to_channel(accounts: Any, channel_id: str, body: str,
-                           send_kwargs: dict[str, Any]) -> bool:
+async def _send_to_channel(accounts: Any, channel_id: str, rich_body: str,
+                           plain_body: str, send_kwargs: dict[str, Any]) -> bool:
     """向单个渠道发送；配置中存在但已禁用的渠道不会走旧 Bot 回退。"""
     channel_config = _get_channel_config(channel_id) if channel_id else None
     if channel_config is not None:
@@ -216,13 +294,11 @@ async def _send_to_channel(accounts: Any, channel_id: str, body: str,
             target = target or _owner_id() or None
             if not target:
                 return False
-            return await send_notification(
-                channel_type="telegram", config=config_data, message=body,
-                bot=bot, target=target, **send_kwargs,
-            )
+            await _send_telegram(bot, target, rich_body, plain_body, send_kwargs)
+            return True
         if channel_type in {"wechat", "bark"}:
             return await send_notification(
-                channel_type=channel_type, config=config_data, message=body,
+                channel_type=channel_type, config=config_data, message=plain_body,
             )
         return False
 
@@ -234,7 +310,7 @@ async def _send_to_channel(accounts: Any, channel_id: str, body: str,
     target = _bot_chat_id(resolved_id) or _owner_id() or None
     if not target:
         return False
-    await bot.send_message(target, body, **send_kwargs)
+    await _send_telegram(bot, target, rich_body, plain_body, send_kwargs)
     return True
 
 
