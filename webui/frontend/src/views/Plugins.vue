@@ -1,6 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, nextTick, watch } from 'vue'
-import { Flame } from '@lucide/vue'
+import { Flame, GripVertical } from '@lucide/vue'
 import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import RemotePluginConfig from '../components/RemotePluginConfig.vue'
@@ -12,6 +12,9 @@ import logo from '../assets/logo.png'
 const tab = ref('mine')   // mine | store
 
 const plugins = ref([])
+const customPluginOrder = ref(false)
+const draggedPluginId = ref('')
+const orderSaving = ref(false)
 const loading = ref(true)
 const error = ref('')
 const busy = ref({})
@@ -126,6 +129,7 @@ async function load() {
   try {
     const data = await api.listPlugins()
     plugins.value = data.plugins
+    customPluginOrder.value = !!data.custom_order
   } catch (e) {
     error.value = e.message
   } finally {
@@ -571,8 +575,57 @@ const filteredPlugins = computed(() => {
   if (pluginFilter.value === 'enabled') filtered = filtered.filter((p) => p.enabled && !p.error)
   if (pluginFilter.value === 'disabled') filtered = filtered.filter((p) => !p.enabled && !p.error)
   if (pluginFilter.value === 'error') filtered = filtered.filter((p) => p.error)
-  return [...filtered].sort(sortByHeat)
+  return customPluginOrder.value ? [...filtered] : [...filtered].sort(sortByHeat)
 })
+
+function startPluginDrag(plugin, event) {
+  if (pluginFilter.value !== 'all' || orderSaving.value) {
+    event.preventDefault()
+    return
+  }
+  draggedPluginId.value = plugin.id
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', plugin.id)
+}
+
+function allowPluginDrop(event) {
+  if (pluginFilter.value !== 'all' || orderSaving.value) return
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+}
+
+function finishPluginDrag() {
+  draggedPluginId.value = ''
+}
+
+async function dropPluginBefore(target, event) {
+  event.preventDefault()
+  const sourceId = draggedPluginId.value || event.dataTransfer.getData('text/plain')
+  draggedPluginId.value = ''
+  if (!sourceId || sourceId === target.id || pluginFilter.value !== 'all') return
+  const from = plugins.value.findIndex((plugin) => plugin.id === sourceId)
+  if (from < 0 || !plugins.value.some((plugin) => plugin.id === target.id)) return
+  const next = [...plugins.value]
+  const [moved] = next.splice(from, 1)
+  const targetIndex = next.findIndex((plugin) => plugin.id === target.id)
+  const rect = event.currentTarget.getBoundingClientRect()
+  const relativeY = (event.clientY - rect.top) / Math.max(rect.height, 1)
+  const insertAfter = relativeY > .65
+    || (relativeY >= .35 && event.clientX > rect.left + rect.width / 2)
+  next.splice(targetIndex + (insertAfter ? 1 : 0), 0, moved)
+  plugins.value = next
+  customPluginOrder.value = true
+  orderSaving.value = true
+  try {
+    await api.savePluginOrder(next.map((plugin) => plugin.id))
+    toast.success('插件位置已保存')
+  } catch (err) {
+    error.value = `保存插件位置失败: ${err.message}`
+    await load()
+  } finally {
+    orderSaving.value = false
+  }
+}
 
 // ── 插件市场（多仓库聚合） ──
 const store = ref([])
@@ -1102,7 +1155,8 @@ onUnmounted(() => {
       </div>
       <div v-else class="grid">
         <div v-for="p in filteredPlugins" :key="p.id" class="card plugin-card clickable"
-             :class="{ err: p.error, 'menu-open': menuFor === p.id }"
+             :class="{ err: p.error, 'menu-open': menuFor === p.id, 'drag-source': draggedPluginId === p.id }"
+             @dragover="allowPluginDrop" @drop="dropPluginBefore(p, $event)"
              @click="openConfig(p)">
           <div class="card-head">
             <div class="store-title">
@@ -1129,6 +1183,12 @@ onUnmounted(() => {
             <span class="meta-item">{{ scopeLabel[p.scope] || p.scope }}</span>
             <span class="meta-item">v{{ p.version }}</span>
             <span v-if="p.author" class="meta-item">{{ p.author }}</span>
+            <button class="drag-handle" :class="{ disabled: pluginFilter !== 'all' || orderSaving }"
+                    :draggable="pluginFilter === 'all' && !orderSaving"
+                    @dragstart.stop="startPluginDrag(p, $event)" @dragend="finishPluginDrag"
+                    @click.stop title="拖动调整位置" aria-label="拖动调整插件位置">
+              <GripVertical aria-hidden="true" />
+            </button>
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
@@ -1684,9 +1744,19 @@ onUnmounted(() => {
   border-color: rgba(224, 72, 79, .48);
   box-shadow: inset 0 0 0 1px rgba(224, 72, 79, .08);
 }
+.plugin-card.drag-source { opacity: .48; transform: scale(.985); }
+.drag-handle {
+  width: 24px; height: 24px; padding: 0; margin-left: auto;
+  display: inline-grid; place-items: center; border: 0; border-radius: 6px;
+  color: var(--text-muted); background: transparent; cursor: grab;
+}
+.drag-handle:hover { color: var(--accent); background: var(--bg-hover); }
+.drag-handle:active { cursor: grabbing; }
+.drag-handle.disabled { opacity: .35; cursor: not-allowed; }
+.drag-handle svg { width: 15px; height: 15px; }
 
 .kebab-wrap { margin-left: auto; position: relative; }
-.plugin-card.clickable .heat-count { margin-left: auto; }
+.plugin-card.clickable .heat-count { margin-left: 0; }
 .plugin-card.clickable .kebab-wrap { margin-left: 0; }
 .store-card .heat-count { margin-left: auto; }
 .kebab {

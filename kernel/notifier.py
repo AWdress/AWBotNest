@@ -22,6 +22,7 @@ from core import logger
 from kernel.rich_text import (
     rich_html_to_plain,
     sanitize_rich_html,
+    structured_to_rich_html,
     text_to_notification_rich_html,
 )
 
@@ -171,7 +172,7 @@ async def submit(
     accounts: Any,
     plugin_id: str,
     plugin_name: str,
-    text: str,
+    text: Any,
     level: str = "info",
     category: Optional[str] = None,
     account: Any = None,
@@ -191,16 +192,20 @@ async def submit(
     level = level if level in _LEVEL_CN else "info"
     plugin_id = str(plugin_id or "")
     plugin_name = str(plugin_name or plugin_id or "系统")
-    text = str(text or "")
     category = str(category).strip() if category is not None else None
     account_label = _account_label(account)
     content_format = str(format or "text").strip().lower()
     if content_format not in {"text", "rich"}:
         raise ValueError("通知格式只支持 text 或 rich")
-    if content_format == "rich":
+    if isinstance(text, (dict, list)):
+        rich_content = structured_to_rich_html(text)
+        plain_content = rich_html_to_plain(rich_content)
+    elif content_format == "rich":
+        text = str(text or "")
         rich_content = sanitize_rich_html(text)
         plain_content = rich_html_to_plain(rich_content)
     else:
+        text = str(text or "")
         rich_content = text_to_notification_rich_html(text)
         plain_content = text.strip()
     if not plain_content:

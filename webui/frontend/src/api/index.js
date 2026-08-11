@@ -63,6 +63,7 @@ export const api = {
 
   // 插件
   listPlugins: () => request('GET', '/api/plugins'),
+  savePluginOrder: (order) => request('PUT', '/api/plugins/order', { order }),
   listAiPlugins: () => request('GET', '/api/ai/plugins'),
   enablePlugin: (id) => request('POST', `/api/plugins/${id}/enable`),
   disablePlugin: (id) => request('POST', `/api/plugins/${id}/disable`),

@@ -260,7 +260,7 @@ async def setup(ctx):
 
 插件**不直接**发通知，而是提交给平台通知中心 `kernel/notifier.py`，由平台统一处理：
 
-1. 插件调 `await ctx.notify(text, level="info", category=None, account=client)` —— 只提供内容、级别、分类，以及（多账号时）触发的账号。结构化数据可用 `ctx.notify_table(headers, rows, ...)`；复杂表格可用 `ctx.notify(..., format="rich")`。
+1. 插件调 `await ctx.notify(text, level="info", category=None, account=client)` —— 只提供内容、级别、分类，以及（多账号时）触发的账号。`text` 可直接传 `dict`、`list[dict]`、二维 `list` 或普通 `list`，平台自动生成表格；也可用 `ctx.notify_table(headers, rows, ...)` 明确指定表头，复杂表格可用 `ctx.notify(..., format="rich")`。
 2. 平台 `notifier.submit` 负责**分类与统一格式**：按 `level`（info/success/warning/error）显示图标和标题，附加插件名、可选 `category`；**多账号场景标注账号名**（从传入的 `account` client 解析 `me.first_name`→session 名，与账号管理页一致），让管理员知道是哪个账号的消息。Telegram Bot/Premium 用户账号发送原生 Rich Message；普通用户账号、企业微信和 Bark 自动转换为清晰的分组文本。
 3. 平台**统一投递**给管理员：优先 **本插件被平台分配的 Bot**（见 §8.2 多 Bot）私聊（`MY_TGID`，需管理员 /start 过该 Bot），Bot 不可用时回退主账号「收藏夹」。
 4. 每条通知同时记入运行日志（带插件名）与通知中心历史环形缓冲（最近 200 条）。

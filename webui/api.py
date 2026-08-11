@@ -61,6 +61,7 @@ PLUGINS_DIR = Path("plugins")
 WEBUI_DATA_DIR = Path("data") / "webui"
 AVATAR_DIR = WEBUI_DATA_DIR / "avatar"
 NOTIFICATION_STATE_FILE = WEBUI_DATA_DIR / "notification_state.json"
+PLUGIN_ORDER_FILE = WEBUI_DATA_DIR / "plugin_order.json"
 _SCHEDULER_JOBS_PENDING: set[str] = set()
 _SCHEDULER_JOBS_RUNNING: set[str] = set()
 _SCHEDULER_LISTENER_INSTALLED = False
@@ -249,6 +250,23 @@ def _write_notification_state(value: dict) -> None:
     temp_path = NOTIFICATION_STATE_FILE.with_suffix(".tmp")
     temp_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
     os.replace(temp_path, NOTIFICATION_STATE_FILE)
+
+
+def _read_plugin_order() -> list[str]:
+    try:
+        value = json.loads(PLUGIN_ORDER_FILE.read_text(encoding="utf-8"))
+        if not isinstance(value, list):
+            return []
+        return list(dict.fromkeys(str(item) for item in value if str(item).strip()))
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def _write_plugin_order(value: list[str]) -> None:
+    WEBUI_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    temp_path = PLUGIN_ORDER_FILE.with_suffix(".tmp")
+    temp_path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
+    os.replace(temp_path, PLUGIN_ORDER_FILE)
 
 
 def _notification_read_at() -> float:
@@ -771,7 +789,35 @@ async def list_plugins(user=Depends(_auth)):
         d["has_frontend"] = registry.has_frontend(m.id) if m.render_mode == "vue" else False
         d["install_count"] = install_counts.get(m.id, 0)
         out.append(d)
-    return {"plugins": out}
+    saved_order = _read_plugin_order()
+    if saved_order:
+        positions = {plugin_id: index for index, plugin_id in enumerate(saved_order)}
+        out.sort(key=lambda item: (
+            positions.get(item["id"], len(positions)),
+            -int(item.get("install_count") or 0),
+            str(item.get("name") or item["id"]),
+        ))
+    else:
+        out.sort(key=lambda item: (
+            -int(item.get("install_count") or 0),
+            str(item.get("name") or item["id"]),
+        ))
+    return {"plugins": out, "custom_order": bool(saved_order)}
+
+
+@app.put("/api/plugins/order")
+async def save_plugin_order(body: Dict[str, Any], user=Depends(_auth_pwc)):
+    order = body.get("order")
+    if not isinstance(order, list) or len(order) > 2000:
+        raise HTTPException(status_code=400, detail="插件顺序格式不正确")
+    known_ids = {meta.id for meta in registry.scan()}
+    clean_order = [str(item).strip() for item in order]
+    if (any(not item or item not in known_ids for item in clean_order)
+            or len(clean_order) != len(set(clean_order))
+            or set(clean_order) != known_ids):
+        raise HTTPException(status_code=400, detail="插件顺序与当前已安装插件不一致，请刷新后重试")
+    _write_plugin_order(clean_order)
+    return {"status": "success", "order": clean_order}
 
 
 @app.post("/api/plugins/upload")

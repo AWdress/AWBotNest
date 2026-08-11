@@ -128,6 +128,60 @@ def text_to_rich_html(text: str) -> str:
     return html.escape(str(text or "")).replace("\r\n", "\n").replace("\r", "\n").replace("\n", "<br>")
 
 
+def structured_to_rich_html(data: dict[Any, Any] | list[Any]) -> str:
+    """把插件直接提交的 dict/list 转换成通知表格。"""
+    if isinstance(data, dict):
+        if not data:
+            raise ValueError("通知内容不能为空")
+        if all(isinstance(value, dict) for value in data.values()):
+            columns: list[Any] = []
+            for value in data.values():
+                for key in value:
+                    if key not in columns:
+                        columns.append(key)
+            if columns:
+                return build_rich_table(
+                    ["项目", *columns],
+                    [[key, *(value.get(column, "") for column in columns)] for key, value in data.items()],
+                    caption="通知明细",
+                )
+        return build_rich_table(
+            ["项目", "内容"], [[key, value] for key, value in data.items()],
+            caption="通知明细",
+        )
+
+    if not isinstance(data, list):
+        raise TypeError("结构化通知只支持 dict 或 list")
+    if not data:
+        raise ValueError("通知内容不能为空")
+    if all(isinstance(item, dict) for item in data):
+        columns: list[Any] = []
+        for item in data:
+            for key in item:
+                if key not in columns:
+                    columns.append(key)
+        if not columns:
+            raise ValueError("通知内容不能为空")
+        return build_rich_table(
+            columns, [[item.get(column, "") for column in columns] for item in data],
+            caption="通知明细",
+        )
+    if all(isinstance(item, (list, tuple)) for item in data):
+        width = len(data[0])
+        if width < 1 or any(len(item) != width for item in data):
+            raise ValueError("二维列表的每一行列数必须一致")
+        return build_rich_table(
+            [f"第 {index + 1} 列" for index in range(width)], data,
+            caption="通知明细",
+        )
+    if any(isinstance(item, (dict, list, tuple)) for item in data):
+        raise ValueError("列表内容必须使用同一种结构")
+    return build_rich_table(
+        ["序号", "内容"], [[index, value] for index, value in enumerate(data, 1)],
+        caption="通知明细", align=["right", "left"],
+    )
+
+
 def text_to_notification_rich_html(text: str) -> str:
     """识别常见的多行通知明细，让旧插件的普通文本也能自动显示为表格。"""
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
@@ -139,39 +193,108 @@ def text_to_notification_rich_html(text: str) -> str:
         (
             re.compile(r"^(?:账号|账户)\s*[：:]?\s*(\S+)\s+(.+)$"),
             ["账号", "结果"],
+            "账号明细",
+            ["left", "left"],
         ),
         (
             re.compile(r"^[\[【]([^\]】]+)[\]】]\s*(.+)$"),
             ["项目", "结果"],
+            "处理明细",
+            ["left", "left"],
         ),
         (
-            re.compile(r"^([^：:]{1,12})[：:]\s*(.+)$"),
+            re.compile(r"^[•·\-*]?\s*(.+?)\s*\*\s*(\d+)\s*$"),
+            ["奖品", "数量"],
+            "奖品明细",
+            ["left", "right"],
+        ),
+        (
+            re.compile(r"^([^：:]{1,32})[：:]\s*(.+)$"),
             ["项目", "内容"],
+            "任务明细",
+            ["left", "left"],
         ),
     ]
-    for pattern, headers in patterns:
+    for pattern, headers, caption, aligns in patterns:
         rows: list[list[str]] = []
-        summary: list[str] = []
-        for line in lines:
+        indexes: list[int] = []
+        for index, line in enumerate(lines):
             match = pattern.match(line)
             if match:
                 rows.append([match.group(1).strip(), match.group(2).strip()])
-            else:
-                summary.append(line)
+                indexes.append(index)
         if len(rows) < 2:
+            continue
+        if indexes != list(range(indexes[0], indexes[-1] + 1)):
             continue
 
         table = build_rich_table(
             headers,
             rows,
-            caption="明细",
+            caption=caption,
             bordered=True,
             striped=True,
-            align=["left", "left"],
+            align=aligns,
         )
-        if not summary:
-            return table
-        return f"{text_to_rich_html(chr(10).join(summary))}<br><br>{table}"
+        parts = []
+        if indexes[0] > 0:
+            parts.append(text_to_rich_html(chr(10).join(lines[:indexes[0]])))
+        parts.append(table)
+        if indexes[-1] + 1 < len(lines):
+            parts.append(text_to_rich_html(chr(10).join(lines[indexes[-1] + 1:])))
+        return "<br><br>".join(parts)
+
+    # “今日回复 3，签到 已签到”这类单行统计拆成项目表格，后续字段行一并收纳。
+    for index, line in enumerate(lines):
+        segments = [value.strip() for value in re.split(r"[，,]", line) if value.strip()]
+        metric_rows = []
+        for segment in segments:
+            match = re.match(r"^(.{1,12}?)[：:\s]+([^：:]+)$", segment)
+            if not match:
+                metric_rows = []
+                break
+            metric_rows.append([match.group(1).strip(), match.group(2).strip()])
+        if len(metric_rows) < 2:
+            continue
+
+        end_index = index
+        for following in lines[index + 1:]:
+            match = re.match(r"^([^：:]{1,32})[：:]\s*(.+)$", following)
+            if not match:
+                break
+            metric_rows.append([match.group(1).strip(), match.group(2).strip()])
+            end_index += 1
+        table = build_rich_table(
+            ["项目", "结果"], metric_rows, caption="运行结果",
+            bordered=True, striped=True, align=["left", "left"],
+        )
+        parts = []
+        if index > 0:
+            parts.append(text_to_rich_html(chr(10).join(lines[:index])))
+        parts.append(table)
+        if end_index + 1 < len(lines):
+            parts.append(text_to_rich_html(chr(10).join(lines[end_index + 1:])))
+        return "<br><br>".join(parts)
+
+    # 抽奖等待等通知常由“状态 + UUID + 消息链接”组成，转换为简单信息表。
+    uuid_indexes = [
+        index for index, line in enumerate(lines)
+        if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", line)
+    ]
+    url_indexes = [index for index, line in enumerate(lines) if re.fullmatch(r"https?://\S+", line)]
+    if len(uuid_indexes) == 1 and len(url_indexes) == 1:
+        uuid_index = uuid_indexes[0]
+        url_index = url_indexes[0]
+        other_lines = [
+            line for index, line in enumerate(lines)
+            if index not in {uuid_index, url_index}
+        ]
+        if len(other_lines) == 1:
+            return build_rich_table(
+                ["项目", "内容"],
+                [["状态", other_lines[0]], ["抽奖编号", lines[uuid_index]], ["查看消息", lines[url_index]]],
+                caption="抽奖信息", bordered=True, striped=True, align=["left", "left"],
+            )
 
     return text_to_rich_html(raw)
 

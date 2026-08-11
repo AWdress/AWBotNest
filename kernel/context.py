@@ -392,7 +392,7 @@ class PlatformContext:
         except Exception:  # noqa: BLE001
             return 0
 
-    async def notify(self, text: str, level: str = "info", category: str | None = None,
+    async def notify(self, text: Any, level: str = "info", category: str | None = None,
                      account: Any = None, format: str = "text", **kwargs) -> Any:
         """
         提交一条通知给平台通知中心。插件只管「内容 + 级别 + 分类 + 哪个账号」，
@@ -405,6 +405,7 @@ class PlatformContext:
                  `await ctx.notify("...", account=client)`，平台会显示该账号名。
         format: text（默认）或 rich。rich 支持平台白名单内的表格和文字样式，
                 非会员用户账号及非 Telegram 渠道会自动转换为兼容文本。
+        text 也可以直接传 dict、list[dict]、二维 list 或普通 list，平台会自动生成表格。
         """
         from kernel import notifier
         meta = self._registry.get_meta(self.plugin_id)

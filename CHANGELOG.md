@@ -9,6 +9,8 @@
 这一版升级了 Telegram 通信能力，让插件可以通过平台统一发送 Rich Message，不再需要自己调用底层接口。
 
 **Rich Message：**
+- 插件通知可以直接提交字典或列表，平台会自动整理成表格，不需要插件自己拼格式。
+- “我的插件”默认按热度排列，也可以拖动卡片上的排序按钮并自动保存位置。
 - Kurigram 升级到 2.2.24，补全 Rich Message 和流式草稿所需能力。
 - 插件可以通过 `ctx.bot` 或 `ctx.user` 发送 Rich Message，不需要直接引用 Kurigram。
 - 机器人和 Telegram Premium 用户账号使用原生 Rich Message，普通用户账号会自动改用兼容消息，避免发送失败。
