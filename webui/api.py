@@ -66,6 +66,7 @@ _SCHEDULER_JOBS_RUNNING: set[str] = set()
 _SCHEDULER_LISTENER_INSTALLED = False
 _SYSTEM_SCHEDULER_JOB_NAMES = {
     "log_cleaner": "日志清理",
+    "cookiecloud_remote_sync": "远程 Cookie 同步",
 }
 _RESOURCE_SAMPLE = {
     "wall": time.monotonic(), "cpu": time.process_time(), "cgroup_cpu": None, "result": None,
@@ -620,13 +621,44 @@ async def put_cookie_settings(body: Dict[str, Any], user=Depends(_auth_pwc)):
         raise HTTPException(status_code=400, detail="Cookie 同步设置必须是对象")
     try:
         saved = cookie_kernel.save_settings(incoming)
+        from schedulers.universal.cookie_sync import start_remote_cookie_sync
+        try:
+            await start_remote_cookie_sync(run_now=False)
+        except Exception as exc:  # noqa: BLE001 - 设置已保存，调度失败不应伪装成保存失败
+            logger.error("远程 CookieCloud 定时任务刷新失败：%s", exc)
         return {
             "status": "success",
-            "settings": {**saved, "password": cookie_kernel.MASK if saved["password"] else ""},
+            "settings": {
+                **saved,
+                "password": cookie_kernel.MASK if saved["password"] else "",
+                "remote_password": (
+                    cookie_kernel.MASK if saved["remote_password"] else ""
+                ),
+            },
             "sync_status": cookie_kernel.snapshot_status(),
             "history": cookie_kernel.sync_history(),
         }
     except cookie_kernel.CookieServiceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/cookies/remote-sync")
+async def sync_remote_cookies(user=Depends(_auth_pwc)):
+    try:
+        status = await cookie_kernel.pull_remote_snapshot()
+        logger.info(
+            "已手动同步远程 CookieCloud：%d 个 Cookie，%d 个域名",
+            status["cookie_count"],
+            status["domain_count"],
+        )
+        return {
+            "status": "success",
+            "message": "远程 CookieCloud 同步完成",
+            "sync_status": status,
+            "history": cookie_kernel.sync_history(),
+        }
+    except cookie_kernel.CookieServiceError as exc:
+        logger.warning("手动同步远程 CookieCloud 失败：%s", exc)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 

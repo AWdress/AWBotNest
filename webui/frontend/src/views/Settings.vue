@@ -49,12 +49,23 @@ const cookieLoading = ref(false)
 const cookieSaving = ref(false)
 const cookieChecking = ref(false)
 const cookieClearing = ref(false)
+const cookieRemoteSyncing = ref(false)
 const cookieStatus = ref({})
 const cookieHistory = ref([])
 const cookieServerPath = ref('/cookiecloud')
 const cookieDirty = computed(() => !!cookieSettings.value
   && JSON.stringify(cookieSettings.value) !== cookieSavedSnap.value)
 const cookieServerUrl = computed(() => `${window.location.origin}${cookieServerPath.value}`)
+const cookieRemoteDomainsText = computed({
+  get: () => (cookieSettings.value?.remote_domains || []).join(', '),
+  set: (value) => {
+    if (!cookieSettings.value) return
+    cookieSettings.value.remote_domains = String(value || '')
+      .split(/[,，\s]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  },
+})
 const currentDirty = computed(() => {
   if (tab.value === 'ai') return aiDirty.value
   if (tab.value === 'cookies') return cookieDirty.value
@@ -228,6 +239,26 @@ async function checkCookieSync() {
     toast.error('检查同步状态失败：' + e.message)
   } finally {
     cookieChecking.value = false
+  }
+}
+
+async function syncRemoteCookies() {
+  if (!cookieSettings.value?.remote_enabled || cookieRemoteSyncing.value) return
+  if (cookieDirty.value) {
+    const saved = await saveCookieSettings()
+    if (!saved) return
+  }
+  cookieRemoteSyncing.value = true
+  try {
+    const data = await api.syncRemoteCookies()
+    cookieStatus.value = data.sync_status || cookieStatus.value
+    cookieHistory.value = data.history || cookieHistory.value
+    toast.success(data.message || '远程 CookieCloud 同步完成')
+  } catch (e) {
+    await loadCookieSettings()
+    toast.error('远程 CookieCloud 同步失败：' + e.message)
+  } finally {
+    cookieRemoteSyncing.value = false
   }
 }
 
@@ -1814,19 +1845,19 @@ onBeforeRouteLeave(async () => {
                 </svg>
               </div>
               <div>
-                <div class="card-title">浏览器 Cookie 同步</div>
-                <div class="hint muted">本地电脑的 CookieCloud 扩展直接连接平台，插件只读取获准域名。</div>
+                <div class="card-title">平台 Cookie 服务</div>
+                <div class="hint muted">支持浏览器直接上传，也支持从其他 CookieCloud 定时拉取；插件只读取获准域名。</div>
               </div>
             </div>
             <button type="button" class="toggle" :class="{ on: cookieSettings.enabled }"
-                    :aria-pressed="cookieSettings.enabled" aria-label="启用 Cookie 同步"
+                    :aria-pressed="cookieSettings.enabled" aria-label="启用平台 Cookie 服务"
                     @click="cookieSettings.enabled = !cookieSettings.enabled"></button>
           </div>
 
           <div class="card cookie-setup" style="margin-top:16px">
             <div class="cookie-section-heading">
               <div>
-                <div class="card-title">扩展连接信息</div>
+                <div class="card-title">浏览器直连</div>
                 <div class="hint muted">把下面三项填入本地浏览器的 CookieCloud 扩展，工作模式选择“上传到服务器”。定时同步的间隔也在浏览器扩展中设置。</div>
               </div>
               <button class="btn sm" @click="generateCookieCredentials">重新生成凭据</button>
@@ -1872,6 +1903,76 @@ onBeforeRouteLeave(async () => {
             </div>
             <div class="cookie-security-note">
               Cookie 内容由浏览器扩展端到端加密后上传。保存新凭据前，请先复制到浏览器扩展；更换凭据会清除旧快照。
+            </div>
+          </div>
+
+          <div class="card cookie-setup" style="margin-top:16px">
+            <div class="cookie-section-heading">
+              <div>
+                <div class="card-title">远程 CookieCloud</div>
+                <div class="hint muted">从已有 CookieCloud 服务器自动拉取数据，解密后再由平台加密保存。</div>
+              </div>
+              <div class="row gap cookie-remote-actions">
+                <button class="btn sm" :disabled="!cookieSettings.remote_enabled || cookieRemoteSyncing"
+                        @click="syncRemoteCookies">
+                  {{ cookieRemoteSyncing ? '同步中…' : '立即同步' }}
+                </button>
+                <button type="button" class="toggle" :class="{ on: cookieSettings.remote_enabled }"
+                        :aria-pressed="cookieSettings.remote_enabled" aria-label="启用远程 CookieCloud"
+                        @click="cookieSettings.remote_enabled = !cookieSettings.remote_enabled"></button>
+              </div>
+            </div>
+
+            <div class="cookie-connect-fields">
+              <div class="field cookie-server-field">
+                <label>远程服务器地址</label>
+                <input class="input mono" v-model.trim="cookieSettings.remote_url"
+                       placeholder="https://cookie.example.com/cookiecloud" />
+                <div class="hint muted small">填写 CookieCloud 服务根地址，不要包含 /get/UUID。</div>
+              </div>
+              <div class="field">
+                <label>远程用户 KEY · UUID</label>
+                <input class="input mono" v-model.trim="cookieSettings.remote_uuid"
+                       autocomplete="off" placeholder="CookieCloud 浏览器扩展中的用户 KEY" />
+              </div>
+              <div class="field">
+                <label>远程端到端加密密码</label>
+                <input class="input mono" type="password" v-model="cookieSettings.remote_password"
+                       autocomplete="new-password" placeholder="CookieCloud 浏览器扩展中的加密密码" />
+                <div v-if="cookieSettings.remote_password === '********'" class="hint muted small">
+                  远程密码已安全保存且不会回显。
+                </div>
+              </div>
+              <div class="field">
+                <label>远程加密算法</label>
+                <select class="select" v-model="cookieSettings.remote_crypto_type">
+                  <option value="auto">自动识别（推荐）</option>
+                  <option value="aes-128-cbc-fixed">AES-128-CBC（固定 IV）</option>
+                  <option value="legacy">CryptoJS（兼容模式）</option>
+                </select>
+              </div>
+              <div class="field">
+                <label>自动同步间隔</label>
+                <select class="select" v-model.number="cookieSettings.remote_interval_minutes">
+                  <option :value="5">每 5 分钟</option>
+                  <option :value="15">每 15 分钟</option>
+                  <option :value="30">每 30 分钟</option>
+                  <option :value="60">每小时</option>
+                  <option :value="180">每 3 小时</option>
+                  <option :value="360">每 6 小时</option>
+                  <option :value="720">每 12 小时</option>
+                  <option :value="1440">每天</option>
+                </select>
+              </div>
+              <div class="field cookie-server-field">
+                <label>同步域名白名单（可空）</label>
+                <input class="input mono" v-model="cookieRemoteDomainsText"
+                       placeholder="example.com, *.example.org" />
+                <div class="hint muted small">多个域名用逗号或空格分隔；留空会同步远程服务器中的全部域名。</div>
+              </div>
+            </div>
+            <div class="cookie-security-note">
+              远程地址、UUID 和密码只保存在平台加密配置中，不会提供给插件。定时同步成功或失败都会留下日志和同步记录；同时使用两种来源时，以最后完成的同步为准。
             </div>
           </div>
 
@@ -1921,7 +2022,7 @@ onBeforeRouteLeave(async () => {
                 <span class="muted small">最多保留 50 条，容器重启后仍可查看</span>
               </div>
               <div v-if="!cookieHistory.length" class="cookie-history-empty muted">
-                浏览器完成首次同步后，这里会显示同步结果。
+                完成首次同步后，这里会显示同步结果。
               </div>
               <div v-else class="cookie-history-list">
                 <div v-for="(item, index) in cookieHistory" :key="`${item.time}-${index}`"

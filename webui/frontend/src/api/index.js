@@ -168,6 +168,7 @@ export const api = {
   saveCookieSettings: (settings) => request('PUT', '/api/cookies/settings', { settings }),
   generateCookieCredentials: () => request('POST', '/api/cookies/credentials'),
   checkCookieSync: () => request('POST', '/api/cookies/check'),
+  syncRemoteCookies: () => request('POST', '/api/cookies/remote-sync'),
   clearCookieData: () => request('DELETE', '/api/cookies/data'),
   restartPlatform: () => request('POST', '/api/system/restart'),
   downloadBackup: async () => {

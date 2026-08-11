@@ -37,6 +37,7 @@ scheduler.add_listener(_log_job_event, EVENT_JOB_MISSED | EVENT_JOB_ERROR)
 
 
 from .universal.log_cleaner import start_log_cleaner
+from .universal.cookie_sync import start_remote_cookie_sync
 
 scheduler_jobs = {}
 
@@ -49,5 +50,10 @@ async def start_scheduler():
         await start_log_cleaner()
     except Exception as e:
         logger.error(f"日志清理任务启动失败: {e}")
+
+    try:
+        await start_remote_cookie_sync()
+    except Exception as e:
+        logger.error(f"远程 CookieCloud 定时同步启动失败: {e}")
 
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 from urllib.parse import urlsplit
 
+import httpx
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -88,6 +90,13 @@ def default_settings() -> dict[str, Any]:
         "uuid": "",
         "password": "",
         "crypto_type": "aes-128-cbc-fixed",
+        "remote_enabled": False,
+        "remote_url": "",
+        "remote_uuid": "",
+        "remote_password": "",
+        "remote_crypto_type": "auto",
+        "remote_interval_minutes": 60,
+        "remote_domains": [],
     }
 
 
@@ -108,6 +117,16 @@ def load_settings() -> dict[str, Any]:
     settings["password"] = str(settings["password"] or "")[:256]
     if settings["crypto_type"] not in ALLOWED_CRYPTO_TYPES:
         settings["crypto_type"] = "aes-128-cbc-fixed"
+    settings["remote_enabled"] = bool(settings["remote_enabled"])
+    settings["remote_url"] = _normalize_remote_url(settings["remote_url"])
+    settings["remote_uuid"] = _normalize_uuid(settings["remote_uuid"])
+    settings["remote_password"] = str(settings["remote_password"] or "")[:256]
+    if settings["remote_crypto_type"] not in {*ALLOWED_CRYPTO_TYPES, "auto"}:
+        settings["remote_crypto_type"] = "auto"
+    settings["remote_interval_minutes"] = _normalize_remote_interval(
+        settings["remote_interval_minutes"]
+    )
+    settings["remote_domains"] = normalize_declared_domains(settings["remote_domains"])
     return settings
 
 
@@ -117,20 +136,41 @@ def save_settings(value: dict[str, Any]) -> dict[str, Any]:
         password = str(value.get("password", "") or "")
         if password == MASK:
             password = current["password"]
+        remote_password = str(value.get("remote_password", "") or "")
+        if remote_password == MASK:
+            remote_password = current["remote_password"]
         uuid = _normalize_uuid(value.get("uuid"))
+        remote_uuid = _normalize_uuid(value.get("remote_uuid"))
         crypto_type = str(value.get("crypto_type") or "aes-128-cbc-fixed")
         if crypto_type not in ALLOWED_CRYPTO_TYPES:
             raise CookieServiceError("不支持的 CookieCloud 加密算法")
-        if len(password) > 256:
+        remote_crypto_type = str(value.get("remote_crypto_type") or "auto")
+        if remote_crypto_type not in {*ALLOWED_CRYPTO_TYPES, "auto"}:
+            raise CookieServiceError("不支持的远程 CookieCloud 加密算法")
+        if len(password) > 256 or len(remote_password) > 256:
             raise CookieServiceError("端到端加密密码不能超过 256 个字符")
         settings = {
             "enabled": bool(value.get("enabled")),
             "uuid": uuid,
             "password": password,
             "crypto_type": crypto_type,
+            "remote_enabled": bool(value.get("remote_enabled")),
+            "remote_url": _normalize_remote_url(value.get("remote_url")),
+            "remote_uuid": remote_uuid,
+            "remote_password": remote_password,
+            "remote_crypto_type": remote_crypto_type,
+            "remote_interval_minutes": _normalize_remote_interval(
+                value.get("remote_interval_minutes")
+            ),
+            "remote_domains": normalize_declared_domains(value.get("remote_domains")),
         }
         if settings["enabled"] and (not uuid or not password):
             raise CookieServiceError("启用 Cookie 同步前请生成 UUID 和端到端加密密码")
+        if not settings["enabled"]:
+            settings["remote_enabled"] = False
+        if settings["remote_enabled"]:
+            if not all((settings["remote_url"], remote_uuid, remote_password)):
+                raise CookieServiceError("启用远程同步前请填写服务器地址、UUID 和加密密码")
         encoded = json.dumps(settings, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
         _atomic_write(SETTINGS_FILE, _fernet().encrypt(encoded))
         credentials_changed = any(
@@ -154,6 +194,7 @@ def generate_credentials() -> dict[str, str]:
 def masked_settings() -> dict[str, Any]:
     settings = load_settings()
     settings["password"] = MASK if settings["password"] else ""
+    settings["remote_password"] = MASK if settings["remote_password"] else ""
     return settings
 
 
@@ -164,6 +205,37 @@ def _normalize_uuid(value: Any) -> str:
     if len(uuid) > 128 or not re.fullmatch(r"[A-Za-z0-9_-]+", uuid):
         raise CookieServiceError("UUID 只允许字母、数字、下划线和短横线")
     return uuid
+
+
+def _normalize_remote_url(value: Any) -> str:
+    url = str(value or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if len(url) > 2048:
+        raise CookieServiceError("远程 CookieCloud 地址过长")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError as exc:
+        raise CookieServiceError("远程 CookieCloud 地址格式不正确") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise CookieServiceError("远程 CookieCloud 地址必须使用 http 或 https")
+    if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise CookieServiceError("远程 CookieCloud 地址不能包含账号、密码、查询参数或片段")
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    netloc = f"{host}:{port}" if port is not None else host
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{netloc}{path}"
+
+
+def _normalize_remote_interval(value: Any) -> int:
+    try:
+        interval = int(value or 60)
+    except (TypeError, ValueError) as exc:
+        raise CookieServiceError("远程同步间隔必须是整数") from exc
+    return max(5, min(interval, 10080))
 
 
 def _pkcs7_unpad(value: bytes) -> bytes:
@@ -228,7 +300,12 @@ def encrypt_payload(data: dict[str, Any], uuid: str, password: str, crypto_type:
     return base64.b64encode(prefix + ciphertext).decode("ascii")
 
 
-def save_snapshot(encrypted: str, crypto_type: str) -> dict[str, Any]:
+def save_snapshot(
+    encrypted: str,
+    crypto_type: str,
+    *,
+    history_message: str = "浏览器 Cookie 已同步",
+) -> dict[str, Any]:
     global _LAST_ERROR
     if crypto_type not in ALLOWED_CRYPTO_TYPES:
         raise CookieServiceError("不支持的 CookieCloud 加密算法")
@@ -253,7 +330,7 @@ def save_snapshot(encrypted: str, crypto_type: str) -> dict[str, Any]:
         status = snapshot_status(decoded)
         _append_sync_history(
             "success",
-            "浏览器 Cookie 已同步",
+            history_message,
             cookie_count=status["cookie_count"],
             domain_count=status["domain_count"],
         )
@@ -422,6 +499,121 @@ def record_error(message: str) -> None:
     global _LAST_ERROR
     _LAST_ERROR = str(message or "")[:300]
     _append_sync_history("error", _LAST_ERROR or "浏览器 Cookie 同步失败")
+
+
+def _detect_crypto_type(encrypted: str, configured: str) -> str:
+    if configured in ALLOWED_CRYPTO_TYPES:
+        return configured
+    try:
+        raw = base64.b64decode(encrypted, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise CookieServiceError("远程 CookieCloud 返回的加密数据无效") from exc
+    return "legacy" if raw.startswith(b"Salted__") else "aes-128-cbc-fixed"
+
+
+def _filter_remote_data(data: dict[str, Any], domains: list[str]) -> dict[str, Any]:
+    if not domains:
+        return data
+    filtered = deepcopy(data)
+    for key in ("cookie_data", "local_storage_data"):
+        source = data.get(key) or {}
+        if not isinstance(source, dict):
+            filtered[key] = {}
+            continue
+        filtered[key] = {
+            source_domain: values
+            for source_domain, values in source.items()
+            if (domain := normalize_domain(source_domain))
+            and _domain_is_allowed(domain, domains)
+        }
+    return filtered
+
+
+def _proxy_for_remote(url: str) -> str | None:
+    """本机和局域网 CookieCloud 直连，其余地址遵循平台代理。"""
+    hostname = urlsplit(url).hostname or ""
+    if hostname.casefold() == "localhost":
+        return None
+    try:
+        if ipaddress.ip_address(hostname).is_private:
+            return None
+    except ValueError:
+        pass
+    from libs.proxy import proxy_url
+
+    return proxy_url()
+
+
+async def pull_remote_snapshot() -> dict[str, Any]:
+    """从外部 CookieCloud 拉取数据，转换为平台自己的加密快照。"""
+    settings = load_settings()
+    if not settings["enabled"] or not settings["remote_enabled"]:
+        raise CookieServiceError("远程 CookieCloud 同步尚未启用")
+
+    remote_url = settings["remote_url"]
+    remote_uuid = settings["remote_uuid"]
+    endpoint = f"{remote_url}/get/{remote_uuid}"
+    try:
+        timeout = httpx.Timeout(20, connect=8)
+        async with httpx.AsyncClient(
+            timeout=timeout,
+            follow_redirects=True,
+            proxy=_proxy_for_remote(remote_url),
+            trust_env=False,
+        ) as client:
+            async with client.stream(
+                "GET", endpoint, headers={"Accept": "application/json"}
+            ) as response:
+                if response.status_code != 200:
+                    raise CookieServiceError(
+                        f"远程 CookieCloud 返回 HTTP {response.status_code}"
+                    )
+                content = bytearray()
+                async for chunk in response.aiter_bytes():
+                    content.extend(chunk)
+                    if len(content) > MAX_ENCRYPTED_BYTES + 1024 * 1024:
+                        raise CookieServiceError("远程 CookieCloud 返回的数据过大")
+        try:
+            payload = json.loads(bytes(content))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise CookieServiceError("远程 CookieCloud 返回的不是有效数据") from exc
+        if not isinstance(payload, dict) or not payload.get("encrypted"):
+            raise CookieServiceError("远程 CookieCloud 中还没有可用数据")
+
+        encrypted = str(payload["encrypted"])
+        remote_crypto_type = _detect_crypto_type(
+            encrypted,
+            settings["remote_crypto_type"],
+        )
+        decoded = decrypt_payload(
+            encrypted,
+            remote_uuid,
+            settings["remote_password"],
+            remote_crypto_type,
+        )
+        decoded = _filter_remote_data(decoded, settings["remote_domains"])
+        local_encrypted = encrypt_payload(
+            decoded,
+            settings["uuid"],
+            settings["password"],
+            settings["crypto_type"],
+        )
+        return save_snapshot(
+            local_encrypted,
+            settings["crypto_type"],
+            history_message="已从远程 CookieCloud 同步",
+        )
+    except httpx.TimeoutException as exc:
+        error = CookieServiceError("连接远程 CookieCloud 超时")
+        record_error(f"远程 CookieCloud 同步失败：{error}")
+        raise error from exc
+    except httpx.HTTPError as exc:
+        error = CookieServiceError("无法连接远程 CookieCloud")
+        record_error(f"远程 CookieCloud 同步失败：{error}")
+        raise error from exc
+    except CookieServiceError as exc:
+        record_error(f"远程 CookieCloud 同步失败：{exc}")
+        raise
 
 
 def normalize_domain(value: Any, allow_wildcard: bool = False) -> str:
