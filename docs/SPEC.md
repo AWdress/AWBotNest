@@ -366,6 +366,7 @@ async def setup(ctx):
 | 注册回调 | `@ctx.on_callback(filter, group=0, target="auto")` |
 | 中断传播 | `raise ctx.StopPropagation`（在 handler 内主动阻止后续插件处理这条消息） |
 | Bot 发送 | `await ctx.bot.send(chat_id, text)`（`ctx.bot` = 本插件被平台分配的 Bot，未分配=默认 Bot，见 §8.2） |
+| Rich Message | `await ctx.bot.send_rich(chat_id, content)` / `await ctx.user.send_rich(...)`（机器人和会员用户原生发送，普通用户自动降级为兼容消息） |
 | 指定 Bot | `ctx.get_bot(bot_id)`（高级：取某个 Bot 的发送代理，不传/不存在回退默认 Bot） |
 | 用户发送 | `await ctx.user.send(chat_id, text)` |
 | 多账号列表 | `ctx.user_apps`（所有已连接用户账号；未连接时发送代理抛 `RuntimeError`，可判 `ctx.bot/user.connected`） |

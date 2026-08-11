@@ -100,6 +100,7 @@ class Client(_Client, PeerManagerMixin, SessionManagerMixin, InteractionMixin, I
             "send_message", "send_photo", "send_document", "send_video",
             "send_animation", "send_audio", "send_voice", "send_sticker",
             "edit_message_text", "edit_message_caption", "send_media_group",
+            "send_rich_message",
         ]
         for name in methods:
             orig = getattr(self, name, None)

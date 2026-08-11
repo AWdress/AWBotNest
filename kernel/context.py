@@ -145,6 +145,125 @@ class _ClientProxy:
             raise RuntimeError("目标账号未连接，无法发送图片")
         return await self._client.send_photo(chat_id, photo, **kwargs)
 
+    async def supports_native_rich(self) -> bool:
+        """当前账号是否能发送 Telegram 原生 Rich Message。"""
+        if not self._client or not getattr(self._client, "is_connected", False):
+            return False
+        if not callable(getattr(self._client, "send_rich_message", None)):
+            return False
+        me = getattr(self._client, "me", None)
+        if me is None:
+            try:
+                me = await self._client.get_me()
+            except Exception:  # noqa: BLE001 - 能力探测失败按不支持处理
+                return False
+        return bool(getattr(me, "is_bot", False) or getattr(me, "is_premium", False))
+
+    async def send_rich(
+        self,
+        chat_id: int | str,
+        content: str,
+        *,
+        format: str = "html",
+        is_rtl: bool | None = None,
+        skip_entity_detection: bool | None = None,
+        **kwargs,
+    ) -> Any:
+        """发送富文本；机器人和会员用户走原生格式，普通用户自动兼容发送。"""
+        if not self._client:
+            raise RuntimeError("目标账号未连接，无法发送消息")
+        content = str(content or "")
+        if not content.strip():
+            raise ValueError("Rich Message 内容不能为空")
+        rich_format = str(format or "html").strip().lower()
+        if rich_format not in {"html", "markdown"}:
+            raise ValueError("Rich Message 格式只支持 html 或 markdown")
+
+        if await self.supports_native_rich():
+            from pyrogram import types
+
+            rich_message = types.InputRichMessage(
+                html=content if rich_format == "html" else None,
+                markdown=content if rich_format == "markdown" else None,
+                is_rtl=is_rtl,
+                skip_entity_detection=skip_entity_detection,
+            )
+            return await self._client.send_rich_message(chat_id, rich_message, **kwargs)
+
+        # Rich HTML 包含标题、表格等普通消息不认识的标签，先转换为可靠的纯文本；
+        # Markdown 的常用格式可继续交给平台现有解析器处理。
+        fallback_content = content
+        parse_mode = None
+        if rich_format == "html":
+            import re
+            from bs4 import BeautifulSoup
+
+            soup = BeautifulSoup(content, "html.parser")
+            for br in soup.find_all("br"):
+                br.replace_with("\n")
+            for item in soup.find_all("li"):
+                item.insert_before("• ")
+                item.append("\n")
+            block_tags = [
+                "p", "div", "section", "article", "blockquote", "pre", "tr",
+                *[f"h{i}" for i in range(1, 7)],
+            ]
+            for block in soup.find_all(block_tags):
+                block.append("\n")
+            fallback_content = re.sub(r"\n{3,}", "\n\n", soup.get_text()).strip()
+            if not fallback_content:
+                fallback_content = "当前账号不支持这条 Rich Message 的内容格式。"
+        else:
+            from pyrogram import enums
+
+            parse_mode = enums.ParseMode.MARKDOWN
+        return await self._client.send_message(
+            chat_id,
+            fallback_content,
+            parse_mode=parse_mode,
+            **kwargs,
+        )
+
+    async def send_rich_draft(
+        self,
+        chat_id: int | str,
+        draft_id: int,
+        content: str,
+        *,
+        format: str = "html",
+        is_rtl: bool | None = None,
+        skip_entity_detection: bool | None = None,
+        message_thread_id: int | None = None,
+    ) -> bool:
+        """发送临时 Rich Message 草稿，仅机器人和会员用户账号可用。"""
+        if not self._client:
+            raise RuntimeError("目标账号未连接，无法发送消息")
+        if not await self.supports_native_rich():
+            raise RuntimeError("Rich Message 流式草稿仅支持机器人或 Telegram Premium 用户账号")
+        if not callable(getattr(self._client, "send_rich_message_draft", None)):
+            raise RuntimeError("当前 Kurigram 版本不支持 Rich Message 流式草稿")
+        content = str(content or "")
+        if not content.strip():
+            raise ValueError("Rich Message 草稿内容不能为空")
+        rich_format = str(format or "html").strip().lower()
+        if rich_format not in {"html", "markdown"}:
+            raise ValueError("Rich Message 格式只支持 html 或 markdown")
+
+        from pyrogram import types
+
+        rich_message = types.InputRichMessage(
+            html=content if rich_format == "html" else None,
+            markdown=content if rich_format == "markdown" else None,
+            is_rtl=is_rtl,
+            skip_entity_detection=skip_entity_detection,
+        )
+        return await self._client.send_rich_message_draft(
+            chat_id,
+            draft_id,
+            rich_message,
+            message_thread_id=message_thread_id,
+        )
+
 
 class _KVStore:
     """

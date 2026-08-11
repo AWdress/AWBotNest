@@ -124,12 +124,16 @@ async def on_click(client, callback_query):
 await ctx.bot.send(chat_id, "text")
 await ctx.user.send(chat_id, "text")
 await ctx.bot.send_photo(chat_id, "url_or_path")
+await ctx.bot.send_rich(chat_id, "<h1>标题</h1><p>正文</p>")
+await ctx.user.send_rich(chat_id, "# 标题\n\n正文", format="markdown")
 ```
 
 - `ctx.bot`：机器人账号发送代理。
 - `ctx.user`：用户账号发送代理（取首个已连接）。
 - `ctx.user_apps`：已连接用户账号的列表，多账号插件需逐个操作时使用。
 - 目标账号未连接时，对应代理的发送方法抛 `RuntimeError`；可先判 `ctx.bot.connected` / `ctx.user.connected`。
+- `send_rich()` 统一发送 Rich Message：机器人和 Telegram Premium 用户账号使用原生 Rich Message，普通用户账号自动降级为兼容消息，避免发送失败。
+- `await ctx.bot.supports_native_rich()` / `await ctx.user.supports_native_rich()` 可检查当前账号能否原生发送；`send_rich_draft()` 仅支持机器人和 Telegram Premium 用户账号。
 
 > **多 Bot**：平台可配置多个 Bot，并在「系统设置 → 通知」为每个插件指定用哪个 Bot（默认=默认 Bot）。这对插件是**透明**的——`ctx.bot`、`ctx.notify`、`scope=bot` 的 handler 会自动走平台为本插件分配的 Bot，插件代码无需改动、也不要自己选 Bot。
 

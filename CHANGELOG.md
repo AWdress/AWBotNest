@@ -4,6 +4,17 @@
 
 这里记录每个版本给用户带来的新功能、改进和问题修复。
 
+## v1.1.4.1
+
+这一版升级了 Telegram 通信能力，让插件可以通过平台统一发送 Rich Message，不再需要自己调用底层接口。
+
+**Rich Message：**
+- Kurigram 升级到 2.2.24，补全 Rich Message 和流式草稿所需能力。
+- 插件可以通过 `ctx.bot` 或 `ctx.user` 发送 Rich Message，不需要直接引用 Kurigram。
+- 机器人和 Telegram Premium 用户账号使用原生 Rich Message，普通用户账号会自动改用兼容消息，避免发送失败。
+- 插件可以先检查当前账号是否支持原生 Rich Message；流式草稿只会在支持的账号上启用。
+- 原有文本、图片和通知发送方式保持不变，现有插件不需要修改。
+
 ## v1.1.4.0
 
 这一版补全了远程 CookieCloud 同步。已经在其他服务中保存 Cookie 的用户，可以直接让 AWBotNest 定时读取，不需要重新配置浏览器或让每个插件单独连接。
