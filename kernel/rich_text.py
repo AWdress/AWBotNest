@@ -189,6 +189,40 @@ def text_to_notification_rich_html(text: str) -> str:
     if len(lines) < 2:
         return text_to_rich_html(raw)
 
+    # “任务：成功0/已签1/失败0”一类紧凑统计，同时收纳后续的账号结果。
+    for index, line in enumerate(lines):
+        summary = re.match(r"^(.{1,48}?)[：:]\s*(.+)$", line)
+        if not summary or "/" not in summary.group(2):
+            continue
+        metric_rows: list[list[str]] = []
+        for segment in re.split(r"\s*/\s*", summary.group(2)):
+            metric = re.fullmatch(r"(.+?)[：:]?\s*(-?\d+(?:\.\d+)?)", segment.strip())
+            if not metric:
+                metric_rows = []
+                break
+            metric_rows.append([metric.group(1).strip(), metric.group(2)])
+        if len(metric_rows) < 2:
+            continue
+
+        end_index = index
+        for following in lines[index + 1:]:
+            account = re.match(r"^((?:账号|账户)\s*[^：:|]*)\s*[：:|]?\s*(.+)$", following)
+            if not account:
+                break
+            metric_rows.append([account.group(1).strip(), account.group(2).strip()])
+            end_index += 1
+        table = build_rich_table(
+            ["项目", "结果"], metric_rows, caption=summary.group(1).strip(),
+            bordered=True, striped=True, align=["left", "left"],
+        )
+        parts = []
+        if index > 0:
+            parts.append(text_to_rich_html(chr(10).join(lines[:index])))
+        parts.append(table)
+        if end_index + 1 < len(lines):
+            parts.append(text_to_rich_html(chr(10).join(lines[end_index + 1:])))
+        return "<br><br>".join(parts)
+
     patterns = [
         (
             re.compile(r"^(?:账号|账户)\s*[：:]?\s*(\S+)\s+(.+)$"),
@@ -276,7 +310,7 @@ def text_to_notification_rich_html(text: str) -> str:
             parts.append(text_to_rich_html(chr(10).join(lines[end_index + 1:])))
         return "<br><br>".join(parts)
 
-    # 抽奖等待等通知常由“状态 + UUID + 消息链接”组成，转换为简单信息表。
+    # 状态通知常由“状态 + UUID + 若干详情 + 消息链接”组成，转换为信息表。
     uuid_indexes = [
         index for index, line in enumerate(lines)
         if re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", line)
@@ -285,15 +319,20 @@ def text_to_notification_rich_html(text: str) -> str:
     if len(uuid_indexes) == 1 and len(url_indexes) == 1:
         uuid_index = uuid_indexes[0]
         url_index = url_indexes[0]
-        other_lines = [
-            line for index, line in enumerate(lines)
-            if index not in {uuid_index, url_index}
-        ]
-        if len(other_lines) == 1:
+        before_uuid = lines[:uuid_index]
+        details = lines[uuid_index + 1:url_index]
+        trailing = lines[url_index + 1:]
+        if len(before_uuid) == 1 and not trailing:
+            labels = ["来源", "奖品", "内容"]
+            rows = [["状态", before_uuid[0]], ["编号", lines[uuid_index]]]
+            rows.extend([
+                [labels[index] if index < len(labels) else f"详情 {index + 1}", value]
+                for index, value in enumerate(details)
+            ])
+            rows.append(["查看消息", lines[url_index]])
             return build_rich_table(
-                ["项目", "内容"],
-                [["状态", other_lines[0]], ["抽奖编号", lines[uuid_index]], ["查看消息", lines[url_index]]],
-                caption="抽奖信息", bordered=True, striped=True, align=["left", "left"],
+                ["项目", "内容"], rows, caption="通知明细",
+                bordered=True, striped=True, align=["left", "left"],
             )
 
     return text_to_rich_html(raw)

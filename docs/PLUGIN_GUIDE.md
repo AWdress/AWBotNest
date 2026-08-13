@@ -413,6 +413,31 @@ ctx.schedule(tick, "cron", hour=3, minute=0)
 ctx.schedule(daily_report, "cron", hour=9, id="每日早报")
 ```
 
+定时任务执行时可以上报进度，平台会在「系统状态」和「定时服务」中实时显示：
+
+```python
+async def daily_report():
+    ctx.report_progress(10, "正在读取数据")
+    # ...
+    ctx.report_progress(70, "正在发送通知")
+    # 函数正常结束后平台自动标记为 100% 和“执行完成”
+```
+
+`ctx.report_progress()` 只能更新当前正在执行的定时任务；在普通消息处理器中调用会返回 `False`，不会报错。
+
+插件还可以选择提供业务自检。没有提供时，平台仍会检查插件文件、加载状态、账号和定时任务：
+
+```python
+async def self_check(ctx):
+    return [
+        {"id": "login", "name": "登录状态", "ok": True, "detail": "Cookie 有效"},
+        {"id": "config", "name": "业务配置", "ok": bool(ctx.config.get("site")),
+         "detail": "配置完整" if ctx.config.get("site") else "请先选择站点"},
+    ]
+```
+
+`self_check(ctx)` 可以是同步或异步函数，返回一个含 `ok` 的字典或字典列表。平台最多等待 15 秒，自检中不要执行签到、发送消息或修改数据。
+
 任务 `id` 自动附加 `<id>::` 前缀以归属到本插件；不传 `id` 时默认取函数名。已注册任务展示于「系统状态」页（任务名、所属插件、触发规则、下次运行时间）。
 
 ### Webhook（接收外部回调）

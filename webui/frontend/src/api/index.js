@@ -68,6 +68,7 @@ export const api = {
   enablePlugin: (id) => request('POST', `/api/plugins/${id}/enable`),
   disablePlugin: (id) => request('POST', `/api/plugins/${id}/disable`),
   reloadPlugin: (id) => request('POST', `/api/plugins/${id}/reload`),
+  selfCheckPlugin: (id) => request('POST', `/api/plugins/${id}/self-check`),
   deletePlugin: (id) => request('DELETE', `/api/plugins/${id}`),
   getPluginConfig: (id) => request('GET', `/api/plugins/${id}/config`),
   setPluginConfig: (id, values) => request('PUT', `/api/plugins/${id}/config`, values),

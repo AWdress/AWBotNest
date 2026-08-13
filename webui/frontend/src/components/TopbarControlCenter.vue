@@ -33,6 +33,7 @@ const health = ref([])
 const healthBusy = ref(false)
 const network = ref([])
 const networkBusy = ref({})
+const networkSequenceBusy = ref(false)
 const jobs = ref([])
 const about = ref(null)
 const aboutBusy = ref(false)
@@ -43,6 +44,8 @@ let logsReconnect = null
 let noticeTimer = null
 let jobsTimer = null
 let notificationLoadVersion = 0
+let networkRunVersion = 0
+let networkSequence = Promise.resolve()
 const seenLogs = new Set()
 const quickLogsBox = ref(null)
 const modalDialog = ref(null)
@@ -168,6 +171,7 @@ function openModal(name) {
 
 function closeModal() {
   if (modal.value === 'logs') disconnectLogs()
+  if (modal.value === 'network') networkRunVersion += 1
   if (modal.value === 'services') {
     clearInterval(jobsTimer)
     jobsTimer = null
@@ -303,17 +307,30 @@ async function openVersion(item) {
 }
 
 async function loadNetwork() {
+  const runVersion = ++networkRunVersion
   try {
     const result = await api.getNetworkTargets()
+    if (runVersion !== networkRunVersion) return
     network.value = (result.targets || []).map(item => ({ ...item, state: 'idle', detail: '等待测试' }))
-    await Promise.all(network.value.map(item => testNetwork(item)))
+    networkSequenceBusy.value = true
+    const targets = network.value
+    networkSequence = networkSequence.then(async () => {
+      if (runVersion !== networkRunVersion) return
+      for (const item of targets) {
+        if (runVersion !== networkRunVersion) break
+        await testNetwork(item, true)
+      }
+    })
+    await networkSequence
   } catch (error) {
-    toast.error(`网络测试加载失败：${error.message}`)
+    if (runVersion === networkRunVersion) toast.error(`网络测试加载失败：${error.message}`)
+  } finally {
+    if (runVersion === networkRunVersion) networkSequenceBusy.value = false
   }
 }
 
-async function testNetwork(item) {
-  if (networkBusy.value[item.id]) return
+async function testNetwork(item, fromSequence = false) {
+  if (networkBusy.value[item.id] || (networkSequenceBusy.value && !fromSequence)) return
   networkBusy.value = { ...networkBusy.value, [item.id]: true }
   item.state = 'testing'
   item.detail = '测试中…'
@@ -341,6 +358,7 @@ async function loadJobs(silent = false) {
 async function runJob(job) {
   if (job.running) return
   job.running = true
+  job.progress = { status: 'pending', progress: 0, step: '等待执行' }
   try {
     await api.runSchedulerJob(job.id)
     toast.success(`已开始执行：${job.name}`)
@@ -512,7 +530,7 @@ onUnmounted(() => {
           <div v-for="item in network" :key="item.id" class="check-card">
             <span class="check-dot" :class="item.state"></span>
             <span><strong>{{ item.name }}</strong><small>{{ item.detail }}</small></span>
-            <button class="btn" :disabled="networkBusy[item.id]" @click="testNetwork(item)">重测</button>
+            <button class="btn" :disabled="networkSequenceBusy || networkBusy[item.id]" @click="testNetwork(item)">重测</button>
           </div>
         </div>
 
@@ -530,8 +548,8 @@ onUnmounted(() => {
         <div v-else-if="modal === 'services'" class="modal-body jobs-list">
           <div v-if="!jobs.length" class="empty">暂无定时任务</div>
           <div v-for="job in jobs" :key="job.id" class="job-row">
-            <span><small>{{ job.plugin }}</small><strong>{{ job.name }}</strong></span>
-            <code>{{ job.next || '暂无计划' }}</code>
+            <span><small>{{ job.plugin }}</small><strong>{{ job.name }}</strong><em v-if="job.running">{{ job.progress?.status === 'running' ? `${job.progress.step || '运行中'} · ${job.progress.progress || 0}%` : '正在运行' }}</em></span>
+            <code>{{ job.running && job.progress?.status === 'running' ? `已运行 ${job.progress.duration_seconds || 0} 秒` : (job.running ? '正在执行' : (job.next || '暂无计划')) }}</code>
             <button class="btn" :disabled="job.running" @click="runJob(job)">{{ job.running ? '运行中' : '执行' }}</button>
           </div>
         </div>
@@ -759,6 +777,7 @@ onUnmounted(() => {
 .job-row { display: grid; grid-template-columns: minmax(180px, 1fr) 170px auto; align-items: center; gap: 14px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); }
 .job-row small, .job-row strong { display: block; }
 .job-row small { color: var(--text-muted); }
+.job-row em { display: block; margin-top: 4px; color: var(--success); font-size: 11px; font-style: normal; }
 .job-row code { color: var(--text-secondary); }
 .about-modal { display: flex; flex-direction: column; gap: 24px; }
 .about-hero {

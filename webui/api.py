@@ -307,6 +307,9 @@ def _ensure_scheduler_listener(scheduler) -> None:
         if event.code == EVENT_JOB_SUBMITTED:
             _SCHEDULER_JOBS_PENDING.discard(job_id)
             _SCHEDULER_JOBS_RUNNING.add(job_id)
+        elif event.code in {EVENT_JOB_MISSED, EVENT_JOB_MAX_INSTANCES}:
+            # 错过或因 max_instances 被跳过的是本次触发，不能清掉另一份仍在运行的实例。
+            _SCHEDULER_JOBS_PENDING.discard(job_id)
         else:
             _SCHEDULER_JOBS_PENDING.discard(job_id)
             _SCHEDULER_JOBS_RUNNING.discard(job_id)
@@ -857,6 +860,17 @@ async def save_plugin_order(body: Dict[str, Any], user=Depends(_auth_pwc)):
         raise HTTPException(status_code=400, detail="插件顺序与当前已安装插件不一致，请刷新后重试")
     _write_plugin_order(clean_order)
     return {"status": "success", "order": clean_order}
+
+
+@app.post("/api/plugins/{plugin_id}/self-check")
+async def plugin_self_check(plugin_id: str, user=Depends(_auth_pwc)):
+    """检查插件的文件、运行依赖和插件自定义业务状态。"""
+    _assert_safe_plugin_id(plugin_id)
+    runtime = _get_runtime()
+    try:
+        return await runtime.self_check(plugin_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.post("/api/plugins/upload")
@@ -2520,6 +2534,7 @@ async def system_status(user=Depends(_auth)):
     try:
         # 状态接口只读取已经启动的调度器，不能为了展示数据加载整套任务模块。
         sched_module = _sys.modules.get("schedulers")
+        progress_module = _sys.modules.get("schedulers.progress")
         active_scheduler = getattr(sched_module, "scheduler", None)
         if active_scheduler:
             _ensure_scheduler_listener(active_scheduler)
@@ -2545,6 +2560,7 @@ async def system_status(user=Depends(_auth)):
                 "next": nxt.strftime("%m-%d %H:%M:%S") if nxt else None,
                 "next_run_at": nxt.isoformat() if nxt else None,
                 "running": _scheduler_job_running(active_scheduler, j),
+                "progress": progress_module.snapshot(jid) if progress_module else {},
             })
         sched_jobs.sort(key=lambda job: (job["next_run_at"] is None, job["next_run_at"] or ""))
     except Exception:  # noqa: BLE001
@@ -2763,15 +2779,18 @@ async def ui_network_test(body: Dict[str, Any], user=Depends(_auth_pwc)):
     started = time.perf_counter()
     try:
         async with httpx.AsyncClient(proxy=proxy_url(), timeout=10, follow_redirects=True) as client:
-            response = await client.get(target["url"])
-        ok = response.status_code < 500
-        detail = f"HTTP {response.status_code}"
+            started = time.perf_counter()
+            async with client.stream("GET", target["url"]) as response:
+                latency_ms = round((time.perf_counter() - started) * 1000)
+                ok = response.status_code < 500
+                detail = f"HTTP {response.status_code}"
     except Exception as exc:  # noqa: BLE001
+        latency_ms = round((time.perf_counter() - started) * 1000)
         ok = False
         detail = exc.__class__.__name__
     return {
         "id": target_id, "ok": ok, "detail": detail,
-        "latency_ms": round((time.perf_counter() - started) * 1000),
+        "latency_ms": latency_ms,
     }
 @app.post("/api/ui/scheduler/{job_id:path}/run")
 async def run_scheduler_job(job_id: str, user=Depends(_auth_pwc)):

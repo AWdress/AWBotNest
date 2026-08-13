@@ -11,6 +11,8 @@ PlatformContext —— 平台传给每个插件的「能力上下文」。
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -318,6 +320,7 @@ class PlatformContext:
         # 正在执行的异步消息处理任务。停用时取消，避免已发起的 AI/网络请求在插件
         # 关闭后才返回并继续发送消息。
         self._handler_tasks: set[asyncio.Task] = set()
+        self._scheduled_tasks: set[asyncio.Task] = set()
         # teardown 时要调用的清理回调（如取消定时任务）
         self._cleanups: list[Callable[[], Any]] = []
         # webhook 处理器（ctx.on_webhook 注册；一个插件一个）。热卸载/重载时清空。
@@ -817,7 +820,31 @@ class PlatformContext:
                 n += 1
             job_id = f"{job_id}#{n}"
 
-        job = scheduler.add_job(func, trigger, id=job_id, **trigger_args)
+        @functools.wraps(func)
+        async def tracked_job(*args, **kwargs):
+            from schedulers import progress as job_progress
+
+            task = asyncio.current_task()
+            if task is not None:
+                self._scheduled_tasks.add(task)
+            run_handle = job_progress.start(job_id)
+            try:
+                if inspect.iscoroutinefunction(func):
+                    result = await func(*args, **kwargs)
+                else:
+                    result = await asyncio.to_thread(func, *args, **kwargs)
+                if inspect.isawaitable(result):
+                    result = await result
+                job_progress.finish(job_id, run_handle)
+                return result
+            except BaseException as exc:
+                job_progress.finish(job_id, run_handle, exc)
+                raise
+            finally:
+                if task is not None:
+                    self._scheduled_tasks.discard(task)
+
+        job = scheduler.add_job(tracked_job, trigger, id=job_id, **trigger_args)
         self._cleanups.append(lambda jid=job_id: self._safe_remove_job(jid))
         # 插件在启动或重载时重新注册 cron。如果刚好比计划时间晚几秒注册，
         # APScheduler 会直接排到下一个周期；在容忍窗口内补跑刚错过的一次。
@@ -836,10 +863,18 @@ class PlatformContext:
     def _safe_remove_job(job_id: str) -> None:
         """移除定时任务，job 已不存在时静默忽略。"""
         from schedulers import scheduler
+        from schedulers.progress import remove as remove_progress
         try:
             scheduler.remove_job(job_id)
         except Exception:  # noqa: BLE001 - 任务可能已被移除
             pass
+        remove_progress(job_id)
+
+    def report_progress(self, percent: float | int | None = None, step: str | None = None) -> bool:
+        """上报当前定时任务进度；不在定时任务中调用时返回 False。"""
+        from schedulers.progress import report
+
+        return report(percent, step)
 
     def add_cleanup(self, fn: Callable[[], Any]) -> None:
         """登记一个 teardown 时调用的清理回调"""
@@ -855,6 +890,10 @@ class PlatformContext:
             if not task.done():
                 task.cancel()
         self._handler_tasks.clear()
+        for task in tuple(self._scheduled_tasks):
+            if task is not asyncio.current_task() and not task.done():
+                task.cancel()
+        self._scheduled_tasks.clear()
         for client, handler, group in self._handles:
             try:
                 client.remove_handler(handler, group)

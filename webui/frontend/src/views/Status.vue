@@ -27,6 +27,7 @@ let firstPaintFrame = null
 let eventSocket = null
 let eventReconnectTimer = null
 let clockTimer = null
+let progressTimer = null
 
 const reduceMotion = () => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
@@ -98,6 +99,15 @@ async function applyStatus(next) {
 
 watch(platformStatus, applyStatus, { immediate: true })
 watch(platformStatusError, message => { error.value = message || '' }, { immediate: true })
+watch(
+  () => Boolean(st.value?.scheduler_jobs?.some(job => job.running)),
+  (running) => {
+    clearInterval(progressTimer)
+    progressTimer = running
+      ? window.setInterval(() => refreshPlatformStatus(true).catch(() => {}), 2000)
+      : null
+  },
+)
 
 function formatUptime(seconds) {
   let value = Number(seconds) || 0
@@ -185,7 +195,12 @@ function clockLabel(date) {
 }
 
 function nextRunLabel(job) {
-  if (job.running) return '正在运行'
+  if (job.running) {
+    const progress = job.progress || {}
+    return progress.status === 'running' && progress.step
+      ? `${progress.step}${progress.progress != null ? ` · ${progress.progress}%` : ''}`
+      : '运行中'
+  }
   if (!job.next_run_at) return '等待安排'
   const nextRun = new Date(job.next_run_at)
   const remaining = nextRun.getTime() - currentTime.value
@@ -405,6 +420,7 @@ onUnmounted(() => {
   disconnectEvents()
   clearTimeout(changeTimer)
   clearInterval(clockTimer)
+  clearInterval(progressTimer)
   if (firstPaintFrame) cancelAnimationFrame(firstPaintFrame)
   for (const frame of animationFrames.values()) cancelAnimationFrame(frame)
   animationFrames.clear()
@@ -555,7 +571,7 @@ onUnmounted(() => {
         <div v-else class="job-list">
           <div v-for="job in st.scheduler_jobs" :key="job.id" class="job-row" :class="{ changed: changedJobs.includes(job.id) }">
             <span class="job-mark" :class="{ running: job.running }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
-            <div><strong>{{ jobName(job) }}</strong><small>{{ job.plugin }}</small></div>
+            <div class="job-main"><strong>{{ jobName(job) }}</strong><small>{{ job.plugin }}</small><div v-if="job.running && job.progress?.status === 'running'" class="job-progress"><i :style="{ width: `${job.progress.progress || 0}%` }"></i></div></div>
             <time :title="job.next || ''">{{ nextRunLabel(job) }}</time>
           </div>
         </div>
@@ -722,6 +738,9 @@ onUnmounted(() => {
 .job-row strong { font-size: 12px; }
 .job-row small { margin-top: 4px; color: var(--text-muted); font-size: 10px; }
 .job-row time { max-width: 110px; overflow: hidden; color: var(--text-secondary); font-family: var(--font-mono); font-size: 10px; white-space: nowrap; text-overflow: ellipsis; }
+.job-main { min-width: 0; }
+.job-progress { height: 3px; margin-top: 7px; overflow: hidden; border-radius: 4px; background: var(--bg-elevated); }
+.job-progress i { display: block; height: 100%; border-radius: inherit; background: var(--success); transition: width .25s ease; }
 .small-empty { min-height: 160px; display: grid; place-items: center; padding: 20px; color: var(--text-muted); font-size: 11px; text-align: center; }
 
 .runtime-strip { min-height: 34px; display: flex; align-items: center; gap: 24px; padding: 0 22px; overflow: hidden; }

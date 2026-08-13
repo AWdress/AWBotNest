@@ -18,6 +18,10 @@ const orderSaving = ref(false)
 const loading = ref(true)
 const error = ref('')
 const busy = ref({})
+const selfCheckOpen = ref(false)
+const selfCheckTarget = ref(null)
+const selfCheckResult = ref(null)
+const selfCheckBusy = ref(false)
 const fileInput = ref(null)
 
 // 配置弹窗
@@ -36,6 +40,7 @@ const configBotSaving = ref(false)
 const configBotReady = ref(false)
 let configRequestId = 0
 let configBotRequestId = 0
+let selfCheckRequestId = 0
 const notificationSyncSource = `plugins_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
 let storeIdleTask = null
@@ -203,6 +208,34 @@ async function loadConfigAccounts(pluginId) {
   } finally {
     if (requestId === acctRequestId) acctLoading.value = false
   }
+}
+
+async function openSelfCheck(p) {
+  const requestId = ++selfCheckRequestId
+  closeMenu()
+  selfCheckTarget.value = p
+  selfCheckResult.value = null
+  selfCheckOpen.value = true
+  selfCheckBusy.value = true
+  try {
+    const result = await api.selfCheckPlugin(p.id)
+    if (requestId !== selfCheckRequestId) return
+    selfCheckResult.value = result
+  } catch (e) {
+    if (requestId !== selfCheckRequestId) return
+    selfCheckResult.value = {
+      ok: false,
+      checks: [{ id: 'request', name: '插件检查', ok: false, detail: e.message }],
+    }
+  } finally {
+    if (requestId === selfCheckRequestId) selfCheckBusy.value = false
+  }
+}
+
+function closeSelfCheck() {
+  selfCheckRequestId += 1
+  selfCheckOpen.value = false
+  selfCheckBusy.value = false
 }
 
 async function openConfig(p) {
@@ -1216,6 +1249,9 @@ onUnmounted(() => {
                 <button class="menu-item" @click.stop="openLogs(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8M16 17H8M10 9H8"/></svg> 查看日志
                 </button>
+                <button class="menu-item" @click.stop="openSelfCheck(p)">
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v5c0 5 3.4 8.2 8 9 4.6-.8 8-4 8-9V7z"/><path d="m9 12 2 2 4-4"/></svg> 插件自检
+                </button>
                 <button class="menu-item" @click.stop="reload(p)" :disabled="busy[p.id]">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 重载
                 </button>
@@ -1418,6 +1454,38 @@ onUnmounted(() => {
         <div class="search-foot">
           <span>支持搜索名称、作者、说明和英文标识</span>
           <span><kbd>↑↓</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Esc</kbd> 关闭</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 插件自检弹窗 -->
+    <div v-if="selfCheckOpen && selfCheckTarget" class="modal-mask" @click.self="closeSelfCheck">
+      <div class="modal card modal-self-check">
+        <div class="modal-head">
+          <div class="config-modal-title">
+            <img :src="selfCheckTarget.icon || logo" class="config-plugin-icon" alt="" @error="useFallbackPluginIcon" />
+            <h2>{{ selfCheckTarget.name }} · 插件自检</h2>
+          </div>
+          <button type="button" class="close" aria-label="关闭" @click="closeSelfCheck"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div class="modal-body self-check-body">
+          <div v-if="selfCheckBusy" class="muted center">正在检查插件…</div>
+          <template v-else-if="selfCheckResult">
+            <div class="self-check-summary" :class="{ failed: !selfCheckResult.ok }">
+              <strong>{{ selfCheckResult.ok ? '插件运行正常' : '发现需要处理的问题' }}</strong>
+              <span>{{ selfCheckResult.ok ? '所有检查项目均已通过' : '请根据下面的检查结果处理' }}</span>
+            </div>
+            <div class="self-check-list">
+              <div v-for="(item, index) in selfCheckResult.checks" :key="`${item.id}-${index}`" class="self-check-row">
+                <i :class="{ failed: !item.ok }">{{ item.ok ? '✓' : '!' }}</i>
+                <div><strong>{{ item.name }}</strong><small>{{ item.detail }}</small></div>
+              </div>
+            </div>
+          </template>
+        </div>
+        <div class="modal-foot">
+          <button class="btn" :disabled="selfCheckBusy" @click="openSelfCheck(selfCheckTarget)">重新检查</button>
+          <button class="btn btn-primary" @click="closeSelfCheck">关闭</button>
         </div>
       </div>
     </div>
@@ -1820,6 +1888,19 @@ onUnmounted(() => {
 .menu-item.danger:hover:not(:disabled) { background: var(--danger-dim); }
 .mi-ico { width: 15px; height: 15px; flex-shrink: 0; }
 .menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+.modal-self-check { width: min(620px, calc(100vw - 28px)); }
+.self-check-body { min-height: 220px; }
+.self-check-summary { padding: 16px 18px; border: 1px solid rgba(16,176,128,.3); border-radius: 12px; background: rgba(16,176,128,.08); }
+.self-check-summary.failed { border-color: rgba(224,72,79,.35); background: var(--danger-dim); }
+.self-check-summary strong, .self-check-summary span { display: block; }
+.self-check-summary span { margin-top: 5px; color: var(--text-muted); font-size: 12px; }
+.self-check-list { display: grid; gap: 10px; margin-top: 14px; }
+.self-check-row { display: flex; align-items: center; gap: 12px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); }
+.self-check-row > i { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 50%; color: var(--success); background: rgba(16,176,128,.12); font-style: normal; font-weight: 800; }
+.self-check-row > i.failed { color: var(--danger); background: var(--danger-dim); }
+.self-check-row div { min-width: 0; }
+.self-check-row strong, .self-check-row small { display: block; }
+.self-check-row small { margin-top: 3px; color: var(--text-muted); line-height: 1.5; overflow-wrap: anywhere; }
 
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; }
 .card-title { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }

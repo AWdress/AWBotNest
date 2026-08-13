@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import importlib.util
+import inspect
 import sys
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
@@ -101,6 +102,125 @@ class PluginRuntime:
         handlers = getattr(loaded.ctx, "_api_handlers", {})
         norm = "/" + str(path or "").strip().strip("/")
         return handlers.get((str(method).upper(), norm))
+
+    async def self_check(self, plugin_id: str) -> dict[str, object]:
+        async with self._lock:
+            return await self._self_check_locked(plugin_id)
+
+    async def _self_check_locked(self, plugin_id: str) -> dict[str, object]:
+        """执行平台基础检查，并按需调用插件提供的 self_check(ctx)。"""
+        meta = registry.get_meta(plugin_id)
+        if meta is None:
+            raise FileNotFoundError(f"插件不存在: {plugin_id}")
+        loaded = self._loaded.get(plugin_id)
+        enabled = registry.is_enabled(plugin_id)
+        checks: list[dict[str, object]] = [
+            {
+                "id": "metadata", "name": "插件文件", "ok": not bool(meta.error),
+                "detail": meta.error or "元数据和入口文件正常",
+            },
+            {
+                "id": "runtime", "name": "运行状态", "ok": bool(loaded) if enabled else True,
+                "detail": "已加载" if loaded else ("已停用" if not enabled else "启用后未成功加载"),
+            },
+        ]
+        config = registry.get_config(plugin_id)
+        def missing_value(value: object) -> bool:
+            return value in (None, [], {}) or (isinstance(value, str) and not value.strip())
+
+        missing_config = [
+            key for key, spec in (meta.config_schema or {}).items()
+            if isinstance(spec, dict) and spec.get("required")
+            and spec.get("type") not in {"info", "action"}
+            and (
+                not isinstance(spec.get("show_if"), dict)
+                or all(config.get(cond_key) == cond_value
+                       for cond_key, cond_value in spec["show_if"].items())
+            )
+            and missing_value(config.get(key))
+        ]
+        checks.append({
+            "id": "config", "name": "插件配置", "ok": not missing_config,
+            "detail": (
+                f"缺少必填项：{', '.join(missing_config)}"
+                if missing_config else "配置格式正常"
+            ),
+        })
+
+        if loaded:
+            ctx = loaded.ctx
+            scope = str(meta.scope or "user")
+            if scope in {"user", "both"}:
+                user_count = len(ctx._scoped_user_apps())
+                checks.append({
+                    "id": "accounts", "name": "用户账号", "ok": user_count > 0,
+                    "detail": f"{user_count} 个可用账号" if user_count else "没有可用账号",
+                })
+            if scope in {"bot", "both"}:
+                bot = ctx._chosen_bot()
+                bot_ok = self._accounts.connection_ready(bot)
+                checks.append({
+                    "id": "bot", "name": "Bot 账号", "ok": bot_ok,
+                    "detail": "已连接" if bot_ok else "没有可用 Bot",
+                })
+            from schedulers import scheduler
+
+            job_count = sum(
+                1 for job in scheduler.get_jobs()
+                if str(job.id).startswith(f"{plugin_id}::")
+            )
+            checks.append({
+                "id": "scheduler", "name": "定时任务", "ok": True,
+                "detail": f"已注册 {job_count} 个任务" if job_count else "没有注册定时任务",
+            })
+
+            custom_check = getattr(loaded.module, "self_check", None)
+            if callable(custom_check):
+                try:
+                    async def run_custom_check():
+                        if inspect.iscoroutinefunction(custom_check):
+                            return await custom_check(ctx)
+                        value = await asyncio.to_thread(custom_check, ctx)
+                        return await value if inspect.isawaitable(value) else value
+
+                    result = await asyncio.wait_for(run_custom_check(), timeout=15)
+                    checks.extend(self._normalise_self_checks(result))
+                except TimeoutError:
+                    checks.append({
+                        "id": "plugin-check", "name": "插件检查", "ok": False,
+                        "detail": "检查超过 15 秒，已停止等待",
+                    })
+                except Exception as exc:  # noqa: BLE001
+                    checks.append({
+                        "id": "plugin-check", "name": "插件检查", "ok": False,
+                        "detail": f"{exc.__class__.__name__}: {exc}"[:300],
+                    })
+
+        return {
+            "plugin_id": plugin_id,
+            "plugin_name": meta.name,
+            "ok": all(bool(item["ok"]) for item in checks),
+            "checks": checks,
+        }
+
+    @staticmethod
+    def _normalise_self_checks(result: object) -> list[dict[str, object]]:
+        if result is None:
+            return []
+        values = result if isinstance(result, list) else [result]
+        checks: list[dict[str, object]] = []
+        for index, item in enumerate(values):
+            if isinstance(item, bool):
+                item = {"ok": item, "name": "插件检查"}
+            if not isinstance(item, dict) or "ok" not in item:
+                raise ValueError("self_check 必须返回含 ok 的字典或字典列表")
+            checks.append({
+                "id": str(item.get("id") or f"plugin-check-{index + 1}")[:80],
+                "name": str(item.get("name") or "插件检查")[:80],
+                "ok": bool(item["ok"]),
+                "detail": str(item.get("detail") or ("正常" if item["ok"] else "检查未通过"))[:300],
+            })
+        return checks
 
     # ──────────────────────────────────────────────
     # 加载（启用）

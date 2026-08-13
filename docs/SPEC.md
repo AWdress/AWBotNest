@@ -379,6 +379,8 @@ async def setup(ctx):
 | 可写目录 | `ctx.data_dir`（`Path`，每插件独立 `data/plugin_data/<id>/`） |
 | 日志 | `ctx.log.info/debug/warning/error`（自动带 `[插件id]` 前缀，前端日志页可见） |
 | 定时任务 | `ctx.schedule(fn, "interval", seconds=60)`（可传 `id="名称"`，自动归属本插件并显示在系统状态页） |
+| 任务进度 | `ctx.report_progress(percent, step)`（仅在当前定时任务中生效） |
+| 插件自检 | 可选 `self_check(ctx)`，返回含 `ok/name/detail` 的字典或列表；平台同时执行基础检查 |
 | Webhook | `@ctx.on_webhook`（需 `__plugin__` 声明 `"webhook": True`；入站 `…/api/v1/plugin/<id>/webhook?apikey=<密钥>`，apikey 用平台统一的 `WEBHOOK_SECRET`，处理器收 `WebhookRequest`，返回 dict/str/None） |
 | 清理回调 | `ctx.add_cleanup(fn)` |
 
