@@ -1026,13 +1026,14 @@ async function download(p) {
       p.install_count = res.install_counts?.[p.id] ?? p.install_count ?? 0
       await load()
       const reloaded = (res.reloaded || []).includes(p.id)
+      const restored = (res.restored || []).includes(p.id)
       const reloadError = (res.reload_errors || []).find(item => item.startsWith(`${p.id}:`))
       if (reloadError) {
         storeErr.value = reloadError
         toast.error(`插件「${p.name}」文件已更新，但重新加载失败，请检查插件日志`)
       } else {
         toast.success(isUpdate
-          ? `插件「${p.name}」已更新到 v${p.version}${reloaded ? '（运行中实例已热重载）' : ''}`
+          ? `插件「${p.name}」已更新到 v${p.version}${restored ? '（已自动恢复运行）' : reloaded ? '（运行中实例已热重载）' : ''}`
           : `插件「${p.name}」安装完成`)
       }
     }

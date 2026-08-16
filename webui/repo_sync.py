@@ -504,10 +504,12 @@ async def _download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
         "downloaded": [],
         "errors": [],
         "install_counts": {},
+        "restored": [],
     }
     state = _load_state()
     successful_events: list[dict[str, str]] = []
     reloaded: list[str] = []
+    restored: list[str] = []
     repos = {r["url"] for r in _get_repos()}
 
     for plugin in plugins:
@@ -544,6 +546,7 @@ async def _download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
                         compile(content, str(dest), "exec")
 
                 from kernel.registry import registry as _reg
+                was_enabled = was_installed and _reg.is_enabled(pid)
                 stage_entry = stage_root / f"{pid}.py"
                 if not stage_entry.exists():
                     stage_entry = stage_root / pid / "__init__.py"
@@ -595,6 +598,11 @@ async def _download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
                     if not runtime.is_loaded(pid) or getattr(meta, "error", None):
                         raise RuntimeError(getattr(meta, "error", None) or "新版本没有进入运行状态")
                     reloaded.append(pid)
+                elif runtime is not None and was_enabled:
+                    meta = await runtime.enable(pid)
+                    if not runtime.is_loaded(pid) or getattr(meta, "error", None):
+                        raise RuntimeError(getattr(meta, "error", None) or "新版本没有恢复运行")
+                    restored.append(pid)
             except Exception:
                 # 正式文件可能已被换出，恢复前先移走失败的新版本。
                 if replacement_started:
@@ -664,6 +672,8 @@ async def _download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     _refresh_registry()
     if reloaded:
         result["reloaded"] = reloaded
+    if restored:
+        result["restored"] = restored
     result["ok"] = bool(result["downloaded"])
     return result
 
@@ -693,6 +703,7 @@ async def sync_once() -> dict[str, Any]:
     versions: dict[str, str] = state.get("versions") or {}
     updated: list[str] = []
     reloaded: list[str] = []
+    restored: list[str] = []
     errors: list[str] = list(listing.get("errors") or [])
 
     to_update = []
@@ -740,14 +751,16 @@ async def sync_once() -> dict[str, Any]:
         dl = await download_plugins(to_update)
         updated = dl.get("downloaded", [])
         reloaded = dl.get("reloaded", [])
+        restored = dl.get("restored", [])
         errors.extend(dl.get("errors", []))
         errors.extend(dl.get("reload_errors", []))
 
     if updated:
+        resumed = reloaded + restored
         logger.info("插件仓库轮询：更新已安装插件 %d 个 %s%s", len(updated), updated,
-                    f"，其中 %d 个已自动重载 %s" % (len(reloaded), reloaded) if reloaded else "")
+                    f"，其中 %d 个已自动恢复运行 %s" % (len(resumed), resumed) if resumed else "")
     return {"ok": True, "store_count": len(store), "updated": updated,
-            "reloaded": reloaded, "errors": errors}
+            "reloaded": reloaded, "restored": restored, "errors": errors}
 
 
 # ──────────────────────────────────────────────
