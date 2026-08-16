@@ -12,6 +12,8 @@ webui/repo_sync.py
 from __future__ import annotations
 
 import asyncio
+import ast
+import errno
 import json
 import os
 import shutil
@@ -42,6 +44,7 @@ _MAX_SAFE_COUNT = 9_007_199_254_740_991
 _APP_VERSION_PATH = Path(__file__).parent.parent / "VERSION"
 _APP_VERSION = _APP_VERSION_PATH.read_text(encoding="utf-8").strip() if _APP_VERSION_PATH.exists() else ""
 _HEAT_SYNC_LOCK = asyncio.Lock()
+_PLUGIN_UPDATE_LOCK = asyncio.Lock()
 
 
 # ──────────────────────────────────────────────
@@ -248,6 +251,91 @@ def _safe_target(target: str) -> str:
     return t
 
 
+def _move_path(source: Path, destination: Path) -> None:
+    """移动文件或目录；跨挂载点时仍保证最终切换是原子的。"""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.replace(source, destination)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+
+    # Docker 中 data/ 和 plugins/ 经常是两个挂载点。先复制到目标目录的临时
+    # 同级路径，再在目标文件系统内原子改名，避免产生只写了一半的正式插件。
+    temporary = destination.parent / f".{destination.name}.moving-{uuid.uuid4().hex}"
+    try:
+        if source.is_dir():
+            shutil.copytree(source, temporary)
+        else:
+            shutil.copy2(source, temporary)
+        os.replace(temporary, destination)
+        if source.is_dir():
+            shutil.rmtree(source)
+        else:
+            source.unlink()
+    finally:
+        if temporary.is_dir():
+            shutil.rmtree(temporary, ignore_errors=True)
+        elif temporary.exists():
+            temporary.unlink(missing_ok=True)
+
+
+def _validate_package_imports(package_root: Path) -> None:
+    """替换正式目录前，拒绝缺少必需相对导入模块的不完整插件包。"""
+
+    def module_exists(parts: list[str]) -> bool:
+        path = package_root.joinpath(*parts)
+        return path.with_suffix(".py").is_file() or path.is_dir()
+
+    def catches_import_error(handler: ast.ExceptHandler) -> bool:
+        if handler.type is None:
+            return True
+        names = {
+            node.id for node in ast.walk(handler.type)
+            if isinstance(node, ast.Name)
+        }
+        return bool(names & {"BaseException", "Exception", "ImportError", "ModuleNotFoundError"})
+
+    for source_path in package_root.rglob("*.py"):
+        tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+        relative = source_path.relative_to(package_root)
+        package_parts = list(relative.parts[:-1])
+
+        optional_imports: set[int] = set()
+        try_types = (ast.Try, ast.TryStar)
+        for candidate in ast.walk(tree):
+            if not isinstance(candidate, try_types):
+                continue
+            if not any(catches_import_error(handler) for handler in candidate.handlers):
+                continue
+            for statement in candidate.body:
+                optional_imports.update(id(node) for node in ast.walk(statement))
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level <= 0:
+                continue
+            if id(node) in optional_imports:
+                continue
+            parents = node.level - 1
+            if parents > len(package_parts):
+                raise ValueError(f"相对导入超出插件目录: {relative}:{node.lineno}")
+            base = package_parts[:len(package_parts) - parents]
+            if node.module:
+                target = base + node.module.split(".")
+                if not module_exists(target):
+                    name = "." * node.level + node.module
+                    raise ValueError(f"目录插件缺少相对导入模块 {name}: {relative}:{node.lineno}")
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                target = base + alias.name.split(".")
+                if not module_exists(target):
+                    name = "." * node.level + alias.name
+                    raise ValueError(f"目录插件缺少相对导入模块 {name}: {relative}:{node.lineno}")
+
+
 def _local_exists(plugin_id: str) -> bool:
     """本地是否已存在该插件（单文件或文件夹形态）。"""
     return (PLUGINS_DIR / f"{plugin_id}.py").exists() or (PLUGINS_DIR / plugin_id / "__init__.py").exists()
@@ -401,6 +489,12 @@ def get_store_status() -> dict[str, Any]:
 # 下载（按需，单个或多个）
 # ──────────────────────────────────────────────
 async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
+    """串行替换插件，避免手动更新与定时更新互相移动同一正式目录。"""
+    async with _PLUGIN_UPDATE_LOCK:
+        return await _download_plugins(plugins)
+
+
+async def _download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     """
     下载指定插件到 plugins/（不启用）。plugins 为商店列表里的插件对象（含 owner/repo/path 等）。
     返回 {ok, downloaded:[], errors:[]}。
@@ -453,6 +547,8 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
                 stage_entry = stage_root / f"{pid}.py"
                 if not stage_entry.exists():
                     stage_entry = stage_root / pid / "__init__.py"
+                    if stage_entry.exists():
+                        _validate_package_imports(stage_entry.parent)
                 stage_meta = _reg.parse_meta(stage_entry, pid)
                 if stage_meta.error:
                     raise ValueError(f"灰度检查未通过：{stage_meta.error}")
@@ -478,16 +574,16 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
                 backup_root.mkdir(parents=True, exist_ok=True)
                 replacement_started = True
                 if current_single.exists():
-                    os.replace(current_single, backup_root / current_single.name)
+                    _move_path(current_single, backup_root / current_single.name)
                 if current_package.exists():
-                    os.replace(current_package, backup_root / current_package.name)
+                    _move_path(current_package, backup_root / current_package.name)
 
                 new_single = stage_root / f"{pid}.py"
                 new_package = stage_root / pid
                 if new_single.exists():
-                    os.replace(new_single, current_single)
+                    _move_path(new_single, current_single)
                 elif new_package.exists():
-                    os.replace(new_package, current_package)
+                    _move_path(new_package, current_package)
                 else:
                     raise ValueError("灰度检查未找到插件入口文件")
 
@@ -509,9 +605,9 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
                     old_single = backup_root / f"{pid}.py"
                     old_package = backup_root / pid
                     if old_single.exists():
-                        os.replace(old_single, PLUGINS_DIR / old_single.name)
+                        _move_path(old_single, PLUGINS_DIR / old_single.name)
                     if old_package.exists():
-                        os.replace(old_package, PLUGINS_DIR / old_package.name)
+                        _move_path(old_package, PLUGINS_DIR / old_package.name)
                     _refresh_registry()
                     try:
                         from kernel import state as _kernel_state
@@ -609,6 +705,14 @@ async def sync_once() -> dict[str, Any]:
         pid = p["id"]
         prev = versions.get(pid)
         remote_ver = str(p.get("version") or "")
+        package_incomplete = False
+        local_package = PLUGINS_DIR / pid
+        if local_package.is_dir():
+            try:
+                _validate_package_imports(local_package)
+            except ValueError as exc:
+                package_incomplete = True
+                logger.warning("插件目录不完整，将重新下载 [%s]: %s", pid, exc)
 
         # 关键：只有「确实从仓库下载过」(versions 里有记录) 的插件才自动更新。
         # 本地上传 / 手动 GitHub 导入 / 与仓库撞 id 的本地插件没有版本记录，
@@ -625,7 +729,7 @@ async def sync_once() -> dict[str, Any]:
                     versions_changed = True
             continue
 
-        if remote_ver and prev != remote_ver:
+        if remote_ver and (prev != remote_ver or package_incomplete):
             to_update.append(p)
 
     if versions_changed:
