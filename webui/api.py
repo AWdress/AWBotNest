@@ -873,6 +873,40 @@ async def plugin_self_check(plugin_id: str, user=Depends(_auth_pwc)):
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/plugins/dependencies")
+async def plugin_dependencies(user=Depends(_auth)):
+    """返回插件依赖和能力关系，供管理页绘制关系图。"""
+    return _get_runtime().dependency_graph()
+
+
+@app.get("/api/plugins/{plugin_id}/runtime")
+async def plugin_runtime_status(plugin_id: str, user=Depends(_auth)):
+    _assert_safe_plugin_id(plugin_id)
+    if registry.get_meta(plugin_id) is None:
+        raise HTTPException(status_code=404, detail="插件不存在")
+    from kernel.plugin_governance import governor
+
+    return {
+        **_get_runtime().runtime_status(plugin_id),
+        "events": governor.events.query(plugin_id, 100),
+    }
+
+
+@app.post("/api/plugins/{plugin_id}/events/{event_id}/replay")
+async def replay_plugin_event(plugin_id: str, event_id: str, user=Depends(_auth_pwc)):
+    """重新执行插件明确标记为可回放的业务事件。"""
+    _assert_safe_plugin_id(plugin_id)
+    from kernel.plugin_governance import governor
+
+    try:
+        await governor.replay(plugin_id, event_id)
+        return {"ok": True}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.post("/api/plugins/upload")
 async def upload_plugin(file: UploadFile = File(...), user=Depends(_auth_pwc)):
     """
@@ -998,7 +1032,10 @@ async def enable_plugin(plugin_id: str, user=Depends(_auth_pwc)):
 async def disable_plugin(plugin_id: str, user=Depends(_auth)):
     """停用插件（热卸载）"""
     runtime = _get_runtime()
-    meta = await runtime.disable(plugin_id)
+    try:
+        meta = await runtime.disable(plugin_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"status": "success", "plugin": meta.to_dict()}
 
 
@@ -1020,7 +1057,10 @@ async def delete_plugin(plugin_id: str, user=Depends(_auth_pwc)):
     runtime = _get_runtime()
     # 删文件后 get_meta 取不到，先把中文名留下来供日志用
     _disp = registry.display_name(plugin_id)
-    await runtime.disable(plugin_id)
+    try:
+        await runtime.disable(plugin_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     # 文件夹插件删整个目录，单文件插件删 .py
     if registry.is_package_plugin(plugin_id):
         pkg_dir = PLUGINS_DIR / plugin_id

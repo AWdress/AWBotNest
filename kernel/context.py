@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import hashlib
 import inspect
+import re
 from pathlib import Path
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
@@ -23,6 +25,7 @@ from pyrogram.handlers import MessageHandler, EditedMessageHandler, CallbackQuer
 from pyrogram import StopPropagation, ContinuePropagation
 from kernel.ai import PluginAI
 from kernel.cookies import PluginCookies
+from kernel.plugin_governance import governor
 
 
 class _PluginLoggerAdapter:
@@ -303,8 +306,13 @@ class PlatformContext:
         kv_dir: Path = Path("data/kv"),
         data_root: Path = Path("data/plugin_data"),
         group_base: int = 0,
+        account_name: str | None = None,
+        primary_instance: bool = True,
     ):
         self.plugin_id = plugin_id
+        self.account_name = account_name
+        self.instance_id = f"{plugin_id}@{account_name}" if account_name else plugin_id
+        self.is_primary_instance = primary_instance
         self._accounts = accounts
         self._registry = registry
         self._data_root = data_root
@@ -334,8 +342,19 @@ class PlatformContext:
         # 暴露给插件的能力
         self.filters = _filters
         self.log = _make_plugin_logger(plugin_id, registry)
-        self.kv = _KVStore(kv_dir / f"{plugin_id}.sqlite")
-        self.ai = PluginAI(plugin_id, data_root / plugin_id / "ai")
+        readable_name = re.sub(r'[^A-Za-z0-9._@-]+', "_", self.instance_id).strip("._")
+        if account_name:
+            digest = hashlib.sha256(self.instance_id.encode()).hexdigest()[:10]
+            storage_name = f"{readable_name[:80] or 'instance'}-{digest}"
+        else:
+            # 共享实例沿用原目录名，避免升级后读不到已有 KV 和 AI 数据。
+            storage_name = self.plugin_id
+        self._instance_data_dir = (
+            data_root / plugin_id / "instances" / storage_name
+            if account_name else data_root / plugin_id
+        )
+        self.kv = _KVStore(kv_dir / f"{storage_name}.sqlite")
+        self.ai = PluginAI(plugin_id, self._instance_data_dir / "ai")
         self.cookies = PluginCookies(plugin_id, self._notify_cookie_sync)
         # 主动中断消息传播的信号：handler 内 `raise ctx.StopPropagation` 可阻止
         # 后续（更大 group）的其它插件/handler 再处理这条消息。
@@ -378,10 +397,88 @@ class PlatformContext:
         handler 挂载与 ctx.user/ctx.user_apps 共用同一套过滤，保证「只勾一个账号」时
         无论插件是被动响应消息还是主动遍历账号发消息，都只作用于所选账号。"""
         user_apps = self._accounts.connected_user_apps
+        if self.account_name:
+            return [a for a in user_apps if getattr(a, "name", None) == self.account_name]
         scope_sessions = self._registry.get_account_scope(self.plugin_id)
         if scope_sessions:
             return [a for a in user_apps if getattr(a, "name", None) in scope_sessions]
         return list(user_apps)
+
+    # ──────────────────────────────────────────────
+    # 统一执行、后台任务、能力与事件
+    # ──────────────────────────────────────────────
+    async def execute(self, operation: str, func: Callable[[], Any], *,
+                      timeout: float | None = None, fallback: Callable[[], Any] | None = None,
+                      event_data: dict[str, Any] | None = None) -> Any:
+        """通过平台统一管道执行插件逻辑，自动处理超时、并发、熔断、降级和事件记录。"""
+        if not self._active:
+            raise RuntimeError(f"插件实例已停止：{self.instance_id}")
+        governed_operation = (
+            f"{self.instance_id}:{operation}" if self.account_name else str(operation)
+        )
+        return await governor.execute(
+            self.plugin_id, governed_operation, func,
+            timeout=timeout, fallback=fallback, event_data=event_data,
+        )
+
+    def create_task(self, awaitable, *, name: str | None = None,
+                    operation: str = "background") -> asyncio.Task:
+        """创建可被平台真正取消并等待退出的后台任务。"""
+        if not self._active:
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            raise RuntimeError(f"插件实例已停止：{self.instance_id}")
+        async def managed():
+            try:
+                return await self.execute(operation, lambda: awaitable)
+            finally:
+                # 熔断可能在真正 await 业务协程前就拒绝任务，仍需关闭协程避免泄漏警告。
+                if inspect.iscoroutine(awaitable) and awaitable.cr_frame is not None:
+                    awaitable.close()
+
+        try:
+            task = governor.create_task(
+                self.plugin_id, managed(),
+                name=name or f"{self.instance_id}:{operation}",
+            )
+            # 若外层任务在首次调度前就被取消，managed() 的 finally 尚未进入；
+            # 完成回调仍要关闭插件传入的裸协程，避免未等待协程泄漏。
+            def close_unstarted(_task: asyncio.Task) -> None:
+                if inspect.iscoroutine(awaitable) and awaitable.cr_frame is not None:
+                    awaitable.close()
+
+            task.add_done_callback(close_unstarted)
+            return task
+        except Exception:
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            raise
+
+    def provide_capability(self, name: str, provider: Any, *, priority: int = 100) -> None:
+        """注册能力提供者；高优先级失败时平台自动尝试后续备用提供者。"""
+        self._cleanups.append(governor.capabilities.register(
+            self.plugin_id, str(name), provider, priority,
+        ))
+
+    async def call_capability(self, name: str, *args, method: str | None = None, **kwargs) -> Any:
+        """调用平台能力链，不需要知道具体由哪个插件提供。"""
+        return await governor.call_capability(self.instance_id, name, method, *args, **kwargs)
+
+    def record_event(self, event_type: str, payload: dict[str, Any] | None = None,
+                     *, replayable: bool = False) -> str:
+        """记录业务事件；可回放事件需同时用 on_replay 注册同名处理器。"""
+        event = governor.events.append(
+            self.plugin_id, "business_event", replay_type=event_type if replayable else "",
+            payload=payload or {}, instance_id=self.instance_id,
+        )
+        return str(event["id"])
+
+    def on_replay(self, event_type: str) -> Callable:
+        """注册事件回放处理器，处理器接收记录时的 payload 字典。"""
+        def decorator(func: Callable) -> Callable:
+            self._cleanups.append(governor.register_replayer(self.instance_id, str(event_type), func))
+            return func
+        return decorator
 
     @property
     def owner_id(self) -> int:
@@ -521,7 +618,7 @@ class PlatformContext:
         本插件独立的可写数据目录 data/plugin_data/<id>/（Path，首次访问自动建）。
         存实际文件（头像图片池、下载素材等）用它；ctx.kv 只存键值。
         """
-        d = self._data_root / self.plugin_id
+        d = self._instance_data_dir
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -611,7 +708,7 @@ class PlatformContext:
         async def wrapper(req):
             token = activity.set_current(pid)
             try:
-                return await func(req)
+                return await self.execute("webhook", lambda: func(req))
             finally:
                 activity.reset_current(token)
 
@@ -644,10 +741,7 @@ class PlatformContext:
             async def wrapper():
                 token = activity.set_current(pid)
                 try:
-                    result = func()
-                    if asyncio.iscoroutine(result):
-                        result = await result
-                    return result
+                    return await self.execute(f"action:{name}", func)
                 finally:
                     activity.reset_current(token)
 
@@ -699,10 +793,7 @@ class PlatformContext:
             async def wrapper(req):
                 token = activity.set_current(pid)
                 try:
-                    result = func(req)
-                    if asyncio.iscoroutine(result):
-                        result = await result
-                    return result
+                    return await self.execute(f"api:{norm}", lambda: func(req))
                 finally:
                     activity.reset_current(token)
 
@@ -731,7 +822,7 @@ class PlatformContext:
         if subdir:
             resolved = target.resolve()
             base = self.data_dir.resolve()
-            if not str(resolved).startswith(str(base)):
+            if not resolved.is_relative_to(base):
                 raise ValueError(f"子目录路径非法：不能越出插件数据目录")
 
         target.mkdir(parents=True, exist_ok=True)
@@ -759,19 +850,29 @@ class PlatformContext:
             try:
                 # 兼容同步 handler：直接 await 非协程会每次触发都抛 TypeError，
                 # 导致同步 handler 永不执行、同 group 后续 handler 被跳过。
-                result = func(client, update, *args, **kwargs)
-                if inspect.iscoroutine(result):
-                    task = asyncio.create_task(result)
-                    self._handler_tasks.add(task)
-                    try:
-                        return await task
-                    except asyncio.CancelledError:
-                        if not self._active:
-                            return None
-                        raise
-                    finally:
-                        self._handler_tasks.discard(task)
-                return result
+                async def invoke():
+                    result = func(client, update, *args, **kwargs)
+                    if inspect.isawaitable(result):
+                        return await result
+                    return result
+
+                task = governor.create_task(
+                    self.plugin_id,
+                    self.execute(
+                        f"handler:{getattr(func, '__name__', 'message')}", invoke,
+                        event_data={"instance_id": self.instance_id},
+                    ),
+                    name=f"{self.instance_id}:handler:{getattr(func, '__name__', 'message')}",
+                )
+                self._handler_tasks.add(task)
+                try:
+                    return await task
+                except asyncio.CancelledError:
+                    if not self._active:
+                        return None
+                    raise
+                finally:
+                    self._handler_tasks.discard(task)
             finally:
                 activity.reset_current(token)
 
@@ -790,9 +891,11 @@ class PlatformContext:
         if target in ("user", "both"):
             clients.extend(self._scoped_user_apps())
         if target in ("bot", "both"):
-            bot = self._chosen_bot()
-            if bot and getattr(bot, "is_connected", False):
-                clients.append(bot)
+            # account 多实例共用同一个 Bot；只让主实例挂载 Bot handler，避免一条消息重复处理。
+            if self.is_primary_instance:
+                bot = self._chosen_bot()
+                if bot and getattr(bot, "is_connected", False):
+                    clients.append(bot)
         return clients
 
     # ──────────────────────────────────────────────
@@ -829,12 +932,18 @@ class PlatformContext:
                 self._scheduled_tasks.add(task)
             run_handle = job_progress.start(job_id)
             try:
-                if inspect.iscoroutinefunction(func):
-                    result = await func(*args, **kwargs)
-                else:
+                async def invoke():
+                    if inspect.iscoroutinefunction(func):
+                        return await func(*args, **kwargs)
                     result = await asyncio.to_thread(func, *args, **kwargs)
-                if inspect.isawaitable(result):
-                    result = await result
+                    if inspect.isawaitable(result):
+                        return await result
+                    return result
+
+                result = await self.execute(
+                    f"schedule:{job_id}", invoke,
+                    event_data={"job_id": job_id, "instance_id": self.instance_id},
+                )
                 job_progress.finish(job_id, run_handle)
                 return result
             except BaseException as exc:
@@ -883,45 +992,44 @@ class PlatformContext:
     # ──────────────────────────────────────────────
     # 内部：供 PluginRuntime 调用
     # ──────────────────────────────────────────────
-    def _unregister_all(self) -> None:
-        """注销本插件所有处理器并执行清理回调"""
+    async def aclose(self, timeout: float = 10.0, *, cancel_governor_tasks: bool = True) -> None:
+        """完整停止插件实例：关门、注销、取消并等待任务、等待清理回调结束。"""
         self._active = False
-        for task in tuple(self._handler_tasks):
-            if not task.done():
-                task.cancel()
-        self._handler_tasks.clear()
-        for task in tuple(self._scheduled_tasks):
-            if task is not asyncio.current_task() and not task.done():
-                task.cancel()
-        self._scheduled_tasks.clear()
+        current = asyncio.current_task()
+        tasks = {
+            task for task in (*self._handler_tasks, *self._scheduled_tasks)
+            if task is not current and not task.done()
+        }
+        for task in tasks:
+            task.cancel()
+
         for client, handler, group in self._handles:
             try:
                 client.remove_handler(handler, group)
-            except Exception as e:  # noqa: BLE001 - 卸载尽量不抛
-                _root_logger.warning("注销 handler 失败 [%s]: %r", self.plugin_id, e)
+            except Exception as exc:  # noqa: BLE001
+                _root_logger.warning("注销 handler 失败 [%s]: %r", self.plugin_id, exc)
         self._handles.clear()
 
-        import inspect
-        for fn in self._cleanups:
+        if cancel_governor_tasks:
+            await governor.cancel_all(self.plugin_id, timeout=timeout)
+        if tasks:
+            _, pending = await asyncio.wait(tasks, timeout=timeout)
+            for task in pending:
+                _root_logger.warning("插件任务未能及时退出 [%s]: %s", self.plugin_id, task.get_name())
+        self._handler_tasks.clear()
+        self._scheduled_tasks.clear()
+
+        cleanups, self._cleanups = self._cleanups, []
+        for fn in reversed(cleanups):
             try:
                 result = fn()
-                # 清理回调可能是协程（如 aiohttp ClientSession.close()）；直接 fn() 只会
-                # 创建协程随即丢弃，造成连接/句柄静默泄漏 + "coroutine was never awaited"。
-                # 卸载在事件循环中进行，这里调度执行它。
-                if inspect.iscoroutine(result):
-                    task = asyncio.create_task(result)
-                    # 添加回调记录异常，避免 "Task exception was never retrieved" 警告
-                    def _log_cleanup_error(t: asyncio.Task) -> None:
-                        try:
-                            t.result()
-                        except Exception as exc:
-                            _root_logger.warning("清理回调协程执行失败 [%s]: %r", self.plugin_id, exc)
-                    task.add_done_callback(_log_cleanup_error)
-            except Exception as e:  # noqa: BLE001
-                _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, e)
-        self._cleanups.clear()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, timeout=timeout)
+            except asyncio.TimeoutError:
+                _root_logger.warning("清理回调超时 [%s]", self.plugin_id)
+            except Exception as exc:  # noqa: BLE001
+                _root_logger.warning("执行清理回调失败 [%s]: %r", self.plugin_id, exc)
 
-        # webhook / 动作 / API 处理器随插件卸载失效，避免热重载后调用到旧闭包
         self._webhook_handler = None
         self._action_handlers.clear()
         self._api_handlers.clear()

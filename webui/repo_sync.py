@@ -13,10 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+
+from packaging.version import InvalidVersion, Version
 
 try:
     import httpx
@@ -409,6 +413,7 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     }
     state = _load_state()
     successful_events: list[dict[str, str]] = []
+    reloaded: list[str] = []
     repos = {r["url"] for r in _get_repos()}
 
     for plugin in plugins:
@@ -425,16 +430,99 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
             if not files:
                 result["errors"].append(f"{pid}: 无可下载文件")
                 continue
-            # 先全部下载到内存，全部成功后再落盘——避免文件夹插件中途失败留半截文件
+            # 先全部下载到隔离目录并静态检查，再替换正式文件。运行中的插件若重载失败，
+            # 会恢复旧文件并重新挂回旧版本，避免更新把可用插件直接弄坏。
             staged = []
             contents = await github_import.fetch_files(files)
             for f, content in zip(files, contents):
                 target = _safe_target(f["target"])
                 staged.append((target, content))
-            for target, content in staged:
-                dest = PLUGINS_DIR / target
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_bytes(content)
+            transaction_dir = Path("data/.plugin_staging") / f"{pid}-{uuid.uuid4().hex}"
+            stage_root = transaction_dir / "new"
+            backup_root = transaction_dir / "old"
+            replacement_started = False
+            try:
+                for target, content in staged:
+                    dest = stage_root / target
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(content)
+                    if dest.suffix == ".py":
+                        compile(content, str(dest), "exec")
+
+                from kernel.registry import registry as _reg
+                stage_entry = stage_root / f"{pid}.py"
+                if not stage_entry.exists():
+                    stage_entry = stage_root / pid / "__init__.py"
+                stage_meta = _reg.parse_meta(stage_entry, pid)
+                if stage_meta.error:
+                    raise ValueError(f"灰度检查未通过：{stage_meta.error}")
+                from kernel.plugin_runtime import PLUGIN_API_VERSION
+                if stage_meta.plugin_api_version > PLUGIN_API_VERSION:
+                    raise ValueError(
+                        f"灰度检查未通过：插件需要接口版本 {stage_meta.plugin_api_version}，"
+                        f"当前平台只支持 {PLUGIN_API_VERSION}"
+                    )
+                try:
+                    current_version = Version(_APP_VERSION.lstrip("vV"))
+                    if (stage_meta.min_platform_version
+                            and current_version < Version(stage_meta.min_platform_version.lstrip("vV"))):
+                        raise ValueError(f"灰度检查未通过：插件要求平台不低于 {stage_meta.min_platform_version}")
+                    if (stage_meta.max_platform_version
+                            and current_version > Version(stage_meta.max_platform_version.lstrip("vV"))):
+                        raise ValueError(f"灰度检查未通过：插件只兼容到平台 {stage_meta.max_platform_version}")
+                except InvalidVersion as exc:
+                    raise ValueError("灰度检查未通过：兼容版本格式不正确") from exc
+
+                current_single = PLUGINS_DIR / f"{pid}.py"
+                current_package = PLUGINS_DIR / pid
+                backup_root.mkdir(parents=True, exist_ok=True)
+                replacement_started = True
+                if current_single.exists():
+                    os.replace(current_single, backup_root / current_single.name)
+                if current_package.exists():
+                    os.replace(current_package, backup_root / current_package.name)
+
+                new_single = stage_root / f"{pid}.py"
+                new_package = stage_root / pid
+                if new_single.exists():
+                    os.replace(new_single, current_single)
+                elif new_package.exists():
+                    os.replace(new_package, current_package)
+                else:
+                    raise ValueError("灰度检查未找到插件入口文件")
+
+                _refresh_registry()
+                from kernel import state as _kernel_state
+                runtime = _kernel_state.runtime
+                if runtime is not None and runtime.is_loaded(pid):
+                    meta = await runtime.reload(pid)
+                    if not runtime.is_loaded(pid) or getattr(meta, "error", None):
+                        raise RuntimeError(getattr(meta, "error", None) or "新版本没有进入运行状态")
+                    reloaded.append(pid)
+            except Exception:
+                # 正式文件可能已被换出，恢复前先移走失败的新版本。
+                if replacement_started:
+                    if (PLUGINS_DIR / f"{pid}.py").exists():
+                        (PLUGINS_DIR / f"{pid}.py").unlink()
+                    if (PLUGINS_DIR / pid).exists():
+                        shutil.rmtree(PLUGINS_DIR / pid)
+                    old_single = backup_root / f"{pid}.py"
+                    old_package = backup_root / pid
+                    if old_single.exists():
+                        os.replace(old_single, PLUGINS_DIR / old_single.name)
+                    if old_package.exists():
+                        os.replace(old_package, PLUGINS_DIR / old_package.name)
+                    _refresh_registry()
+                    try:
+                        from kernel import state as _kernel_state
+                        runtime = _kernel_state.runtime
+                        if was_installed and runtime is not None and not runtime.is_loaded(pid) and _reg.is_enabled(pid):
+                            await runtime.enable(pid)
+                    except Exception as rollback_exc:  # noqa: BLE001
+                        logger.error("插件 [%s] 回滚后重新加载失败: %r", pid, rollback_exc)
+                raise
+            finally:
+                shutil.rmtree(transaction_dir, ignore_errors=True)
         except Exception as e:  # noqa: BLE001
             result["errors"].append(f"{pid}: {e}")
             continue
@@ -478,46 +566,10 @@ async def download_plugins(plugins: list[dict[str, Any]]) -> dict[str, Any]:
     result["heat_reported"] = bool(heat_sync.get("ok"))
     result["heat_pending"] = len((heat_sync.get("state") or {}).get("pending_heat_events") or [])
     _refresh_registry()
-    # 自动重载「更新成功且当前正在运行」的插件，让新代码立即生效。
-    # 未加载的插件只更新文件、不启用（保持 §7.5：启用=执行远程代码须手动）。
-    reloaded, reload_errors = await _reload_running(result["downloaded"])
     if reloaded:
         result["reloaded"] = reloaded
-    if reload_errors:
-        result["reload_errors"] = reload_errors
     result["ok"] = bool(result["downloaded"])
     return result
-
-
-async def _reload_running(plugin_ids: list[str]) -> tuple[list[str], list[str]]:
-    """对传入插件中「当前已加载」者执行热重载，使更新后的新代码生效。
-    返回成功列表和失败说明。运行时不可用或某插件未加载则跳过。"""
-    reloaded: list[str] = []
-    errors: list[str] = []
-    try:
-        from kernel import state as _state
-        runtime = _state.runtime
-    except Exception:  # noqa: BLE001
-        runtime = None
-    if runtime is None:
-        return reloaded, errors
-    for pid in plugin_ids:
-        try:
-            if not runtime.is_loaded(pid):
-                continue  # 未运行的只更新文件，不自动启用
-            meta = await runtime.reload(pid)
-            if not runtime.is_loaded(pid) or getattr(meta, "error", None):
-                detail = getattr(meta, "error", None) or "插件没有重新进入运行状态"
-                errors.append(f"{pid}: 文件已更新，但重新加载失败（{detail}）")
-                continue
-            reloaded.append(pid)
-            from kernel.registry import registry as _reg
-            logger.info("插件 [%s] 更新后已自动重载", _reg.display_name(pid))
-        except Exception as e:  # noqa: BLE001
-            from kernel.registry import registry as _reg
-            logger.warning("插件 [%s] 更新后自动重载失败: %r", _reg.display_name(pid), e)
-            errors.append(f"{pid}: 文件已更新，但重新加载失败（{e}）")
-    return reloaded, errors
 
 
 def _refresh_registry() -> None:

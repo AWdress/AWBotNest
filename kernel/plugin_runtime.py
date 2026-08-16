@@ -7,7 +7,7 @@ kernel/plugin_runtime.py
   → await setup(ctx) → 句柄登记在 ctx 内 → 标记 loaded
 
 卸载流程：
-  ctx._unregister_all() 注销所有 handler / 清理定时任务
+  await ctx.aclose() 注销 handler / 清理定时任务并等待后台任务退出
   → await teardown(ctx)（若有） → 从 sys.modules 移除模块
 
 容错：单个插件加载失败只标记该插件 error，不影响内核与其它插件。
@@ -22,10 +22,13 @@ import sys
 from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
+from packaging.version import InvalidVersion, Version
+
 from libs.log import logger
 from kernel.context import PlatformContext
 from kernel.registry import registry, PluginMeta
 from kernel import deps
+from kernel.plugin_governance import governor
 
 if TYPE_CHECKING:
     from kernel.account_manager import AccountManager
@@ -37,15 +40,21 @@ _MODULE_PREFIX = "awbotnest_plugin_"
 # group 0 留给"未分配/平台内置"，负数区间留给需要抢在所有插件之前的特殊场景。
 _GROUP_BASE_START = 1000
 _GROUP_BASE_STEP = 1000
+PLUGIN_API_VERSION = 1
+_VERSION_FILE = Path("VERSION")
 
 
 class LoadedPlugin:
     """一个已加载插件的运行时状态"""
 
-    def __init__(self, plugin_id: str, module: object, ctx: PlatformContext):
+    def __init__(self, plugin_id: str, module: object, contexts: list[PlatformContext]):
         self.id = plugin_id
         self.module = module
-        self.ctx = ctx
+        self.contexts = contexts
+
+    @property
+    def ctx(self) -> PlatformContext:
+        return self.contexts[0]
 
 
 class PluginRuntime:
@@ -83,7 +92,8 @@ class PluginRuntime:
         loaded = self._loaded.get(plugin_id)
         if loaded is None:
             return None
-        return getattr(loaded.ctx, "_webhook_handler", None)
+        return next((handler for ctx in loaded.contexts
+                     if (handler := getattr(ctx, "_webhook_handler", None)) is not None), None)
 
     def get_action_handler(self, plugin_id: str, action: str) -> Optional[object]:
         """取已加载插件注册的动作处理器（ctx.action(name)）。
@@ -91,7 +101,8 @@ class PluginRuntime:
         loaded = self._loaded.get(plugin_id)
         if loaded is None:
             return None
-        return getattr(loaded.ctx, "_action_handlers", {}).get(action)
+        return next((handler for ctx in loaded.contexts
+                     if (handler := getattr(ctx, "_action_handlers", {}).get(action)) is not None), None)
 
     def get_api_handler(self, plugin_id: str, method: str, path: str) -> Optional[object]:
         """取已加载插件注册的 API 处理器（ctx.on_api）。
@@ -99,9 +110,68 @@ class PluginRuntime:
         loaded = self._loaded.get(plugin_id)
         if loaded is None:
             return None
-        handlers = getattr(loaded.ctx, "_api_handlers", {})
         norm = "/" + str(path or "").strip().strip("/")
-        return handlers.get((str(method).upper(), norm))
+        return next((handler for ctx in loaded.contexts
+                     if (handler := getattr(ctx, "_api_handlers", {}).get((str(method).upper(), norm))) is not None), None)
+
+    @staticmethod
+    def _platform_version() -> Version | None:
+        try:
+            return Version(_VERSION_FILE.read_text(encoding="utf-8").strip().lstrip("vV"))
+        except (OSError, InvalidVersion):
+            return None
+
+    def _compatibility_error(self, meta: PluginMeta) -> str | None:
+        if meta.plugin_api_version > PLUGIN_API_VERSION:
+            return f"插件需要接口版本 {meta.plugin_api_version}，当前平台只支持 {PLUGIN_API_VERSION}"
+        current = self._platform_version()
+        try:
+            if current and meta.min_platform_version and current < Version(meta.min_platform_version.lstrip("vV")):
+                return f"插件要求平台不低于 {meta.min_platform_version}"
+            if current and meta.max_platform_version and current > Version(meta.max_platform_version.lstrip("vV")):
+                return f"插件只兼容到平台 {meta.max_platform_version}"
+        except InvalidVersion:
+            return "插件声明的平台兼容版本格式不正确"
+        missing_plugins = [pid for pid in meta.requires_plugins if not self.is_loaded(pid)]
+        if missing_plugins:
+            return f"请先启用依赖插件：{', '.join(missing_plugins)}"
+        available = set(governor.capabilities.names())
+        missing_capabilities = [name for name in meta.requires_capabilities if name not in available]
+        if missing_capabilities:
+            return f"缺少平台能力：{', '.join(missing_capabilities)}"
+        return None
+
+    def dependency_graph(self) -> dict[str, object]:
+        metas = registry.scan()
+        nodes = []
+        edges = []
+        known = {meta.id for meta in metas}
+        for meta in metas:
+            nodes.append({
+                "id": meta.id, "name": meta.name, "loaded": self.is_loaded(meta.id),
+                "version": meta.version, "instance_mode": meta.instance_mode,
+            })
+            for dependency in meta.requires_plugins:
+                edges.append({"from": meta.id, "to": dependency, "type": "plugin", "missing": dependency not in known})
+            for capability in meta.requires_capabilities:
+                edges.append({
+                    "from": meta.id, "to": f"capability:{capability}", "type": "capability",
+                    "missing": capability not in governor.capabilities.names(),
+                })
+            for capability in meta.provides_capabilities:
+                edges.append({"from": meta.id, "to": f"capability:{capability}", "type": "provides", "missing": False})
+        return {"nodes": nodes, "edges": edges, "capabilities": governor.capabilities.names()}
+
+    def runtime_status(self, plugin_id: str) -> dict[str, object]:
+        loaded = self._loaded.get(plugin_id)
+        return {
+            "loaded": loaded is not None,
+            "instances": [
+                {"id": ctx.instance_id, "account": ctx.account_name or "", "active": ctx._active}
+                for ctx in (loaded.contexts if loaded else [])
+            ],
+            **governor.status(plugin_id),
+        }
 
     async def self_check(self, plugin_id: str) -> dict[str, object]:
         async with self._lock:
@@ -124,6 +194,12 @@ class PluginRuntime:
                 "detail": "已加载" if loaded else ("已停用" if not enabled else "启用后未成功加载"),
             },
         ]
+        compatibility_error = self._compatibility_error(meta)
+        checks.append({
+            "id": "compatibility", "name": "版本与依赖",
+            "ok": compatibility_error is None,
+            "detail": compatibility_error or "平台版本、插件依赖和能力声明均满足",
+        })
         config = registry.get_config(plugin_id)
         def missing_value(value: object) -> bool:
             return value in (None, [], {}) or (isinstance(value, str) and not value.strip())
@@ -151,7 +227,13 @@ class PluginRuntime:
             ctx = loaded.ctx
             scope = str(meta.scope or "user")
             if scope in {"user", "both"}:
-                user_count = len(ctx._scoped_user_apps())
+                user_names = {
+                    str(getattr(app, "name", ""))
+                    for current in loaded.contexts
+                    for app in current._scoped_user_apps()
+                    if getattr(app, "name", None)
+                }
+                user_count = len(user_names)
                 checks.append({
                     "id": "accounts", "name": "用户账号", "ok": user_count > 0,
                     "detail": f"{user_count} 个可用账号" if user_count else "没有可用账号",
@@ -173,28 +255,47 @@ class PluginRuntime:
                 "id": "scheduler", "name": "定时任务", "ok": True,
                 "detail": f"已注册 {job_count} 个任务" if job_count else "没有注册定时任务",
             })
+            runtime_status = self.runtime_status(plugin_id)
+            open_circuits = [item for item in runtime_status["circuits"] if item["open"]]
+            checks.append({
+                "id": "governance", "name": "运行保护", "ok": not open_circuits,
+                "detail": (
+                    f"{len(runtime_status['instances'])} 个实例，{runtime_status['background_tasks']} 个后台任务"
+                    if not open_circuits else f"{len(open_circuits)} 项功能已熔断，正在自动恢复"
+                ),
+            })
 
             custom_check = getattr(loaded.module, "self_check", None)
             if callable(custom_check):
-                try:
-                    async def run_custom_check():
-                        if inspect.iscoroutinefunction(custom_check):
-                            return await custom_check(ctx)
-                        value = await asyncio.to_thread(custom_check, ctx)
-                        return await value if inspect.isawaitable(value) else value
+                for current in loaded.contexts:
+                    suffix = f"（{current.account_name}）" if current.account_name else ""
+                    try:
+                        async def run_custom_check(check_ctx=current):
+                            if inspect.iscoroutinefunction(custom_check):
+                                return await custom_check(check_ctx)
+                            value = await asyncio.to_thread(custom_check, check_ctx)
+                            return await value if inspect.isawaitable(value) else value
 
-                    result = await asyncio.wait_for(run_custom_check(), timeout=15)
-                    checks.extend(self._normalise_self_checks(result))
-                except TimeoutError:
-                    checks.append({
-                        "id": "plugin-check", "name": "插件检查", "ok": False,
-                        "detail": "检查超过 15 秒，已停止等待",
-                    })
-                except Exception as exc:  # noqa: BLE001
-                    checks.append({
-                        "id": "plugin-check", "name": "插件检查", "ok": False,
-                        "detail": f"{exc.__class__.__name__}: {exc}"[:300],
-                    })
+                        result = await governor.execute(
+                            plugin_id, f"self_check:{current.instance_id}", run_custom_check, timeout=15,
+                        )
+                        instance_checks = self._normalise_self_checks(result)
+                        for item in instance_checks:
+                            item["id"] = f"{item['id']}:{current.instance_id}"[:80]
+                            item["name"] = f"{item['name']}{suffix}"[:80]
+                        checks.extend(instance_checks)
+                    except TimeoutError:
+                        checks.append({
+                            "id": f"plugin-check:{current.instance_id}"[:80],
+                            "name": f"插件检查{suffix}", "ok": False,
+                            "detail": "检查超过 15 秒，已停止等待",
+                        })
+                    except Exception as exc:  # noqa: BLE001
+                        checks.append({
+                            "id": f"plugin-check:{current.instance_id}"[:80],
+                            "name": f"插件检查{suffix}", "ok": False,
+                            "detail": f"{exc.__class__.__name__}: {exc}"[:300],
+                        })
 
         return {
             "plugin_id": plugin_id,
@@ -248,8 +349,14 @@ class PluginRuntime:
                 meta.enabled = True
                 return meta
 
-            ctx = None
+            contexts: list[PlatformContext] = []
             try:
+                compatibility_error = self._compatibility_error(meta)
+                if compatibility_error:
+                    meta.loaded = False
+                    meta.enabled = registry.is_enabled(plugin_id)
+                    meta.error = compatibility_error
+                    return meta
                 # 启用前确保第三方依赖就绪：缺失则代装，版本冲突则拒绝启用。
                 # 单进程同一个包只能有一个版本，冲突只能挡在加载前，不能强行覆盖。
                 if ensure_deps and meta.requirements:
@@ -265,31 +372,54 @@ class PluginRuntime:
                 if setup is None or not callable(setup):
                     raise AttributeError("插件缺少 async def setup(ctx) 函数")
 
-                ctx = PlatformContext(
-                    plugin_id, self._accounts, registry,
-                    group_base=self._group_base_for(plugin_id),
-                )
-                # setup 可以是 async 或 sync
-                result = setup(ctx)
-                if asyncio.iscoroutine(result):
-                    await result
+                governor.configure(plugin_id, meta.resources)
+                account_names: list[str | None] = [None]
+                if meta.instance_mode == "account" and meta.scope in {"user", "both"}:
+                    selected = set(registry.get_account_scope(plugin_id))
+                    account_names = [
+                        str(getattr(app, "name")) for app in self._accounts.connected_user_apps
+                        if getattr(app, "name", None) and (not selected or getattr(app, "name", None) in selected)
+                    ]
+                    if not account_names:
+                        raise RuntimeError("按账号运行的插件当前没有可用用户账号")
 
-                self._loaded[plugin_id] = LoadedPlugin(plugin_id, module, ctx)
+                for index, account_name in enumerate(account_names):
+                    ctx = PlatformContext(
+                        plugin_id, self._accounts, registry,
+                        group_base=self._group_base_for(plugin_id) + index,
+                        account_name=account_name,
+                        primary_instance=index == 0,
+                    )
+                    contexts.append(ctx)
+                    # setup 可以是 async 或 sync。account 模式下每个账号调用一次。
+                    await governor.execute(
+                        plugin_id, f"setup:{ctx.instance_id}", lambda current=ctx: setup(current),
+                    )
+
+                self._loaded[plugin_id] = LoadedPlugin(plugin_id, module, contexts)
                 registry.set_enabled(plugin_id, True)
                 meta.loaded = True
                 meta.enabled = True
                 meta.error = None
-                logger.info("插件已启用: %s", meta.name)
+                governor.events.append(
+                    plugin_id, "plugin_enabled", instances=[ctx.instance_id for ctx in contexts],
+                    version=meta.version,
+                )
+                logger.info("插件已启用: %s（%d 个运行实例）", meta.name, len(contexts))
                 return meta
             except Exception as e:  # noqa: BLE001
                 # 加载失败：先注销 setup 中途已注册的 handler/定时任务（防句柄泄漏），
                 # 再清理模块，标记错误，不影响其它插件。
                 logger.exception("插件启用失败: %s", meta.name)
-                if ctx is not None:
+                for ctx in contexts:
+                    ctx._active = False
+                await governor.cancel_all(plugin_id)
+                for ctx in reversed(contexts):
                     try:
-                        ctx._unregister_all()
+                        await ctx.aclose(cancel_governor_tasks=False)
                     except Exception as ce:  # noqa: BLE001
                         logger.warning("清理失败插件句柄异常 [%s]: %r", plugin_id, ce)
+                await governor.release(plugin_id)
                 self._cleanup_module(plugin_id)
                 # 不持久化 enabled=False：加载失败属运行态问题，不应抹掉用户"要启用"的意图。
                 # 保留持久启用状态，下次重启/重载自动重试；UI 显示错误徽章。
@@ -312,30 +442,54 @@ class PluginRuntime:
         注销所有 handler → teardown → 卸载模块；幂等。
         persist=True 时把 enabled 持久化为 False（用户显式停用）；
         persist=False 仅运行态卸载，不动持久启用意图（进程退出/重挂场景）。"""
-        if True:
-            loaded = self._loaded.pop(plugin_id, None)
-            if loaded is not None:
-                # 1) 注销所有 handler / 定时任务
-                loaded.ctx._unregister_all()
-                # 2) teardown（可选）
-                teardown = getattr(loaded.module, "teardown", None)
-                if callable(teardown):
+        if persist:
+            dependents = [
+                meta.name for meta in registry.scan()
+                if plugin_id in meta.requires_plugins and self.is_loaded(meta.id)
+            ]
+            capability_dependents: set[str] = set()
+            for meta in registry.scan():
+                if not self.is_loaded(meta.id) or meta.id == plugin_id:
+                    continue
+                for capability in meta.requires_capabilities:
+                    owners = [owner for _, owner, _ in governor.capabilities.providers(capability)]
+                    if plugin_id in owners and not any(owner != plugin_id for owner in owners):
+                        capability_dependents.add(meta.name)
+            if dependents:
+                raise RuntimeError(f"请先停用依赖它的插件：{', '.join(dependents)}")
+            if capability_dependents:
+                names = ", ".join(sorted(capability_dependents))
+                raise RuntimeError(f"请先停用依赖其能力的插件：{names}")
+        loaded = self._loaded.pop(plugin_id, None)
+        if loaded is not None:
+            # 所有实例先同时停止接收新事件，再统一取消平台托管任务。
+            for ctx in loaded.contexts:
+                ctx._active = False
+            await governor.cancel_all(plugin_id)
+            for ctx in reversed(loaded.contexts):
+                await ctx.aclose(cancel_governor_tasks=False)
+            # 保持旧版语义：平台登记的资源先清理，再调用插件 teardown。
+            teardown = getattr(loaded.module, "teardown", None)
+            if callable(teardown):
+                for ctx in reversed(loaded.contexts):
                     try:
-                        result = teardown(loaded.ctx)
-                        if asyncio.iscoroutine(result):
-                            await result
+                        await governor.execute(
+                            plugin_id, f"teardown:{ctx.instance_id}",
+                            lambda current=ctx: teardown(current), timeout=10,
+                        )
                     except Exception as e:  # noqa: BLE001
                         logger.warning("插件 teardown 异常 [%s]: %r", plugin_id, e)
-                # 3) 卸载模块
-                self._cleanup_module(plugin_id)
-                logger.info("插件已停用: %s", registry.display_name(plugin_id))
+            await governor.release(plugin_id)
+            governor.events.append(plugin_id, "plugin_disabled", instances=len(loaded.contexts))
+            self._cleanup_module(plugin_id)
+            logger.info("插件已停用: %s", registry.display_name(plugin_id))
 
-            if persist:
-                registry.set_enabled(plugin_id, False)
-            meta = registry.get_meta(plugin_id) or PluginMeta(id=plugin_id, name=plugin_id)
-            meta.loaded = False
-            meta.enabled = registry.is_enabled(plugin_id)
-            return meta
+        if persist:
+            registry.set_enabled(plugin_id, False)
+        meta = registry.get_meta(plugin_id) or PluginMeta(id=plugin_id, name=plugin_id)
+        meta.loaded = False
+        meta.enabled = registry.is_enabled(plugin_id)
+        return meta
 
     # ──────────────────────────────────────────────
     # 重载（改了插件文件后）
@@ -353,16 +507,34 @@ class PluginRuntime:
     # ──────────────────────────────────────────────
     async def restore_enabled(self) -> None:
         """根据 registry 中记录的启用状态，恢复所有应启用的插件"""
-        metas = registry.scan()
-        for meta in metas:
-            if meta.enabled and not meta.error:
-                await self.enable(meta.id)
+        pending = {meta.id: meta for meta in registry.scan() if meta.enabled and not meta.error}
+        capability_providers: dict[str, set[str]] = {}
+        for meta in pending.values():
+            for capability in meta.provides_capabilities:
+                capability_providers.setdefault(capability, set()).add(meta.id)
+        while pending:
+            progressed = False
+            for plugin_id, meta in list(pending.items()):
+                if any(dependency in pending for dependency in meta.requires_plugins):
+                    continue
+                if any(
+                    capability_providers.get(capability, set()) & pending.keys()
+                    for capability in meta.requires_capabilities
+                ):
+                    continue
+                await self.enable(plugin_id)
+                pending.pop(plugin_id, None)
+                progressed = True
+            if not progressed:
+                cycle = ", ".join(sorted(pending))
+                logger.error("插件依赖存在循环，无法恢复：%s", cycle)
+                break
         logger.info("插件恢复完成，已加载 %d 个", len(self._loaded))
 
     async def shutdown(self) -> None:
         """停用所有已加载插件（进程退出时调用）。
         仅运行态卸载，绝不持久化 enabled=False——否则重启/更新镜像后插件会全部变未启用。"""
-        for plugin_id in list(self._loaded.keys()):
+        for plugin_id in reversed(list(self._loaded.keys())):
             async with self._lock:
                 await self._disable_locked(plugin_id, persist=False)
 
@@ -379,10 +551,11 @@ class PluginRuntime:
             if not ids:
                 return
             logger.info("账号状态变化，重新挂载 %d 个插件...", len(ids))
-            for plugin_id in ids:
-                # persist=False：重挂只是运行态操作，不动持久启用意图
-                # ensure_deps=False：依赖在首次 enable 已就绪，重挂不必重跑 pip（否则账号每次上下线都触发）
+            # 先按加载顺序逆序卸载使用者，再按原顺序恢复提供者，避免依赖和能力链短暂倒置。
+            for plugin_id in reversed(ids):
                 await self._disable_locked(plugin_id, persist=False)
+            for plugin_id in ids:
+                # ensure_deps=False：依赖在首次 enable 已就绪，重挂不必重跑 pip。
                 await self._enable_locked(plugin_id, ensure_deps=False)
                 if plugin_id not in self._loaded:
                     logger.warning("插件 [%s] 重挂失败，启用意图保留待重试", registry.display_name(plugin_id))

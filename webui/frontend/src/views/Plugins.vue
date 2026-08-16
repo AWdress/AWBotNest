@@ -22,6 +22,13 @@ const selfCheckOpen = ref(false)
 const selfCheckTarget = ref(null)
 const selfCheckResult = ref(null)
 const selfCheckBusy = ref(false)
+const dependencyOpen = ref(false)
+const dependencyData = ref({ nodes: [], edges: [], capabilities: [] })
+const dependencyBusy = ref(false)
+const runtimeOpen = ref(false)
+const runtimeTarget = ref(null)
+const runtimeData = ref(null)
+const runtimeBusy = ref(false)
 const fileInput = ref(null)
 
 // 配置弹窗
@@ -236,6 +243,57 @@ function closeSelfCheck() {
   selfCheckRequestId += 1
   selfCheckOpen.value = false
   selfCheckBusy.value = false
+}
+
+async function openDependencies() {
+  dependencyOpen.value = true
+  dependencyBusy.value = true
+  try {
+    dependencyData.value = await api.pluginDependencies()
+  } catch (e) {
+    toast.error('读取插件依赖失败：' + e.message)
+  } finally {
+    dependencyBusy.value = false
+  }
+}
+
+async function openRuntime(p) {
+  closeMenu()
+  runtimeTarget.value = p
+  runtimeData.value = null
+  runtimeOpen.value = true
+  runtimeBusy.value = true
+  try {
+    runtimeData.value = await api.pluginRuntime(p.id)
+  } catch (e) {
+    toast.error('读取运行诊断失败：' + e.message)
+  } finally {
+    runtimeBusy.value = false
+  }
+}
+
+async function replayEvent(event) {
+  if (!runtimeTarget.value) return
+  runtimeBusy.value = true
+  try {
+    await api.replayPluginEvent(runtimeTarget.value.id, event.id)
+    toast.success('事件已重新执行')
+    runtimeData.value = await api.pluginRuntime(runtimeTarget.value.id)
+  } catch (e) {
+    toast.error('事件回放失败：' + e.message)
+  } finally {
+    runtimeBusy.value = false
+  }
+}
+
+function eventLabel(type) {
+  return ({
+    plugin_enabled: '插件已启动', plugin_disabled: '插件已停止',
+    execution_started: '开始执行', execution_succeeded: '执行完成',
+    execution_failed: '执行失败', execution_cancelled: '执行已取消',
+    circuit_opened: '功能已熔断', circuit_rejected: '熔断期间已降级',
+    business_event: '业务事件', event_replayed: '事件已回放', tasks_cancelled: '后台任务已停止',
+  })[type] || type
 }
 
 async function openConfig(p) {
@@ -1118,6 +1176,7 @@ onUnmounted(() => {
       <div class="row gap">
         <template v-if="tab === 'mine'">
           <span class="stats">已启用 <b style="color:var(--accent-2)">{{ stats.enabled }}</b><template v-if="stats.error"> · <span style="color:var(--danger)">异常 {{ stats.error }}</span></template></span>
+          <button class="btn" @click="openDependencies">依赖关系</button>
           <button class="btn" @click="load">刷新</button>
           <button class="btn btn-primary" @click="triggerUpload">+ 上传插件</button>
           <input ref="fileInput" type="file" accept=".py" hidden @change="onFile" />
@@ -1251,6 +1310,9 @@ onUnmounted(() => {
                 </button>
                 <button class="menu-item" @click.stop="openSelfCheck(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 7v5c0 5 3.4 8.2 8 9 4.6-.8 8-4 8-9V7z"/><path d="m9 12 2 2 4-4"/></svg> 插件自检
+                </button>
+                <button class="menu-item" @click.stop="openRuntime(p)">
+                  <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19V5m0 14h16"/><path d="m7 15 4-4 3 2 5-6"/></svg> 运行诊断
                 </button>
                 <button class="menu-item" @click.stop="reload(p)" :disabled="busy[p.id]">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> 重载
@@ -1486,6 +1548,55 @@ onUnmounted(() => {
         <div class="modal-foot">
           <button class="btn" :disabled="selfCheckBusy" @click="openSelfCheck(selfCheckTarget)">重新检查</button>
           <button class="btn btn-primary" @click="closeSelfCheck">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 插件依赖关系 -->
+    <div v-if="dependencyOpen" class="modal-mask" @click.self="dependencyOpen=false">
+      <div class="modal card modal-governance">
+        <div class="modal-head"><h2>插件依赖关系</h2><button class="close" @click="dependencyOpen=false" aria-label="关闭">×</button></div>
+        <div class="modal-body governance-body">
+          <div v-if="dependencyBusy" class="muted center">正在整理依赖关系…</div>
+          <template v-else>
+            <div v-if="!dependencyData.edges.length" class="empty-inline">当前插件都可独立运行，没有声明依赖。</div>
+            <div v-for="node in dependencyData.nodes" :key="node.id" class="dependency-node">
+              <div><strong>{{ node.name }}</strong><small>{{ node.id }} · v{{ node.version }}</small></div>
+              <div class="dependency-links">
+                <span v-for="edge in dependencyData.edges.filter(item => item.from === node.id)" :key="`${edge.type}-${edge.to}`" :class="{ missing: edge.missing }">
+                  {{ edge.type === 'provides' ? '提供 → ' : '依赖 → ' }}{{ edge.to.replace('capability:', '能力：') }}<template v-if="edge.missing">（缺失）</template>
+                </span>
+                <span v-if="!dependencyData.edges.some(item => item.from === node.id)" class="muted">无依赖</span>
+              </div>
+            </div>
+          </template>
+        </div>
+      </div>
+    </div>
+
+    <!-- 插件运行诊断与事件回放 -->
+    <div v-if="runtimeOpen && runtimeTarget" class="modal-mask" @click.self="runtimeOpen=false">
+      <div class="modal card modal-governance">
+        <div class="modal-head"><h2>{{ runtimeTarget.name }} · 运行诊断</h2><button class="close" @click="runtimeOpen=false" aria-label="关闭">×</button></div>
+        <div class="modal-body governance-body">
+          <div v-if="runtimeBusy && !runtimeData" class="muted center">正在读取运行状态…</div>
+          <template v-else-if="runtimeData">
+            <div class="runtime-summary">
+              <span><b>{{ runtimeData.instances.length }}</b><small>运行实例</small></span>
+              <span><b>{{ runtimeData.background_tasks }}</b><small>后台任务</small></span>
+              <span><b>{{ runtimeData.circuits.filter(item => item.open).length }}</b><small>已熔断功能</small></span>
+              <span><b>{{ runtimeData.policy.max_concurrency }}</b><small>并发上限</small></span>
+            </div>
+            <section><h3>实例</h3><div class="tag-list"><span v-for="item in runtimeData.instances" :key="item.id">{{ item.account || '共享实例' }}</span></div></section>
+            <section><h3>最近事件</h3>
+              <div class="event-list">
+                <div v-for="event in runtimeData.events" :key="event.id" class="event-row">
+                  <div><strong>{{ eventLabel(event.event_type) }}</strong><small>{{ new Date(event.time * 1000).toLocaleString() }}<template v-if="event.operation"> · {{ event.operation }}</template></small></div>
+                  <button v-if="event.replay_type" class="btn btn-sm" :disabled="runtimeBusy" @click="replayEvent(event)">重新执行</button>
+                </div>
+              </div>
+            </section>
+          </template>
         </div>
       </div>
     </div>
@@ -2497,6 +2608,31 @@ onUnmounted(() => {
 .filter-dropdown-wrapper {
   position: relative;
   display: inline-block;
+}
+
+.modal-governance { width: min(820px, calc(100vw - 32px)); max-height: min(820px, calc(100vh - 40px)); }
+.governance-body { display: grid; gap: 12px; overflow: auto; }
+.dependency-node { display: grid; grid-template-columns: minmax(160px, .7fr) 1.3fr; gap: 20px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg-card); }
+.dependency-node small, .event-row small { display: block; margin-top: 4px; color: var(--muted); }
+.dependency-links { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.dependency-links span, .tag-list span { padding: 5px 9px; border-radius: 999px; background: var(--bg-elevated); font-size: 12px; }
+.dependency-links .missing { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.empty-inline { padding: 24px; text-align: center; color: var(--muted); border: 1px dashed var(--border); border-radius: 12px; }
+.runtime-summary { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.runtime-summary span { padding: 15px; border-right: 1px solid var(--border); }
+.runtime-summary span:last-child { border-right: 0; }
+.runtime-summary b, .runtime-summary small { display: block; }
+.runtime-summary b { font-size: 20px; }
+.runtime-summary small { margin-top: 4px; color: var(--muted); }
+.tag-list { display: flex; flex-wrap: wrap; gap: 8px; }
+.event-list { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+.event-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.event-row:last-child { border-bottom: 0; }
+@media (max-width: 640px) {
+  .dependency-node { grid-template-columns: 1fr; gap: 10px; }
+  .runtime-summary { grid-template-columns: repeat(2, 1fr); }
+  .runtime-summary span:nth-child(2) { border-right: 0; }
+  .runtime-summary span:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
 }
 
 .filter-dropdown {

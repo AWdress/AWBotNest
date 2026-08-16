@@ -51,6 +51,22 @@ __plugin__ = {
     #        能复用就别声明——既免装又零冲突。
     # "requirements": ["httpx>=0.27"],
 
+    # ── 运行声明（可选；不写时完全兼容旧插件）──
+    # "min_platform_version": "1.1.4.0",   # 平台版本范围
+    # "max_platform_version": "2.0.0",
+    # "plugin_api_version": 1,              # 插件接口版本
+    # "requires_plugins": ["base_plugin"],  # 必须先启用的插件
+    # "requires_capabilities": ["ocr"],     # 依赖的抽象能力
+    # "provides_capabilities": ["ocr"],     # 本插件可提供的能力（用于关系图）
+    # "instance_mode": "account",           # shared=共享实例；account=每个账号一个实例
+    # "resources": {
+    #     "timeout_seconds": 120,
+    #     "max_concurrency": 4,
+    #     "max_background_tasks": 16,
+    #     "failure_threshold": 5,
+    #     "recovery_seconds": 60,
+    # },
+
     # ── 配置项（前端「配置」按钮据此自动生成设置界面）──
     # 每个字段支持：
     # type:    string | password | number | boolean | select | multiselect | slider | text(多行)

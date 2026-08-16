@@ -237,6 +237,11 @@ async def start_platform() -> None:
         logger.debug("AWBotNest 关闭中...")
         await accounts.stop_reconnect_watchdog()
         await runtime.shutdown()
+        try:
+            from kernel.browser import browser as managed_browser
+            await managed_browser.shutdown()
+        except Exception as e:  # noqa: BLE001 - 浏览器清理失败不阻断其他资源退出
+            logger.warning("浏览器后台进程清理失败: %r", e)
         await accounts.stop_all()
         logger.info("AWBotNest 已关闭")
 

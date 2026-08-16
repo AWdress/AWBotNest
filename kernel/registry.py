@@ -29,6 +29,7 @@ REQUIRED_FIELDS = ("name", "id", "version", "scope")
 VALID_SCOPES = ("user", "bot", "both", "standalone")
 # 配置界面渲染方式合法值
 VALID_RENDER_MODES = ("schema", "vue")
+VALID_INSTANCE_MODES = ("shared", "account")
 # 插件自带前端（vue 模式）联邦产物约定路径（相对插件目录）
 FRONTEND_DIST = "frontend/dist"
 FRONTEND_ENTRY = "frontend/dist/assets/remoteEntry.js"
@@ -68,6 +69,14 @@ class PluginMeta:
     config_schema: dict[str, Any] = field(default_factory=dict)
     requirements: list[str] = field(default_factory=list)  # 第三方依赖(PEP 508)，启用时由平台代装
     cookie_domains: list[str] = field(default_factory=list)  # 可通过 ctx.cookies 读取的域名
+    min_platform_version: str = ""
+    max_platform_version: str = ""
+    plugin_api_version: int = 1
+    requires_plugins: list[str] = field(default_factory=list)
+    requires_capabilities: list[str] = field(default_factory=list)
+    provides_capabilities: list[str] = field(default_factory=list)
+    instance_mode: str = "shared"  # shared | account
+    resources: dict[str, Any] = field(default_factory=dict)
 
     # 运行时字段（非元数据，由内核填充）
     file: str = ""            # 相对 plugins/ 的文件名
@@ -240,6 +249,13 @@ class PluginRegistry:
                 error="render_mode=vue 仅支持目录包插件（需自带 frontend/ 前端工程）",
             )
 
+        instance_mode = str(raw.get("instance_mode", "shared") or "shared")
+        if instance_mode not in VALID_INSTANCE_MODES:
+            return PluginMeta(
+                id=plugin_id, name=raw.get("name", plugin_id), file=rel,
+                error=f"instance_mode 非法: {instance_mode}（应为 {'/'.join(VALID_INSTANCE_MODES)}）",
+            )
+
         # ID 必须与文件名/目录名一致（单文件单插件约定）
         if raw.get("id") != plugin_id:
             return PluginMeta(
@@ -263,6 +279,14 @@ class PluginRegistry:
             config_schema=raw.get("config_schema", {}) or {},
             requirements=self._coerce_requirements(raw.get("requirements")),
             cookie_domains=self._coerce_cookie_domains(raw.get("cookie_domains")),
+            min_platform_version=str(raw.get("min_platform_version", "") or "").strip(),
+            max_platform_version=str(raw.get("max_platform_version", "") or "").strip(),
+            plugin_api_version=self._coerce_positive_int(raw.get("plugin_api_version"), 1),
+            requires_plugins=self._coerce_id_list(raw.get("requires_plugins")),
+            requires_capabilities=self._coerce_id_list(raw.get("requires_capabilities")),
+            provides_capabilities=self._coerce_id_list(raw.get("provides_capabilities")),
+            instance_mode=instance_mode,
+            resources=raw.get("resources", {}) if isinstance(raw.get("resources"), dict) else {},
             file=rel,
         )
         # 填充启用状态：已有记录优先，否则用 default_enabled
@@ -279,6 +303,27 @@ class PluginRegistry:
         if not isinstance(raw, list):
             return []
         return [str(x).strip() for x in raw if isinstance(x, str) and x.strip()]
+
+    @staticmethod
+    def _coerce_id_list(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        seen: set[str] = set()
+        result: list[str] = []
+        for item in raw:
+            value = str(item).strip() if isinstance(item, str) else ""
+            if value and value not in seen:
+                seen.add(value)
+                result.append(value)
+        return result
+
+    @staticmethod
+    def _coerce_positive_int(raw: Any, default: int) -> int:
+        try:
+            value = int(raw)
+            return value if value > 0 else default
+        except (TypeError, ValueError):
+            return default
 
     @staticmethod
     def _coerce_cookie_domains(raw: Any) -> list[str]:

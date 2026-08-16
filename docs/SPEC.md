@@ -152,6 +152,10 @@ async def setup(ctx):
 2. 所有自管理资源（定时任务、连接、后台 task）必须可在 `teardown` 或通过 `ctx.add_cleanup` 释放。
 3. 启用 = 导入文件 + `setup`；停用 = 注销句柄 + `teardown` + 从 `sys.modules` 卸载。全程不重启进程。
 4. **容错**：单个插件 `setup` 抛异常只标记该插件 `error`，不影响内核与其它插件。
+5. **真正取消**：常驻任务必须用 `ctx.create_task`，停用/重载时平台会取消并等待退出；handler 与定时任务也由平台统一跟踪。禁止把裸 `asyncio.create_task` 当作不可管理的后台服务。
+6. **统一执行管道**：`setup`、handler、Webhook、动作、插件 API、定时任务、自检和 `teardown` 均经过平台治理层，统一执行超时、并发限制、事件记录、熔断和降级。
+7. **多实例**：默认 `instance_mode=shared` 保持旧插件行为；声明 `instance_mode=account` 时按选中的已连接用户账号创建实例，实例拥有独立 `ctx.account_name`、KV 和数据目录。
+8. **安全更新**：商店更新先写隔离目录并做语法、元数据、接口版本和平台版本检查；运行中插件重载失败时必须自动恢复旧文件和旧运行实例。
 
 ---
 

@@ -43,6 +43,19 @@ __plugin__ = {
     "cookie_domains": [           # 可选，只能读取这里声明的域名
         "example.com", "*.example.com",
     ],
+    "min_platform_version": "1.1.4.0",  # 可选，兼容的平台版本范围
+    "plugin_api_version": 1,
+    "requires_plugins": [],       # 可选，必须先启用的插件 id
+    "requires_capabilities": [],  # 可选，依赖的平台抽象能力
+    "provides_capabilities": [],  # 可选，本插件提供的能力
+    "instance_mode": "shared",   # shared | account（按账号创建运行实例）
+    "resources": {                # 可选，平台运行保护
+        "timeout_seconds": 120,
+        "max_concurrency": 8,
+        "max_background_tasks": 32,
+        "failure_threshold": 5,
+        "recovery_seconds": 60,
+    },
 }
 
 async def setup(ctx):
@@ -67,6 +80,45 @@ async def teardown(ctx):
 "version": "1.2.0",
 "changelog": "v1.2.0 更新内容：\n- 新增自动重试功能\n- 修复特殊字符导致的崩溃\n- 优化响应速度",
 ```
+
+## 运行治理与多实例
+
+- `instance_mode="shared"` 是默认值，插件只执行一次 `setup(ctx)`，现有插件无需修改。
+- `instance_mode="account"` 会为每个选中且已连接的用户账号分别执行一次 `setup(ctx)`。可用 `ctx.account_name` 和 `ctx.instance_id` 区分实例；`ctx.user`、`ctx.user_apps` 和 handler 只会落到当前账号。
+- `min_platform_version`、`max_platform_version`、`plugin_api_version`、`requires_plugins` 和 `requires_capabilities` 会在启动前检查，不满足时插件不会带病运行。
+- `resources` 控制一次执行的超时、并发上限、后台任务上限和连续失败熔断。未声明时使用平台安全默认值。
+
+插件的消息处理、Webhook、配置动作、插件 API 和定时任务都会经过平台统一执行管道。连续失败达到阈值后会暂时熔断，恢复时间到后自动重新尝试。
+
+需要常驻后台任务时不要直接 `asyncio.create_task`，请使用：
+
+```python
+task = ctx.create_task(worker(), name="数据同步", operation="sync")
+```
+
+停用、重载或更新插件时，平台会取消并等待这些任务真正退出。
+
+插件间不要互相 import。能力替换和备用链使用统一能力接口：
+
+```python
+# 提供能力；priority 越高越优先，首选失败会自动尝试备用提供者
+ctx.provide_capability("ocr", ocr_service, priority=100)
+
+# 使用能力
+text = await ctx.call_capability("ocr", image, method="recognize")
+```
+
+可回放业务事件需要显式登记，平台不会盲目重放消息或支付等高风险事件：
+
+```python
+@ctx.on_replay("sync_user")
+async def replay_sync(payload):
+    await sync_user(payload["user_id"])
+
+event_id = ctx.record_event("sync_user", {"user_id": 123}, replayable=True)
+```
+
+管理员可以在插件页的“依赖关系”和“运行诊断”查看实例、任务、熔断和最近事件，并手动回放上述明确允许回放的事件。
 
 `requirements` 为可选的第三方依赖列表（PEP 508 字符串）。**不要在插件里自己调 pip**——只声明，平台在启用时统一代装。建议用宽松范围（`"httpx>=0.27"`）而非钉死版本，以减少与其它插件/平台依赖撞车。若与已安装版本冲突，平台会拒绝启用并提示原因（插件运行在单进程内，同一个包无法多版本共存）。
 
