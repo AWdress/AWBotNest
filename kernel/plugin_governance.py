@@ -229,9 +229,15 @@ class PluginGovernor:
         )
         try:
             async with self._semaphores[plugin_id]:
-                result = await asyncio.wait_for(
-                    self._invoke(func), timeout=timeout or policy.timeout_seconds,
-                )
+                effective_timeout = policy.timeout_seconds if timeout is None else timeout
+                if effective_timeout > 0:
+                    result = await asyncio.wait_for(
+                        self._invoke(func), timeout=effective_timeout,
+                    )
+                else:
+                    # Long-lived background workers are governed by the plugin lifecycle
+                    # (reload/disable/shutdown), not by the timeout for request-like work.
+                    result = await self._invoke(func)
             circuit.failures = 0
             circuit.opened_until = 0
             circuit.last_error = ""

@@ -430,7 +430,9 @@ class PlatformContext:
             raise RuntimeError(f"插件实例已停止：{self.instance_id}")
         async def managed():
             try:
-                return await self.execute(operation, lambda: awaitable)
+                # A background task may intentionally live for hours or indefinitely.
+                # Plugin teardown still cancels and awaits it through the governor.
+                return await self.execute(operation, lambda: awaitable, timeout=0)
             finally:
                 # 熔断可能在真正 await 业务协程前就拒绝任务，仍需关闭协程避免泄漏警告。
                 if inspect.iscoroutine(awaitable) and awaitable.cr_frame is not None:
