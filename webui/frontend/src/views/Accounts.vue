@@ -160,11 +160,7 @@ onMounted(load)
                 <AccountPremiumBadge v-if="acc.is_premium" />
               </div>
               <div class="acc-meta mono">
-                {{ acc.session }}<template v-if="acc.tgid"> · {{ acc.tgid }}</template>
-              </div>
-              <div class="acc-status-row">
-                <span class="health-pill" :class="`health-${acc.health || 'info'}`">{{ acc.status_text || (acc.online ? '在线' : '离线') }}</span>
-                <span class="muted small">{{ acc.session_exists ? '登录已保存' : '还未完成登录' }}</span>
+                {{ acc.tgid || '—' }}
               </div>
             </div>
           </div>
@@ -280,7 +276,7 @@ onMounted(load)
 .close .x-ico { width: 16px; height: 16px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); }
-.acc-card { min-height: 176px; display: flex; flex-direction: column; gap: 16px; }
+.acc-card { min-height: 152px; display: flex; flex-direction: column; gap: 16px; }
 .acc-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-start; gap: 12px; }
 .acc-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; overflow: hidden; }
 .acc-copy { min-width: 0; overflow: hidden; }
@@ -289,15 +285,6 @@ onMounted(load)
 .acc-name { min-width: 0; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .acc-meta { overflow: hidden; margin-top: 4px; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .acc-head > .badge { flex: none; min-width: 42px; justify-content: center; white-space: nowrap; }
-.acc-status-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
-.small { font-size: 12px; }
-.health-pill {
-  display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px;
-  font-size: 11px; font-weight: 600;
-}
-.health-ok { background: var(--accent-2-dim); color: var(--accent-2); }
-.health-warn { background: var(--danger-dim); color: var(--danger); }
-.health-info { background: var(--accent-dim); color: var(--accent); }
 .acc-actions { display: flex; gap: 8px; margin-top: auto; }
 .btn.sm { padding: 6px 14px; font-size: 12px; }
 
