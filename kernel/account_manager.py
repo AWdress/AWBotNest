@@ -145,6 +145,8 @@ class AccountManager:
     _RECONNECT_BASE_DELAY = 10.0
     _RECONNECT_MAX_DELAY = 300.0
     _RECONNECT_ATTEMPT_TIMEOUT = 45.0
+    _PROFILE_REFRESH_INTERVAL = 600.0
+    _PROFILE_REFRESH_TIMEOUT = 8.0
 
     def __init__(self, workdir: str = "sessions"):
         self.workdir = Path(workdir)
@@ -168,6 +170,8 @@ class AccountManager:
         self._disconnect_since: dict[str, float] = {}
         self._reconnect_attempts: dict[str, int] = {}
         self._reconnect_after: dict[str, float] = {}
+        self._profile_refresh_task: asyncio.Task | None = None
+        self._profile_refreshed_at = time.monotonic()
 
         # 代理：复用 manager 的解析结果
         self.proxy = manager.proxy
@@ -674,6 +678,13 @@ class AccountManager:
     async def stop_all(self) -> None:
         """停止所有账号连接"""
         await self.stop_reconnect_watchdog()
+        if self._profile_refresh_task and not self._profile_refresh_task.done():
+            self._profile_refresh_task.cancel()
+            try:
+                await self._profile_refresh_task
+            except asyncio.CancelledError:
+                pass
+        self._profile_refresh_task = None
         for bot in list(self.bot_apps.values()):
             if bot and bot.is_connected:
                 await bot.stop()
@@ -685,12 +696,46 @@ class AccountManager:
     # ──────────────────────────────────────────────
     # 账号列表 / 上下线
     # ──────────────────────────────────────────────
+    async def _refresh_user_profiles_if_stale(self) -> None:
+        """限频刷新 Telegram 自身资料，让头像、名称和会员状态保持最新。"""
+        now = time.monotonic()
+        if now - self._profile_refreshed_at < self._PROFILE_REFRESH_INTERVAL:
+            return
+
+        task = self._profile_refresh_task
+        if task is None or task.done():
+            # 先更新时间，失败时也避免状态轮询连续请求 Telegram。
+            self._profile_refreshed_at = now
+
+            async def refresh() -> None:
+                async def refresh_one(app: Client) -> None:
+                    if not self.connection_ready(app):
+                        return
+                    try:
+                        me = await asyncio.wait_for(
+                            app.get_me(), timeout=self._PROFILE_REFRESH_TIMEOUT
+                        )
+                        if me is not None:
+                            app.me = me
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug("用户账号 [%s] 资料刷新失败: %r", app.name, exc)
+
+                await asyncio.gather(*(refresh_one(app) for app in list(self.user_apps)))
+
+            task = asyncio.create_task(refresh(), name="account-profile-refresh")
+            self._profile_refresh_task = task
+
+        await task
+
     async def list_accounts(self) -> list[dict]:
         """
         返回所有账号（配置中的 + 运行中的）及其状态，供前端展示。
-        性能：不调 get_me()（网络往返），用已连接 client 缓存的 .me；
-              配置直接 config.load() 读 JSON，不做 importlib.reload。
+        性能：通常使用已连接 client 缓存的 .me；最多每 10 分钟调用一次
+              get_me() 更新头像、名称和会员状态，并复用并发刷新任务。
         """
+        await self._refresh_user_profiles_if_stale()
         import config.config as _cfg
         data = _cfg.load()
         raw_accounts = data.get("ACCOUNTS") or []
@@ -723,6 +768,7 @@ class AccountManager:
                 "online": online,
                 "name": sname,
                 "tgid": None,
+                "is_premium": False,
                 "session_exists": session_exists,
                 "paused": manually_paused,
                 "health": health,
@@ -741,6 +787,7 @@ class AccountManager:
                 me = app.me
                 entry["name"] = me.first_name or entry["name"]
                 entry["tgid"] = me.id
+                entry["is_premium"] = bool(getattr(me, "is_premium", False))
                 photo = getattr(me, "photo", None)
                 entry["avatar_id"] = str(
                     getattr(photo, "big_photo_unique_id", None)

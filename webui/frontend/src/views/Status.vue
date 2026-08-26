@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, getToken } from '../api'
 import AccountAvatar from '../components/AccountAvatar.vue'
+import AccountPremiumBadge from '../components/AccountPremiumBadge.vue'
 import {
   platformStatus,
   platformStatusError,
@@ -62,7 +63,8 @@ function markChangedRows(previous, next) {
   changedAccounts.value = (next.accounts || [])
     .filter(account => {
       const old = oldAccounts.get(account.session)
-      return !old || old.online !== account.online || old.name !== account.name || old.tgid !== account.tgid
+      return !old || old.online !== account.online || old.name !== account.name
+        || old.tgid !== account.tgid || old.is_premium !== account.is_premium
     })
     .map(account => account.session)
 
@@ -559,7 +561,13 @@ onUnmounted(() => {
         <div v-else class="account-list">
           <div v-for="account in st.accounts" :key="account.session" class="account-row" :class="{ changed: changedAccounts.includes(account.session) }">
             <AccountAvatar :account="account" />
-            <div><strong>{{ account.name || account.session }}</strong><small>{{ account.session }}</small></div>
+            <div class="account-copy">
+              <div class="account-name-row">
+                <strong>{{ account.name || account.session }}</strong>
+                <AccountPremiumBadge v-if="account.is_premium" compact />
+              </div>
+              <small>{{ account.session }}</small>
+            </div>
             <span class="account-tgid">{{ account.tgid || '未绑定 TGID' }}</span>
             <span class="account-state" :class="{ offline: !account.online }">{{ account.online ? '在线' : '离线' }}</span>
           </div>
@@ -719,8 +727,10 @@ onUnmounted(() => {
 .job-list { max-height: 320px; overflow-y: auto; }
 .account-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto auto; gap: 9px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
 .account-avatar { width: 31px; height: 31px; border-radius: 8px; font-size: 9px; }
+.account-copy { min-width: 0; }
+.account-name-row { display: flex; min-width: 0; align-items: center; gap: 5px; }
 .account-row strong, .account-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.account-row strong { font-size: 11px; }
+.account-row strong { min-width: 0; font-size: 11px; }
 .account-row small { margin-top: 3px; color: var(--text-muted); font-size: 9px; }
 .account-tgid { color: var(--text-muted); font-family: var(--font-mono); font-size: 9px; }
 .account-state { color: var(--success); font-size: 10px; }

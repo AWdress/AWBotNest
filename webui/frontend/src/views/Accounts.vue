@@ -3,6 +3,7 @@ import { computed, ref, onMounted } from 'vue'
 import { api } from '../api'
 import { confirm } from '../composables/confirm'
 import AccountAvatar from '../components/AccountAvatar.vue'
+import AccountPremiumBadge from '../components/AccountPremiumBadge.vue'
 
 const accounts = ref([])
 const loading = ref(true)
@@ -154,7 +155,10 @@ onMounted(load)
           <div class="acc-identity">
             <AccountAvatar :account="acc" />
             <div class="acc-copy">
-              <div class="acc-name">{{ acc.name }}</div>
+              <div class="acc-name-row">
+                <div class="acc-name">{{ acc.name }}</div>
+                <AccountPremiumBadge v-if="acc.is_premium" />
+              </div>
               <div class="acc-meta mono">
                 {{ acc.session }}<template v-if="acc.tgid"> · {{ acc.tgid }}</template>
               </div>
@@ -281,7 +285,8 @@ onMounted(load)
 .acc-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; overflow: hidden; }
 .acc-copy { min-width: 0; overflow: hidden; }
 .account-avatar { width: 44px; height: 44px; border-radius: 12px; font-size: 11px; font-weight: 700; }
-.acc-name { overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.acc-name-row { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.acc-name { min-width: 0; overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .acc-meta { overflow: hidden; margin-top: 4px; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .acc-head > .badge { flex: none; min-width: 42px; justify-content: center; white-space: nowrap; }
 .acc-status-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }

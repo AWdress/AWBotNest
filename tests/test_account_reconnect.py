@@ -175,6 +175,7 @@ async def test_account_list_exposes_telegram_avatar_version(account_manager, mon
     app.me = SimpleNamespace(
         first_name="测试账号",
         id=12345,
+        is_premium=True,
         photo=SimpleNamespace(big_photo_unique_id="stable-photo-id"),
     )
     account_manager.user_apps.append(app)
@@ -183,6 +184,38 @@ async def test_account_list_exposes_telegram_avatar_version(account_manager, mon
     result = await account_manager.list_accounts()
 
     assert result[0]["avatar_id"] == "stable-photo-id"
+    assert result[0]["is_premium"] is True
+
+
+@pytest.mark.asyncio
+async def test_account_list_refreshes_stale_profile(account_manager, monkeypatch) -> None:
+    app = FakeClient("user", connected=True, started=True)
+    app.me = SimpleNamespace(
+        first_name="旧名称",
+        id=12345,
+        is_premium=True,
+        photo=SimpleNamespace(big_photo_unique_id="old-photo"),
+    )
+    refreshed = SimpleNamespace(
+        first_name="新名称",
+        id=12345,
+        is_premium=False,
+        photo=SimpleNamespace(big_photo_unique_id="new-photo"),
+    )
+
+    async def get_me():
+        return refreshed
+
+    app.get_me = get_me
+    account_manager.user_apps.append(app)
+    account_manager._profile_refreshed_at = 0
+    monkeypatch.setattr(config_module, "load", lambda: {"ACCOUNTS": [{"session": "user"}]})
+
+    result = await account_manager.list_accounts()
+
+    assert result[0]["name"] == "新名称"
+    assert result[0]["avatar_id"] == "new-photo"
+    assert result[0]["is_premium"] is False
 
 
 @pytest.mark.asyncio
