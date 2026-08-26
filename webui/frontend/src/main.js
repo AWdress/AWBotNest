@@ -2,26 +2,12 @@ import { createApp } from 'vue'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import './styles/tokens.css'
-
-import Status from './views/Status.vue'
-
-// 首屏只加载默认状态页，其余页面在用户打开时再下载。
-const Plugins = () => import('./views/Plugins.vue')
-const Accounts = () => import('./views/Accounts.vue')
-const Logs = () => import('./views/Logs.vue')
-const Settings = () => import('./views/Settings.vue')
+import { appRoutes } from './routePreload'
 
 const router = createRouter({
   // 用 hash 模式，避免后端路由配置；FastAPI 只需托管 index.html
   history: createWebHashHistory(),
-  routes: [
-    { path: '/', redirect: '/status' },
-    { path: '/plugins', component: Plugins, meta: { title: '插件管理' } },
-    { path: '/accounts', component: Accounts, meta: { title: '账号管理' } },
-    { path: '/logs', component: Logs, meta: { title: '运行日志' } },
-    { path: '/status', component: Status, meta: { title: '系统状态' } },
-    { path: '/settings', component: Settings, meta: { title: '系统设置' } },
-  ],
+  routes: appRoutes,
 })
 
 createApp(App).use(router).mount('#app')

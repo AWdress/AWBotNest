@@ -10,6 +10,8 @@ import logoWhite from './assets/logo-white.png'
 import { confirm } from './composables/confirm'
 import { toast } from './composables/toast'
 import { clearUiProfile, loadUiProfile } from './composables/uiProfile'
+import { clearAccountAvatarCache, preloadAccountAvatars } from './composables/accountAvatars'
+import { preloadRoute, scheduleDeferredRoutePreload } from './routePreload'
 import {
   platformStatus,
   platformStatusError,
@@ -30,20 +32,29 @@ const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
 const restoringSession = ref(!!getToken())
+let cancelDeferredRoutePreload = null
 
 async function onAuthed() {
   restoringSession.value = true
   api.ensureResourceToken().catch(() => {})   // 确保资源 Cookie 就绪（加载 vue 模式插件前端用）
   try {
-    const [st] = await Promise.all([
+    const [st, , status] = await Promise.all([
       api.authStatus(),
       loadUiProfile(true),
+      refreshPlatformStatus(true),
     ])
     if (st.needs_setup || st.must_change_password) {
       logout()
       return
     }
+    // 启动页期间并行准备当前路由与账号头像，避免进入界面后再出现二次加载。
+    await Promise.all([
+      preloadRoute(route.path),
+      preloadAccountAvatars(status?.accounts || []),
+    ])
     authed.value = true
+    cancelDeferredRoutePreload?.()
+    cancelDeferredRoutePreload = scheduleDeferredRoutePreload()
     startPlatformStatusPolling().then(checkUpdate).catch(() => {})
   } catch (error) {
     authed.value = false
@@ -54,8 +65,11 @@ async function onAuthed() {
 }
 function logout() {
   stopPlatformStatusPolling()
+  cancelDeferredRoutePreload?.()
+  cancelDeferredRoutePreload = null
   setToken('')
   clearUiProfile()
+  clearAccountAvatarCache()
   authed.value = false
   restoringSession.value = false
 }
@@ -87,6 +101,7 @@ async function restart() {
 setUnauthorizedHandler(() => {
   stopPlatformStatusPolling()
   clearUiProfile()
+  clearAccountAvatarCache()
   authed.value = false
   restoringSession.value = false
 })
@@ -209,6 +224,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopPlatformStatusPolling()
+  cancelDeferredRoutePreload?.()
   clearInterval(updateTimer)
 })
 </script>
@@ -248,6 +264,8 @@ onUnmounted(() => {
           :to="item.to"
           class="nav-item"
           :class="{ active: route.path === item.to }"
+          @pointerenter="preloadRoute(item.to)"
+          @focus="preloadRoute(item.to)"
         >
           <svg class="nav-icon" viewBox="0 0 24 24" fill="none"
                stroke="currentColor" stroke-width="2"

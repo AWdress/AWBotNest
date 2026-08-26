@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import { api } from '../api'
+import { computed, ref, watch } from 'vue'
+import { getAccountAvatarUrl, loadAccountAvatar } from '../composables/accountAvatars'
 
 const props = defineProps({
   account: { type: Object, required: true },
@@ -8,7 +8,6 @@ const props = defineProps({
 
 const imageUrl = ref('')
 const failed = ref(false)
-let objectUrl = ''
 let requestId = 0
 
 const initials = computed(() => {
@@ -16,22 +15,16 @@ const initials = computed(() => {
   return value.slice(0, 2)
 })
 
-function releaseImage() {
-  if (objectUrl) URL.revokeObjectURL(objectUrl)
-  objectUrl = ''
-  imageUrl.value = ''
-}
-
 async function loadAvatar() {
   const currentRequest = ++requestId
-  releaseImage()
+  imageUrl.value = getAccountAvatarUrl(props.account)
   failed.value = false
-  if (!props.account?.avatar_id || !props.account?.session) return
+  if (imageUrl.value || !props.account?.avatar_id || !props.account?.session) return
   try {
-    const blob = await api.accountAvatar(props.account.session, props.account.avatar_id)
+    const url = await loadAccountAvatar(props.account)
     if (currentRequest !== requestId) return
-    objectUrl = URL.createObjectURL(blob)
-    imageUrl.value = objectUrl
+    imageUrl.value = url
+    failed.value = !url
   } catch {
     if (currentRequest === requestId) failed.value = true
   }
@@ -42,7 +35,6 @@ watch(
   loadAvatar,
   { immediate: true },
 )
-onBeforeUnmount(() => { requestId += 1; releaseImage() })
 </script>
 
 <template>

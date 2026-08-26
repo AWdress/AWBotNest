@@ -33,8 +33,8 @@ async function request(method, url, body) {
   return res.json()
 }
 
-async function requestBlob(url) {
-  const res = await fetch(url, { headers: authHeaders() })
+async function requestBlob(url, signal) {
+  const res = await fetch(url, { headers: authHeaders(), signal })
   if (res.status === 401) {
     setToken('')
     if (onUnauthorized) onUnauthorized()
@@ -170,8 +170,9 @@ export const api = {
   loginSendCode: (session, phone) => request('POST', '/api/accounts/login/send_code', { session, phone }),
   loginSubmitCode: (session, code) => request('POST', '/api/accounts/login/submit_code', { session, code }),
   loginSubmitPassword: (session, password) => request('POST', '/api/accounts/login/submit_password', { session, password }),
-  accountAvatar: (session, version = '') => requestBlob(
-    `/api/accounts/${encodeURIComponent(session)}/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`
+  accountAvatar: (session, version = '', signal) => requestBlob(
+    `/api/accounts/${encodeURIComponent(session)}/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`,
+    signal,
   ),
 
   // 系统设置（config.json）

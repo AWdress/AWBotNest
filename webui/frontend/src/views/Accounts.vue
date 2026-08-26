@@ -277,12 +277,13 @@ onMounted(load)
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); }
 .acc-card { min-height: 176px; display: flex; flex-direction: column; gap: 16px; }
-.acc-head { display: flex; justify-content: space-between; align-items: flex-start; }
-.acc-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
-.acc-copy { min-width: 0; }
+.acc-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: flex-start; gap: 12px; }
+.acc-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; overflow: hidden; }
+.acc-copy { min-width: 0; overflow: hidden; }
 .account-avatar { width: 44px; height: 44px; border-radius: 12px; font-size: 11px; font-weight: 700; }
-.acc-name { font-size: 15px; font-weight: 600; }
-.acc-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.acc-name { overflow: hidden; font-size: 15px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.acc-meta { overflow: hidden; margin-top: 4px; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.acc-head > .badge { flex: none; min-width: 42px; justify-content: center; white-space: nowrap; }
 .acc-status-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 .small { font-size: 12px; }
 .health-pill {
