@@ -120,6 +120,8 @@ event_id = ctx.record_event("sync_user", {"user_id": 123}, replayable=True)
 
 管理员可以在插件页的“依赖关系”和“运行诊断”查看实例、任务、熔断和最近事件，并手动回放上述明确允许回放的事件。
 
+“依赖关系”会区分展示三种声明：`requirements` 显示为 Python 包，`requires_plugins` 显示为前置插件，`requires_capabilities` 显示为平台能力；`provides_capabilities` 则标记本插件提供的能力。平台自带的 `ctx`、通知、调度、Cookie、浏览器等基础接口不属于插件依赖，无需声明。
+
 `requirements` 为可选的第三方依赖列表（PEP 508 字符串）。**不要在插件里自己调 pip**——只声明，平台在启用时统一代装。建议用宽松范围（`"httpx>=0.27"`）而非钉死版本，以减少与其它插件/平台依赖撞车。若与已安装版本冲突，平台会拒绝启用并提示原因（插件运行在单进程内，同一个包无法多版本共存）。
 
 声明依赖前请注意：

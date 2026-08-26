@@ -55,9 +55,9 @@ __plugin__ = {
     # "min_platform_version": "1.1.4.0",   # 平台版本范围
     # "max_platform_version": "2.0.0",
     # "plugin_api_version": 1,              # 插件接口版本
-    # "requires_plugins": ["base_plugin"],  # 必须先启用的插件
-    # "requires_capabilities": ["ocr"],     # 依赖的抽象能力
-    # "provides_capabilities": ["ocr"],     # 本插件可提供的能力（用于关系图）
+    # "requires_plugins": ["base_plugin"],  # 必须先启用的插件 ID；不要写 Python 包
+    # "requires_capabilities": ["ocr"],     # 依赖的抽象能力；不要写 ctx 内置能力
+    # "provides_capabilities": ["ocr"],     # 本插件实际注册并提供的能力（用于关系图）
     # "instance_mode": "account",           # shared=共享实例；account=每个账号一个实例
     # "resources": {
     #     "timeout_seconds": 120,

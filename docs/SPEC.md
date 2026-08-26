@@ -88,6 +88,9 @@ __plugin__ = {
     "requirements": [          # 可选：第三方依赖(PEP 508)，启用时由平台代装
         "httpx>=0.27", "pillow>=10",
     ],
+    "requires_plugins": [],       # 可选：必须先启用的插件 ID
+    "requires_capabilities": [],  # 可选：必须存在的平台抽象能力
+    "provides_capabilities": [],  # 可选：本插件向其它插件提供的能力
     "cookie_domains": [        # 可选：ctx.cookies 可读取的域名白名单
         "example.com", "*.example.com",
     ],
@@ -143,6 +146,17 @@ async def setup(ctx):
     - **冲突（已装了不兼容版本）→ 拒绝启用**，前端报明确原因，绝不强行覆盖（否则会把平台/别的插件依赖的库静默换掉）。
 - 已 import 进进程的包即使被 pip 装了新版也不会热生效（模块已缓存）；这类需重启平台。
 - 安全：每条 requirement 经 `packaging.Requirement` 解析、规范化后作为独立 argv 传给 pip（不走 shell），杜绝参数注入；带环境标记（如 `sys_platform`）不匹配本环境的依赖自动跳过。
+
+### 3.6 插件与能力依赖（可选）
+
+三类依赖必须按实际含义声明，不能混用：
+
+- `requirements`：Python 第三方包，使用 PEP 508 字符串，例如 `"httpx>=0.27"`。平台在启用插件时检查或安装。
+- `requires_plugins`：运行前必须已经启用的其它插件 ID，例如 `"base_plugin"`。禁止用它表达 Python 包。
+- `requires_capabilities`：运行前必须存在的平台抽象能力名称，例如 `"ocr"`；能力由平台或其它插件提供。
+- `provides_capabilities`：本插件提供的抽象能力名称，仅声明真实通过 `ctx.provide_capability(...)` 注册的能力。
+
+插件管理页的“插件依赖关系”会同时展示以上三类依赖，并显示 `provides_capabilities`。没有外部 Python 包、前置插件或抽象能力要求时，显示“无依赖”是正确结果；平台内置的 `ctx`、调度、通知、Cookie 和浏览器接口不需要重复声明。
 
 ---
 
