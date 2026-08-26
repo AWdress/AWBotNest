@@ -211,7 +211,7 @@ async function loadConfigAccounts(pluginId) {
     acctAllMode.value = acctSelected.value.length === 0
     acctReady.value = true
   } catch (e) {
-    if (requestId === acctRequestId) toast.error('读取应用账号失败：' + e.message)
+    if (requestId === acctRequestId) toast.error('读取生效账号失败：' + e.message)
   } finally {
     if (requestId === acctRequestId) acctLoading.value = false
   }
@@ -280,7 +280,7 @@ async function replayEvent(event) {
     toast.success('事件已重新执行')
     runtimeData.value = await api.pluginRuntime(runtimeTarget.value.id)
   } catch (e) {
-    toast.error('事件回放失败：' + e.message)
+    toast.error('重新执行失败：' + e.message)
   } finally {
     runtimeBusy.value = false
   }
@@ -506,7 +506,7 @@ async function saveAccounts(previous = null) {
       acctAllMode.value = previous.allMode
       acctSelected.value = [...previous.selected]
     }
-    toast.error('保存应用账号失败：' + e.message)
+    toast.error('保存生效账号失败：' + e.message)
   } finally {
     acctSaving.value = false
   }
@@ -1588,7 +1588,7 @@ onUnmounted(() => {
               <span><b>{{ runtimeData.circuits.filter(item => item.open).length }}</b><small>已熔断功能</small></span>
               <span><b>{{ runtimeData.policy.max_concurrency }}</b><small>并发上限</small></span>
             </div>
-            <section><h3>实例</h3><div class="tag-list"><span v-for="item in runtimeData.instances" :key="item.id">{{ item.account || '共享实例' }}</span></div></section>
+            <section><h3>实例</h3><div class="tag-list"><span v-for="item in runtimeData.instances" :key="item.id">{{ item.account || '全局实例' }}</span></div></section>
             <section><h3>最近事件</h3>
               <div class="event-list">
                 <div v-for="event in runtimeData.events" :key="event.id" class="event-row">
@@ -1697,7 +1697,7 @@ onUnmounted(() => {
           <div v-if="configTarget?.scope === 'user' || configTarget?.scope === 'both'"
                class="config-scope-field" @click.stop>
             <div class="config-scope-heading">
-              <span>应用账号</span>
+              <span>生效账号</span>
               <span class="muted small">可多选 · 立即保存</span>
             </div>
             <button type="button" class="config-scope-select"
@@ -1736,7 +1736,7 @@ onUnmounted(() => {
         <div v-if="configTarget?.webhook" class="webhook-box">
           <div class="webhook-title">Webhook 入站地址</div>
           <div class="hint muted small">
-            外部服务可 POST 到此地址触发本插件。密钥统一在「系统设置 → 通知」生成，
+            外部服务可 POST 到此地址触发本插件。密钥统一在「系统设置 → 通知渠道」生成，
             所有插件共用；需插件已启用并实现了处理器才会真正响应。
           </div>
           <template v-if="webhookSecret">
@@ -1746,7 +1746,7 @@ onUnmounted(() => {
             </div>
           </template>
           <div v-else class="muted small">
-            尚未设置 Webhook 密钥。请先到「系统设置 → 通知 → Webhook」生成密钥。
+            尚未设置 Webhook 密钥。请先到「系统设置 → 通知渠道 → Webhook」生成密钥。
           </div>
         </div>
         <!-- vue 模式由插件组件自己管保存，右上角已有 × 关闭，底部不再重复关闭按钮；schema 模式提供统一保存按钮 -->

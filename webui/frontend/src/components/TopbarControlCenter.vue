@@ -8,6 +8,7 @@ import logoWhite from '../assets/logo-white.png'
 
 const props = defineProps({
   online: Boolean,
+  connectionLabel: { type: String, default: '正在连接' },
   version: { type: String, default: '' },
   latestVersion: { type: String, default: '' },
   checkReleases: { type: Function, default: null },
@@ -51,10 +52,10 @@ const quickLogsBox = ref(null)
 const modalDialog = ref(null)
 
 const modalTitle = computed(() => ({
-  logs: '实时日志',
+  logs: '运行日志',
   network: '网络测试',
   health: '系统健康检查',
-  services: '定时服务',
+  services: '定时任务',
   about: '关于 AWBotNest',
 }[modal.value] || ''))
 
@@ -427,10 +428,10 @@ onUnmounted(() => {
     <div v-if="panel === 'shortcuts'" class="control-pop shortcuts-pop">
       <div class="pop-head"><strong>快捷入口</strong><button @click="panel=''">×</button></div>
       <div class="shortcut-grid">
-        <button @click.stop="openModal('logs')"><i>▤</i><span><strong>实时日志</strong><small>查看最新运行记录</small></span></button>
+        <button @click.stop="openModal('logs')"><i>▤</i><span><strong>运行日志</strong><small>查看最新运行记录</small></span></button>
         <button @click.stop="openModal('network')"><i>⌁</i><span><strong>网络测试</strong><small>检查外部服务连接</small></span></button>
         <button @click.stop="openModal('health')"><i>✦</i><span><strong>系统健康检查</strong><small>检查核心服务</small></span></button>
-        <button @click.stop="openModal('services')"><i>◷</i><span><strong>定时服务</strong><small>查看和执行定时任务</small></span></button>
+        <button @click.stop="openModal('services')"><i>◷</i><span><strong>定时任务</strong><small>查看和执行定时任务</small></span></button>
       </div>
     </div>
 
@@ -490,7 +491,7 @@ onUnmounted(() => {
         <button :disabled="restarting" @click="panel=''; emit('restart')">{{ restarting ? '重启中…' : '重启' }}</button>
         <button class="danger" @click="emit('logout')">退出登录</button>
       </div>
-      <div class="user-status"><span :class="{ online }"></span>{{ online ? '连接正常' : '正在连接' }}<b v-if="version">v{{ version }}</b></div>
+      <div class="user-status"><span :class="{ online }"></span>{{ connectionLabel }}<b v-if="version">v{{ version }}</b></div>
     </div>
   </div>
 
@@ -530,7 +531,7 @@ onUnmounted(() => {
           <div v-for="item in network" :key="item.id" class="check-card">
             <span class="check-dot" :class="item.state"></span>
             <span><strong>{{ item.name }}</strong><small>{{ item.detail }}</small></span>
-            <button class="btn" :disabled="networkSequenceBusy || networkBusy[item.id]" @click="testNetwork(item)">重测</button>
+            <button class="btn" :disabled="networkSequenceBusy || networkBusy[item.id]" @click="testNetwork(item)">重新检查</button>
           </div>
         </div>
 

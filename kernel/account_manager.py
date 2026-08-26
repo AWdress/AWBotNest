@@ -13,6 +13,7 @@ import asyncio
 import hashlib
 import json
 import time
+from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -172,6 +173,7 @@ class AccountManager:
         self._reconnect_after: dict[str, float] = {}
         self._profile_refresh_task: asyncio.Task | None = None
         self._profile_refreshed_at = time.monotonic()
+        self._account_profiles: dict[str, dict] = {}
 
         # 代理：复用 manager 的解析结果
         self.proxy = manager.proxy
@@ -782,6 +784,10 @@ class AccountManager:
             if isinstance(acc, dict):
                 entry["name"] = acc.get("name") or sname
                 entry["tgid"] = acc.get("tgid")
+                entry["is_premium"] = bool(acc.get("is_premium", False))
+                entry["avatar_id"] = str(acc.get("avatar_id") or "")
+            # 下线后继续沿用本次运行中最后一次成功取得的 Telegram 资料。
+            entry.update(self._account_profiles.get(sname, {}))
             # 用缓存的 me（client.me，启动时已填充），不发网络请求
             if online and getattr(app, "me", None):
                 me = app.me
@@ -794,24 +800,39 @@ class AccountManager:
                     or getattr(photo, "small_photo_unique_id", None)
                     or ""
                 )
-            else:
-                entry["avatar_id"] = ""
+                self._account_profiles[sname] = {
+                    "name": entry["name"],
+                    "tgid": entry["tgid"],
+                    "is_premium": entry["is_premium"],
+                    "avatar_id": entry["avatar_id"],
+                }
             result.append(entry)
         return result
 
+    def _account_avatar_cache_path(self, session_name: str) -> Path:
+        digest = hashlib.sha256(session_name.encode("utf-8")).hexdigest()
+        return self.workdir / ".avatars" / f"{digest}.img"
+
     async def account_avatar(self, session_name: str):
-        """下载已连接用户账号的 Telegram 头像，返回内存文件；没有头像时返回 None。"""
+        """返回账号头像；在线时更新本地缓存，下线后继续使用最后缓存。"""
         app = next((a for a in self.user_apps if a.name == session_name), None)
-        if not self.connection_ready(app) or not getattr(app, "me", None):
-            return None
-        photo = getattr(app.me, "photo", None)
-        file_id = (
-            getattr(photo, "big_file_id", None)
-            or getattr(photo, "small_file_id", None)
-        )
-        if not file_id:
-            return None
-        return await app.download_media(file_id, in_memory=True)
+        cache_path = self._account_avatar_cache_path(session_name)
+        if self.connection_ready(app) and getattr(app, "me", None):
+            photo = getattr(app.me, "photo", None)
+            file_id = (
+                getattr(photo, "big_file_id", None)
+                or getattr(photo, "small_file_id", None)
+            )
+            if file_id:
+                avatar = await app.download_media(file_id, in_memory=True)
+                if avatar is not None:
+                    payload = avatar.getvalue()
+                    cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    cache_path.write_bytes(payload)
+                    return BytesIO(payload)
+        if cache_path.is_file():
+            return BytesIO(cache_path.read_bytes())
+        return None
 
     async def set_online(self, session_name: str) -> bool:
         """上线一个已有 session 的账号（需已登录过，有 .session 文件）"""
@@ -904,6 +925,13 @@ class AccountManager:
 
         # 4) 清暂停标记
         _unpause_account(session_name, self.workdir)
+        self._account_profiles.pop(session_name, None)
+        avatar_cache = self._account_avatar_cache_path(session_name)
+        if avatar_cache.exists():
+            try:
+                avatar_cache.unlink()
+            except OSError as e:
+                logger.warning("删除账号头像缓存失败 [%s]: %r", avatar_cache, e)
         # 清理该账号在所有插件里的「应用账号范围」，避免 scope 指向死 session
         try:
             from kernel.registry import registry

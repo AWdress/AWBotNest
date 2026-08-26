@@ -12,7 +12,7 @@ export const appRoutes = [
   { path: '/plugins', component: asyncViews['/plugins'], meta: { title: '插件管理' } },
   { path: '/accounts', component: asyncViews['/accounts'], meta: { title: '账号管理' } },
   { path: '/logs', component: asyncViews['/logs'], meta: { title: '运行日志' } },
-  { path: '/status', component: Status, meta: { title: '系统状态' } },
+  { path: '/status', component: Status, meta: { title: '运行概览' } },
   { path: '/settings', component: asyncViews['/settings'], meta: { title: '系统设置' } },
 ]
 

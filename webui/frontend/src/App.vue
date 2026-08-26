@@ -28,6 +28,9 @@ const latestVersion = ref('')   // GitHub 最新发布版本
 const latestNote = ref('')      // 新版本的一句更新说明（hover 提示用）
 const hasUpdate = ref(false)    // 是否有新版本
 const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
+const connectionLabel = computed(() => online.value
+  ? '连接正常'
+  : (platformStatusError.value ? '连接异常' : '正在连接'))
 
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
@@ -183,7 +186,7 @@ function syncVersionCheck(result = {}) {
 
 // 导航项：内联 SVG 图标 + 文字
 const nav = [
-  { to: '/status', label: '系统状态', icon: 'pulse' },
+  { to: '/status', label: '运行概览', icon: 'pulse' },
   { to: '/plugins', label: '插件管理', icon: 'grid' },
   { to: '/accounts', label: '账号管理', icon: 'user' },
   { to: '/logs', label: '运行日志', icon: 'list' },
@@ -191,7 +194,7 @@ const nav = [
 ]
 
 const pageContext = {
-  '/status': { kicker: '运行总览', title: '系统状态' },
+  '/status': { kicker: '运行总览', title: '运行概览' },
   '/plugins': { kicker: '插件生态', title: '插件管理' },
   '/accounts': { kicker: '会话接入', title: '账号管理' },
   '/logs': { kicker: '诊断中心', title: '运行日志' },
@@ -304,7 +307,7 @@ onUnmounted(() => {
               </span>
             </span>
             <div class="footer-status" :class="{ online }">
-              <span>{{ online ? '连接正常' : '连接中…' }}</span>
+              <span>{{ connectionLabel }}</span>
               <div class="status-dot" :class="{ online }"></div>
             </div>
           </div>
@@ -328,6 +331,7 @@ onUnmounted(() => {
         </div>
         <TopbarControlCenter
           :online="online"
+          :connection-label="connectionLabel"
           :version="version"
           :latest-version="latestVersion"
           :check-releases="checkUpdate"

@@ -11,12 +11,12 @@ import SecretInput from '../components/SecretInput.vue'
 const tab = ref('login')   // login | notify | ai | cookies | api | system | maint
 
 const TABS = [
-  { key: 'login',  label: '安全认证' },
-  { key: 'notify', label: '通知推送' },
+  { key: 'login',  label: '账号与凭据' },
+  { key: 'notify', label: '通知渠道' },
   { key: 'ai',     label: 'AI 服务' },
-  { key: 'cookies', label: 'Cookie 同步' },
+  { key: 'cookies', label: 'Cookie 服务' },
   { key: 'api',    label: '开放接口' },
-  { key: 'system', label: '系统配置' },
+  { key: 'system', label: '运行环境' },
   { key: 'maint',  label: '维护' },
 ]
 
@@ -110,7 +110,7 @@ watch(dirty, (d) => { if (d) restartHint.value = false })
 const AI_CAPABILITIES = [
   { key: 'text', label: '文字模型', desc: '总结、改写、问答和结构化处理' },
   { key: 'vision', label: '图片识别', desc: '识别图片、截图、海报和文字内容' },
-  { key: 'image', label: '生图模型', desc: '根据提示词生成图片并保存给插件' },
+  { key: 'image', label: '图片生成', desc: '根据提示词生成图片并保存给插件' },
 ]
 
 function newAiProvider() {
@@ -187,7 +187,7 @@ async function loadCookieSettings() {
     cookieServerPath.value = data.server_path || '/cookiecloud'
     cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
   } catch (e) {
-    toast.error('读取 Cookie 同步设置失败：' + e.message)
+    toast.error('读取 Cookie 服务设置失败：' + e.message)
   } finally {
     cookieLoading.value = false
   }
@@ -202,10 +202,10 @@ async function saveCookieSettings() {
     cookieStatus.value = data.sync_status || {}
     cookieHistory.value = data.history || cookieHistory.value
     cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
-    toast.success('Cookie 同步设置已保存并立即生效')
+    toast.success('Cookie 服务设置已保存并立即生效')
     return true
   } catch (e) {
-    toast.error('保存 Cookie 同步设置失败：' + e.message)
+    toast.error('保存 Cookie 服务设置失败：' + e.message)
     return false
   } finally {
     cookieSaving.value = false
@@ -1505,7 +1505,7 @@ onBeforeRouteLeave(async () => {
       <!-- Telegram 凭据 -->
       <div v-if="tab === 'login'" class="card" style="margin-top:16px">
         <div class="card-title">Telegram 凭据</div>
-        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知推送」页配置；点击眼睛可查看已保存的敏感值。</div>
+        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。Bot Token 在「通知渠道」页配置；点击眼睛可查看已保存的敏感值。</div>
         <div class="grid2">
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
@@ -1641,7 +1641,7 @@ onBeforeRouteLeave(async () => {
               <div>
                 <div class="card-title">AI 服务</div>
                 <div class="hint muted">
-                  插件统一调用文字、图片识别和生图模型，不会接触服务商密钥。
+                  插件统一调用文字、图片识别和图片生成模型，不会接触服务商密钥。
                 </div>
               </div>
             </div>
@@ -1928,7 +1928,7 @@ onBeforeRouteLeave(async () => {
 
       <!-- CookieCloud 浏览器同步 -->
       <template v-if="tab === 'cookies'">
-        <div v-if="cookieLoading" class="card center muted">正在读取 Cookie 同步设置…</div>
+        <div v-if="cookieLoading" class="card center muted">正在读取 Cookie 服务设置…</div>
         <template v-else-if="cookieSettings">
           <div class="card cookie-overview">
             <div class="cookie-overview-main">

@@ -54,7 +54,7 @@ async function toggle(acc) {
 async function remove(acc) {
   const ok = await confirm({
     title: '删除账号',
-    message: `确定删除账号「${acc.name}」？\n会断开连接、删除 session 文件并从配置移除，不可恢复。`,
+    message: `确定删除账号「${acc.name}」？\n会断开连接、删除已保存的登录信息并从配置移除，不可恢复。`,
     confirmText: '删除', danger: true,
   })
   if (!ok) return
@@ -80,7 +80,7 @@ function openWizard() {
 }
 
 async function sendCode() {
-  if (!form.value.session.trim()) { wizardErr.value = '请填写账号标识（session 名）'; return }
+  if (!form.value.session.trim()) { wizardErr.value = '请填写本地账号名称'; return }
   if (!form.value.phone.trim()) { wizardErr.value = '请填写手机号'; return }
   wizardBusy.value = true; wizardErr.value = ''
   try {
@@ -137,7 +137,7 @@ onMounted(load)
       <div><span>全部账号</span><strong>{{ accountOverview.total }}</strong><small>当前已添加</small></div>
       <div><span>在线</span><strong class="ok">{{ accountOverview.online }}</strong><small>正在接收消息</small></div>
       <div><span>离线</span><strong>{{ accountOverview.offline }}</strong><small>可随时重新上线</small></div>
-      <div><span>会话就绪</span><strong>{{ accountOverview.ready }}</strong><small>登录状态已保存</small></div>
+      <div><span>登录已保存</span><strong>{{ accountOverview.ready }}</strong><small>可直接重新上线</small></div>
     </section>
 
     <div v-if="error" class="alert">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
@@ -164,7 +164,7 @@ onMounted(load)
               </div>
               <div class="acc-status-row">
                 <span class="health-pill" :class="`health-${acc.health || 'info'}`">{{ acc.status_text || (acc.online ? '在线' : '离线') }}</span>
-                <span class="muted small">{{ acc.session_exists ? '已有 session' : '还未完成登录' }}</span>
+                <span class="muted small">{{ acc.session_exists ? '登录已保存' : '还未完成登录' }}</span>
               </div>
             </div>
           </div>
@@ -206,8 +206,8 @@ onMounted(load)
         <!-- 手机号 -->
         <div v-if="step==='phone'" class="form">
           <div class="field">
-            <label>账号标识（session 名，英文，自定义）</label>
-            <input class="input" v-model="form.session" placeholder="如 user_account" />
+            <label>本地账号名称（英文，自定义）</label>
+            <input class="input" v-model="form.session" placeholder="例如 user_account" />
           </div>
           <div class="field">
             <label>手机号（带国家码）</label>

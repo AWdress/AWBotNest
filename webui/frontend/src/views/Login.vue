@@ -67,7 +67,7 @@ async function submit() {
       </div>
 
       <button class="lc-btn" :class="{ setup: setupMode }" @click="submit" :disabled="busy">
-        {{ setupMode ? (busy ? '保存中…' : '保存并进入') : (busy ? '登录中…' : '登 录') }}
+        {{ setupMode ? (busy ? '保存中…' : '保存并进入') : (busy ? '登录中…' : '登录') }}
       </button>
 
       <div class="lc-hint">© 2026 AWBotNest<span v-if="version"> · v{{ version }}</span></div>

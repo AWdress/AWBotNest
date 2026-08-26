@@ -329,7 +329,7 @@ function eventKey(item) {
 const EVENT_SOURCE_NAMES = {
   main: '平台',
   repo_sync: '插件仓库',
-  scheduler: '定时服务',
+  scheduler: '定时任务',
   plugin: '插件管理',
   plugin_runtime: '插件运行',
   account: '账号管理',
@@ -433,7 +433,7 @@ onUnmounted(() => {
 <template>
   <div v-if="error" class="status-alert" role="alert">
     <span>{{ error }}</span>
-    <button type="button" @click="refresh">重新读取</button>
+    <button type="button" @click="refresh">刷新</button>
   </div>
 
   <div v-if="loading" class="status status-loading" aria-label="正在加载运行状态" aria-busy="true">
@@ -575,7 +575,7 @@ onUnmounted(() => {
       </article>
 
       <article class="surface jobs-panel">
-        <header class="panel-heading compact jobs-heading"><div><span class="eyebrow">计划任务</span><h2>即将执行</h2></div><span class="jobs-header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v3m10-3v3M4 9h16M5 5h14v15H5z"/><circle cx="16.5" cy="16.5" r="3.5"/><path d="M16.5 14.8v1.9l1.2.7"/></svg></span></header>
+        <header class="panel-heading compact jobs-heading"><div><span class="eyebrow">定时任务</span><h2>即将执行</h2></div><span class="jobs-header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v3m10-3v3M4 9h16M5 5h14v15H5z"/><circle cx="16.5" cy="16.5" r="3.5"/><path d="M16.5 14.8v1.9l1.2.7"/></svg></span></header>
         <div v-if="!st.scheduler_jobs.length" class="small-empty">当前没有定时任务。</div>
         <div v-else class="job-list">
           <div v-for="job in st.scheduler_jobs" :key="job.id" class="job-row" :class="{ changed: changedJobs.includes(job.id) }">

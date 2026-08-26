@@ -223,3 +223,40 @@ async def test_account_avatar_is_absent_for_offline_account(account_manager) -> 
     account_manager.user_apps.append(FakeClient("offline", connected=False, started=False))
 
     assert await account_manager.account_avatar("offline") is None
+
+
+@pytest.mark.asyncio
+async def test_offline_account_keeps_last_profile_and_cached_avatar(account_manager, monkeypatch) -> None:
+    app = FakeClient("user", connected=True, started=True)
+    app.me = SimpleNamespace(
+        first_name="稳定名称",
+        id=12345,
+        is_premium=True,
+        photo=SimpleNamespace(
+            big_photo_unique_id="stable-photo-id",
+            big_file_id="photo-file",
+        ),
+    )
+
+    async def download_media(_file_id, *, in_memory):
+        assert in_memory is True
+        return BytesIO(b"cached-avatar")
+
+    app.download_media = download_media
+    account_manager.user_apps.append(app)
+    monkeypatch.setattr(config_module, "load", lambda: {
+        "ACCOUNTS": [{"session": "user", "name": "旧配置名称", "tgid": 12345}],
+    })
+
+    online = await account_manager.list_accounts()
+    await account_manager.account_avatar("user")
+    app.is_connected = False
+    app.session.is_started.clear()
+    offline = await account_manager.list_accounts()
+    cached_avatar = await account_manager.account_avatar("user")
+
+    assert online[0]["name"] == "稳定名称"
+    assert offline[0]["name"] == "稳定名称"
+    assert offline[0]["avatar_id"] == "stable-photo-id"
+    assert offline[0]["is_premium"] is True
+    assert cached_avatar.getvalue() == b"cached-avatar"

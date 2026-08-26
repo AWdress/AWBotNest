@@ -38,7 +38,7 @@ watch(
 </script>
 
 <template>
-  <span class="account-avatar" :class="{ fallback: !imageUrl || failed }" aria-hidden="true">
+  <span class="account-avatar" :class="{ fallback: !imageUrl || failed, offline: !account.online }" aria-hidden="true">
     <img v-if="imageUrl && !failed" :src="imageUrl" alt="" @error="failed = true">
     <span v-else>{{ initials }}</span>
   </span>
@@ -48,4 +48,5 @@ watch(
 .account-avatar { display: grid; place-items: center; overflow: hidden; flex: 0 0 auto; background: var(--accent-dim); color: #dceaff; }
 .account-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .account-avatar span { line-height: 1; }
+.account-avatar.offline { filter: grayscale(1); opacity: .58; }
 </style>
