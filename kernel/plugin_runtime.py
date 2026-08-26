@@ -153,6 +153,12 @@ class PluginRuntime:
             })
             for dependency in meta.requires_plugins:
                 edges.append({"from": meta.id, "to": dependency, "type": "plugin", "missing": dependency not in known})
+            for requirement in meta.requirements:
+                edges.append({
+                    "from": meta.id, "to": requirement, "type": "python",
+                    # Python 包的安装与版本校验由依赖管理器在启用插件时完成；这里仅展示声明。
+                    "missing": False,
+                })
             for capability in meta.requires_capabilities:
                 edges.append({
                     "from": meta.id, "to": f"capability:{capability}", "type": "capability",
