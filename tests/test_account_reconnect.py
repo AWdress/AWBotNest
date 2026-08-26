@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from io import BytesIO
+from types import SimpleNamespace
 
 import pytest
 
+import config.config as config_module
 import kernel.account_manager as account_manager_module
 from kernel.account_manager import AccountManager, _pause_account
 
@@ -145,3 +148,45 @@ async def test_bot_that_failed_during_startup_is_created_later(tmp_path, monkeyp
     assert start_calls == 1
     assert accounts.bot_apps["default"] is app
     assert resync_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_account_avatar_uses_cached_profile_photo(account_manager) -> None:
+    app = FakeClient("user", connected=True, started=True)
+    app.me = SimpleNamespace(photo=SimpleNamespace(big_file_id="photo-file"))
+    downloaded = []
+
+    async def download_media(file_id, *, in_memory=False):
+        downloaded.append((file_id, in_memory))
+        return BytesIO(b"jpeg-data")
+
+    app.download_media = download_media
+    account_manager.user_apps.append(app)
+
+    avatar = await account_manager.account_avatar("user")
+
+    assert avatar.getvalue() == b"jpeg-data"
+    assert downloaded == [("photo-file", True)]
+
+
+@pytest.mark.asyncio
+async def test_account_list_exposes_telegram_avatar_version(account_manager, monkeypatch) -> None:
+    app = FakeClient("user", connected=True, started=True)
+    app.me = SimpleNamespace(
+        first_name="测试账号",
+        id=12345,
+        photo=SimpleNamespace(big_photo_unique_id="stable-photo-id"),
+    )
+    account_manager.user_apps.append(app)
+    monkeypatch.setattr(config_module, "load", lambda: {"ACCOUNTS": [{"session": "user"}]})
+
+    result = await account_manager.list_accounts()
+
+    assert result[0]["avatar_id"] == "stable-photo-id"
+
+
+@pytest.mark.asyncio
+async def test_account_avatar_is_absent_for_offline_account(account_manager) -> None:
+    account_manager.user_apps.append(FakeClient("offline", connected=False, started=False))
+
+    assert await account_manager.account_avatar("offline") is None

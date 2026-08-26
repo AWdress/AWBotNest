@@ -1464,6 +1464,24 @@ async def list_accounts(user=Depends(_auth)):
     return {"accounts": await accounts.list_accounts()}
 
 
+@app.get("/api/accounts/{session_name}/avatar")
+async def account_avatar(session_name: str, user=Depends(_auth)):
+    accounts = _get_accounts()
+    try:
+        avatar = await accounts.account_avatar(session_name)
+    except Exception as exc:  # noqa: BLE001 - 头像失败不应影响账号状态
+        logger.warning("读取 Telegram 账号头像失败 [%s]: %r", session_name, exc)
+        raise HTTPException(status_code=404, detail="账号头像暂不可用") from exc
+    if avatar is None:
+        raise HTTPException(status_code=404, detail="账号没有头像或当前未连接")
+    content = avatar.getvalue() if hasattr(avatar, "getvalue") else avatar.read()
+    return Response(
+        content=content,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 @app.post("/api/accounts/{session_name}/online")
 async def account_online(session_name: str, user=Depends(_auth)):
     """上线已登录账号，并重挂插件"""

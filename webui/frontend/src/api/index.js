@@ -33,6 +33,17 @@ async function request(method, url, body) {
   return res.json()
 }
 
+async function requestBlob(url) {
+  const res = await fetch(url, { headers: authHeaders() })
+  if (res.status === 401) {
+    setToken('')
+    if (onUnauthorized) onUnauthorized()
+    throw new Error('未登录或登录已过期')
+  }
+  if (!res.ok) throw new Error(res.statusText)
+  return res.blob()
+}
+
 let statusRequest = null
 let statusCache = null
 let statusCacheAt = 0
@@ -159,6 +170,9 @@ export const api = {
   loginSendCode: (session, phone) => request('POST', '/api/accounts/login/send_code', { session, phone }),
   loginSubmitCode: (session, code) => request('POST', '/api/accounts/login/submit_code', { session, code }),
   loginSubmitPassword: (session, password) => request('POST', '/api/accounts/login/submit_password', { session, password }),
+  accountAvatar: (session, version = '') => requestBlob(
+    `/api/accounts/${encodeURIComponent(session)}/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`
+  ),
 
   // 系统设置（config.json）
   getSettings: () => request('GET', '/api/settings'),

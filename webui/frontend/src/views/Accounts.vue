@@ -2,6 +2,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { api } from '../api'
 import { confirm } from '../composables/confirm'
+import AccountAvatar from '../components/AccountAvatar.vue'
 
 const accounts = ref([])
 const loading = ref(true)
@@ -150,14 +151,17 @@ onMounted(load)
     <div v-else class="grid">
       <div v-for="acc in accounts" :key="acc.session" class="card acc-card">
         <div class="acc-head">
-          <div>
-            <div class="acc-name">{{ acc.name }}</div>
-            <div class="acc-meta mono">
-              {{ acc.session }}<template v-if="acc.tgid"> · {{ acc.tgid }}</template>
-            </div>
-            <div class="acc-status-row">
-              <span class="health-pill" :class="`health-${acc.health || 'info'}`">{{ acc.status_text || (acc.online ? '在线' : '离线') }}</span>
-              <span class="muted small">{{ acc.session_exists ? '已有 session' : '还未完成登录' }}</span>
+          <div class="acc-identity">
+            <AccountAvatar :account="acc" />
+            <div class="acc-copy">
+              <div class="acc-name">{{ acc.name }}</div>
+              <div class="acc-meta mono">
+                {{ acc.session }}<template v-if="acc.tgid"> · {{ acc.tgid }}</template>
+              </div>
+              <div class="acc-status-row">
+                <span class="health-pill" :class="`health-${acc.health || 'info'}`">{{ acc.status_text || (acc.online ? '在线' : '离线') }}</span>
+                <span class="muted small">{{ acc.session_exists ? '已有 session' : '还未完成登录' }}</span>
+              </div>
             </div>
           </div>
           <span class="badge" :class="acc.online ? 'badge-on' : 'badge-off'">
@@ -274,6 +278,9 @@ onMounted(load)
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--gap); }
 .acc-card { min-height: 176px; display: flex; flex-direction: column; gap: 16px; }
 .acc-head { display: flex; justify-content: space-between; align-items: flex-start; }
+.acc-identity { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.acc-copy { min-width: 0; }
+.account-avatar { width: 44px; height: 44px; border-radius: 12px; font-size: 11px; font-weight: 700; }
 .acc-name { font-size: 15px; font-weight: 600; }
 .acc-meta { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
 .acc-status-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }

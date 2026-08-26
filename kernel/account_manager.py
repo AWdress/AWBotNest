@@ -741,8 +741,30 @@ class AccountManager:
                 me = app.me
                 entry["name"] = me.first_name or entry["name"]
                 entry["tgid"] = me.id
+                photo = getattr(me, "photo", None)
+                entry["avatar_id"] = str(
+                    getattr(photo, "big_photo_unique_id", None)
+                    or getattr(photo, "small_photo_unique_id", None)
+                    or ""
+                )
+            else:
+                entry["avatar_id"] = ""
             result.append(entry)
         return result
+
+    async def account_avatar(self, session_name: str):
+        """下载已连接用户账号的 Telegram 头像，返回内存文件；没有头像时返回 None。"""
+        app = next((a for a in self.user_apps if a.name == session_name), None)
+        if not self.connection_ready(app) or not getattr(app, "me", None):
+            return None
+        photo = getattr(app.me, "photo", None)
+        file_id = (
+            getattr(photo, "big_file_id", None)
+            or getattr(photo, "small_file_id", None)
+        )
+        if not file_id:
+            return None
+        return await app.download_media(file_id, in_memory=True)
 
     async def set_online(self, session_name: str) -> bool:
         """上线一个已有 session 的账号（需已登录过，有 .session 文件）"""

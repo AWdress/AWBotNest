@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api, getToken } from '../api'
+import AccountAvatar from '../components/AccountAvatar.vue'
 import {
   platformStatus,
   platformStatusError,
@@ -557,7 +558,7 @@ onUnmounted(() => {
         <div v-if="!st.accounts.length" class="small-empty">暂无账号，请先到账号管理中登录。</div>
         <div v-else class="account-list">
           <div v-for="account in st.accounts" :key="account.session" class="account-row" :class="{ changed: changedAccounts.includes(account.session) }">
-            <span class="account-avatar">{{ (account.name || account.session || '账').slice(0, 2) }}</span>
+            <AccountAvatar :account="account" />
             <div><strong>{{ account.name || account.session }}</strong><small>{{ account.session }}</small></div>
             <span class="account-tgid">{{ account.tgid || '未绑定 TGID' }}</span>
             <span class="account-state" :class="{ offline: !account.online }">{{ account.online ? '在线' : '离线' }}</span>
@@ -717,7 +718,7 @@ onUnmounted(() => {
 .account-list { max-height: 249px; overflow-y: auto; }
 .job-list { max-height: 320px; overflow-y: auto; }
 .account-row { display: grid; grid-template-columns: 32px minmax(0,1fr) auto auto; gap: 9px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
-.account-avatar { width: 31px; height: 31px; display: grid; place-items: center; border-radius: 8px; background: var(--accent-dim); color: #dceaff; font-size: 9px; }
+.account-avatar { width: 31px; height: 31px; border-radius: 8px; font-size: 9px; }
 .account-row strong, .account-row small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .account-row strong { font-size: 11px; }
 .account-row small { margin-top: 3px; color: var(--text-muted); font-size: 9px; }
