@@ -355,6 +355,14 @@ class PluginRuntime:
                 meta.enabled = True
                 return meta
 
+            if meta.scope in {"user", "both"}:
+                from kernel.account_manager import telegram_credentials_configured
+                if not telegram_credentials_configured():
+                    meta.loaded = False
+                    meta.enabled = registry.is_enabled(plugin_id)
+                    meta.error = "未配置 Telegram API_ID/API_HASH，用户账号插件当前不可用"
+                    return meta
+
             contexts: list[PlatformContext] = []
             try:
                 compatibility_error = self._compatibility_error(meta)
@@ -413,6 +421,7 @@ class PluginRuntime:
                 )
                 logger.info("插件已启用: %s（%d 个运行实例）", meta.name, len(contexts))
                 return meta
+
             except Exception as e:  # noqa: BLE001
                 # 加载失败：先注销 setup 中途已注册的 handler/定时任务（防句柄泄漏），
                 # 再清理模块，标记错误，不影响其它插件。

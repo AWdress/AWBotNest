@@ -222,7 +222,7 @@ function nextRunLabel(job) {
 const cards = computed(() => {
   if (!st.value) return []
   const status = st.value
-  return [
+  const items = [
     {
       key: 'bot', label: 'Bot 账号', value: status.bot_connected ? '在线' : '离线',
       sub: status.bot_connected ? '连接稳定' : '等待连接', tone: status.bot_connected ? 'green' : 'gray', icon: 'bot',
@@ -237,6 +237,7 @@ const cards = computed(() => {
     },
     { key: 'uptime', label: '运行时长', value: uptime.value, sub: '本次启动', tone: 'teal', icon: 'clock', small: true },
   ]
+  return status.telegram_configured ? items : items.filter(card => !['bot', 'user'].includes(card.key))
 })
 
 const icons = {
@@ -450,7 +451,7 @@ onUnmounted(() => {
   </div>
 
   <div v-else-if="st" class="status" :class="{ ready: pageReady }">
-    <section class="metric-strip reveal section-0" aria-label="平台指标">
+    <section class="metric-strip reveal section-0" :class="{ compact: !st.telegram_configured }" aria-label="平台指标">
       <article v-for="(card, index) in cards" :key="card.key" class="metric" :class="card.tone" :style="{ '--delay': `${index * 55}ms` }">
         <span class="metric-icon" :class="{ pulsing: card.key === 'bot' && st.bot_connected }">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="icons[card.icon]" /></svg>
@@ -543,7 +544,7 @@ onUnmounted(() => {
       </aside>
     </section>
 
-    <section class="secondary-grid reveal section-2">
+    <section class="secondary-grid reveal section-2" :class="{ 'without-accounts': !st.telegram_configured }">
       <article class="surface ranking-panel">
         <header class="panel-heading compact"><div><span class="eyebrow">{{ activityRangeLabel }}</span><h2>活跃插件</h2></div><RouterLink class="panel-link" to="/plugins">查看全部</RouterLink></header>
         <div v-if="!topPlugins.length" class="small-empty">暂无插件活跃记录</div>
@@ -555,7 +556,7 @@ onUnmounted(() => {
         </div>
       </article>
 
-      <article class="surface account-panel">
+      <article v-if="st.telegram_configured" class="surface account-panel">
         <header class="panel-heading compact"><div><span class="eyebrow">连接状态</span><h2>账号</h2></div><span class="healthy-badge">{{ st.user_count }}/{{ st.accounts.length }} 在线</span></header>
         <div v-if="!st.accounts.length" class="small-empty">暂无账号，请先到账号管理中登录。</div>
         <div v-else class="account-list">
@@ -616,6 +617,7 @@ onUnmounted(() => {
 }
 
 .metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); border-radius: 13px; overflow: hidden; }
+.metric-strip.compact { grid-template-columns: repeat(2, minmax(0,1fr)); }
 .metric { min-width: 0; display: flex; align-items: center; gap: 13px; padding: 16px 18px; border-right: 1px solid var(--border); animation: metric-enter .4s ease both; animation-delay: var(--delay); }
 .metric:last-child { border-right: 0; }
 .metric-icon { position: relative; width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 11px; }
@@ -633,6 +635,7 @@ onUnmounted(() => {
 
 .primary-grid { display: grid; grid-template-columns: minmax(0,2.1fr) minmax(290px,.9fr); gap: 14px; }
 .secondary-grid { display: grid; grid-template-columns: minmax(0,1.15fr) minmax(0,.9fr) minmax(0,1fr); gap: 14px; }
+.secondary-grid.without-accounts { grid-template-columns: minmax(0,1.15fr) minmax(0,1fr); }
 .panel-heading { min-height: 66px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 17px 11px; }
 .panel-heading.compact { min-height: 62px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
 .panel-heading h2 { margin: 4px 0 0; font-size: 16px; line-height: 1.2; }

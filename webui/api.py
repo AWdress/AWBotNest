@@ -80,6 +80,36 @@ _COOKIECLOUD_RATE_WINDOW = 15 * 60
 _COOKIECLOUD_RATE_LIMIT = 240
 
 
+def _plugin_visible_without_user_credentials(
+    scope: object,
+    telegram_configured: bool | None = None,
+) -> bool:
+    """无 Telegram 应用凭据时，仅隐藏需要用户账号的插件。"""
+    if telegram_configured is None:
+        from kernel.account_manager import telegram_credentials_configured
+        telegram_configured = telegram_credentials_configured()
+    return telegram_configured or str(scope or "user") not in {"user", "both"}
+
+
+def _visible_plugin_metas():
+    """一次请求只读取一次凭据状态，避免插件越多配置文件读取越频繁。"""
+    from kernel.account_manager import telegram_credentials_configured
+    configured = telegram_credentials_configured()
+    return [
+        meta for meta in registry.scan()
+        if _plugin_visible_without_user_credentials(meta.scope, configured)
+    ]
+
+
+def _visible_store_plugins(plugins: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    from kernel.account_manager import telegram_credentials_configured
+    configured = telegram_credentials_configured()
+    return [
+        plugin for plugin in plugins
+        if _plugin_visible_without_user_credentials(plugin.get("scope"), configured)
+    ]
+
+
 def _cgroup_roots() -> list[tuple[Path, bool]]:
     """返回当前进程可能所在的 cgroup 目录及是否为 v2。"""
     roots: list[tuple[Path, bool]] = []
@@ -822,7 +852,7 @@ async def list_plugins(user=Depends(_auth)):
     if repo_sync.seed_installed_plugin_heat():
         await repo_sync.sync_plugin_heat()
     install_counts = repo_sync.get_install_counts()
-    metas = registry.scan()
+    metas = _visible_plugin_metas()
     out = []
     for m in metas:
         m.loaded = runtime.is_loaded(m.id)
@@ -852,7 +882,7 @@ async def save_plugin_order(body: Dict[str, Any], user=Depends(_auth_pwc)):
     order = body.get("order")
     if not isinstance(order, list) or len(order) > 2000:
         raise HTTPException(status_code=400, detail="插件顺序格式不正确")
-    known_ids = {meta.id for meta in registry.scan()}
+    known_ids = {meta.id for meta in _visible_plugin_metas()}
     clean_order = [str(item).strip() for item in order]
     if (any(not item or item not in known_ids for item in clean_order)
             or len(clean_order) != len(set(clean_order))
@@ -972,7 +1002,9 @@ async def github_list(body: Dict[str, Any], user=Depends(_auth)):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"访问 GitHub 失败: {e}")
-    if not result.get("plugins"):
+    original_plugins = result.get("plugins") or []
+    result["plugins"] = _visible_store_plugins(original_plugins)
+    if not original_plugins:
         raise HTTPException(status_code=404, detail="该来源未找到插件（应有 manifest.json，或仓库根/plugins/ 下有 .py 或 <id>/__init__.py）")
     return result
 
@@ -2536,7 +2568,9 @@ async def platform_webhook(request: Request):
 async def plugin_store(refresh: bool = True, user=Depends(_auth)):
     """聚合所有已配置仓库的插件列表，标记 installed。refresh=false 走缓存。"""
     from webui import repo_sync
-    return await repo_sync.list_store(refresh=refresh)
+    result = await repo_sync.list_store(refresh=refresh)
+    result["plugins"] = _visible_store_plugins(result.get("plugins") or [])
+    return result
 
 
 @app.post("/api/plugins/store/download")
@@ -2568,16 +2602,18 @@ async def system_status(user=Depends(_auth)):
     from kernel import state as kernel_state
     acc = kernel_state.accounts
     runtime = kernel_state.runtime
+    from kernel.account_manager import telegram_credentials_configured
+    telegram_configured = telegram_credentials_configured()
 
     # 插件统计
-    metas = registry.scan()
+    metas = _visible_plugin_metas()
     plugin_total = len(metas)
     plugin_enabled = sum(1 for m in metas if m.enabled)
     plugin_error = sum(1 for m in metas if m.error)
 
     # 账号列表
     accounts_info = []
-    if acc:
+    if acc and telegram_configured:
         try:
             accounts_info = await acc.list_accounts()
         except Exception:  # noqa: BLE001
@@ -2652,6 +2688,7 @@ async def system_status(user=Depends(_auth)):
         "uptime_seconds": uptime,
         "python": _sys.version.split()[0],
         "platform": f"{_platform.system()} {_platform.release()}",
+        "telegram_configured": telegram_configured,
         "bot_connected": acc.connection_ready(acc.bot_app) if acc else False,
         "user_connected": bool(acc and acc.primary_user_app) if acc else False,
         "user_count": len(acc.connected_user_apps) if acc else 0,
@@ -2747,7 +2784,7 @@ async def ui_health(user=Depends(_auth)):
     cfg.reload()
     accounts = kernel_state.accounts
     runtime = kernel_state.runtime
-    metas = registry.scan()
+    metas = _visible_plugin_metas()
     db_info = getattr(cfg, "DB_INFO", {}) or {}
     db_ok = True
     if db_info.get("dbset", "SQLite") == "SQLite":
@@ -2762,12 +2799,17 @@ async def ui_health(user=Depends(_auth)):
         item for item in (ai_settings.get("providers", []) or [])
         if isinstance(item, dict)
     ]
+    from kernel.account_manager import telegram_credentials_configured
+    telegram_configured = telegram_credentials_configured()
     bot_connected = accounts.connection_ready(accounts.bot_app) if accounts else False
     checks = [
         {"id": "accounts", "name": "账号服务", "ok": accounts is not None,
          "detail": f"{len(accounts.connected_user_apps) if accounts else 0} 个用户账号在线"},
-        {"id": "bots", "name": "Bot 服务", "ok": bot_connected,
-         "detail": "已连接" if bot_connected else "未连接"},
+        {"id": "bots", "name": "Bot 服务", "ok": bot_connected or not telegram_configured,
+         "detail": (
+             "已连接" if bot_connected else
+             "未配置 Telegram 凭据，已暂停" if not telegram_configured else "未连接"
+         )},
         {"id": "plugins", "name": "插件系统", "ok": runtime is not None,
          "detail": f"{sum(1 for meta in metas if meta.enabled)} 个插件已启用"},
         {"id": "database", "name": "数据库", "ok": db_ok, "detail": str(db_info.get("dbset") or "SQLite")},

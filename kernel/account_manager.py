@@ -17,7 +17,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
-from core import API_HASH, API_ID
 from libs.log import logger
 from libs.custom_client import Client
 from libs.session_cleaner import clean_corrupted_sessions
@@ -28,6 +27,19 @@ config = get_settings()
 
 # BOT_TOKEN 对应的内置 Bot 固定 id。
 BUILTIN_BOT_ID = "default"
+
+
+def telegram_credentials_configured() -> bool:
+    """Telegram MTProto 客户端是否具备首次授权所需的应用凭据。"""
+    import config.config as _cfg
+    _cfg.reload()
+    return bool(getattr(_cfg, "API_ID", 0) and getattr(_cfg, "API_HASH", ""))
+
+
+def _telegram_credentials() -> tuple[int, str]:
+    import config.config as _cfg
+    _cfg.reload()
+    return int(getattr(_cfg, "API_ID", 0) or 0), str(getattr(_cfg, "API_HASH", "") or "")
 
 
 def _load_bots_config() -> list[dict]:
@@ -243,23 +255,25 @@ class AccountManager:
     # ──────────────────────────────────────────────
     def _build_user_client(self, session_name: str) -> Client:
         """构建用户账号 Client（不挂载自动发现插件）"""
+        api_id, api_hash = _telegram_credentials()
         return Client(
             session_name,
-            api_id=API_ID,
-            api_hash=API_HASH,
+            api_id=api_id,
+            api_hash=api_hash,
             workdir=str(self.workdir.resolve()),
             proxy=self.proxy,
         )
 
     def _build_bot_client(self, bot_id: str, bot_token: str) -> Client:
         """构建 Bot 客户端；Token 变化时使用新 session，避免误连回旧 Bot。"""
+        api_id, api_hash = _telegram_credentials()
         base_name = "bot_account" if bot_id == BUILTIN_BOT_ID else f"bot_{bot_id}"
         token_fingerprint = hashlib.sha256(bot_token.encode("utf-8")).hexdigest()[:12]
         session_name = f"{base_name}_{token_fingerprint}"
         return Client(
             session_name,
-            api_id=API_ID,
-            api_hash=API_HASH,
+            api_id=api_id,
+            api_hash=api_hash,
             bot_token=bot_token,
             workdir=str(self.workdir.resolve()),
             proxy=self.proxy,
@@ -290,6 +304,20 @@ class AccountManager:
     async def sync_bots(self, previous: dict, current: dict) -> dict:
         """按设置差异热更新 Bot，并返回前端可展示的同步结果。"""
         async with self._bot_sync_lock:
+            if not telegram_credentials_configured():
+                self.bot_apps.clear()
+                self._bot_names.clear()
+                requested_default = str(current.get("DEFAULT_BOT_ID") or BUILTIN_BOT_ID)
+                self.default_bot_id = requested_default
+                manager.bot_app = None
+                logger.info("Telegram 凭据未配置，Bot 设置已保存，将在平台重启后生效")
+                return {
+                    "failed": [],
+                    "default_id": self.default_bot_id,
+                    "needs_resync": False,
+                    "deferred": True,
+                }
+
             old_specs = {bot["id"]: bot for bot in _bots_from_settings(previous)}
             new_specs = {bot["id"]: bot for bot in _bots_from_settings(current)}
             failed: list[dict[str, str]] = []
@@ -376,7 +404,7 @@ class AccountManager:
         self.bot_apps.clear()
         self._bot_names.clear()
 
-        if not (getattr(_cfg, "API_ID", 0) and getattr(_cfg, "API_HASH", "")):
+        if not telegram_credentials_configured():
             raise RuntimeError("未配置 Telegram 凭据（API_ID/API_HASH），请在系统设置填写后重启")
 
         bots = _load_bots_config()
@@ -447,11 +475,19 @@ class AccountManager:
         clean_corrupted_sessions(str(self.workdir))
         await asyncio.sleep(1)  # 给上次异常退出的 SQLite 锁释放留时间
 
-        try:
-            await self.start_bots()
-        except RuntimeError as e:
-            logger.warning("Bot 暂不启动（可在网页中填好凭据后重启）: %s", e)
-        await self.start_users()
+        if telegram_credentials_configured():
+            try:
+                await self.start_bots()
+            except RuntimeError as e:
+                logger.warning("Bot 暂不启动（可在网页中填好设置后重启）: %s", e)
+            await self.start_users()
+        else:
+            self.bot_apps.clear()
+            self.user_apps.clear()
+            logger.info(
+                "未配置 Telegram API_ID/API_HASH，平台以独立模式启动；"
+                "用户账号插件已隐藏，Telegram 客户端暂不连接"
+            )
 
         # 同步到全局 manager，保持旧代码（core.manager 单例）可用
         manager.user_apps = self.user_apps
@@ -568,6 +604,8 @@ class AccountManager:
 
     async def _recover_missing_bots(self, now: float) -> bool:
         """重新创建启动阶段失败、尚未进入 bot_apps 的已配置 Bot。"""
+        if not telegram_credentials_configured():
+            return False
         changed = False
         for spec in (bot for bot in _load_bots_config() if bot.get("token")):
             bot_id = spec["id"]
