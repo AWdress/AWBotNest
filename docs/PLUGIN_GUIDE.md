@@ -355,6 +355,7 @@ data = await ctx.browser.run("https://example.com", grab, headless=True)
 
 - 两个方法都是 `async`（内部在线程里跑同步浏览器 API，不阻塞事件循环）。
 - 参数：`cookies`（`"k=v; k2=v2"` 请求头串）、`ua`（User-Agent）、`headless`（默认 `True`）、`timeout`（秒）、`proxy`。
+- Docker 镜像内置 Xvfb 虚拟显示器；插件需要非无头浏览器时传 `headless=False` 即可，无需修改 compose 或连接宿主机显示器。虚拟显示器不提供远程桌面画面。
 - `ctx.browser.run` 的 `action` 是**同步函数**，收到同步 `page` 对象（`goto`/`click`/`fill`/`content`/`inner_text`/`screenshot` 等），页面用完平台自动关闭。
 - `ctx.browser.engine` 返回当前引擎名（`"cloakbrowser"` / `"playwright"` / `None`）。
 - 为减小镜像体积，浏览器内核不随镜像发布，也不在启动时下载：**插件首次调用 `ctx.browser` 时**才下载到 `data/browser_cache`（随卷持久化，容器重建不必重下）。所以首次调用会多花一次下载时间，之后就快了；不用浏览器的部署零开销。出站默认走平台代理。

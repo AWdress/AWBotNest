@@ -35,9 +35,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Shanghai
 
-# 系统依赖：ddddocr(onnxruntime/opencv 需 libgl/libglib)、wkhtmltopdf(imgkit)、CJK 字体、mysql 客户端
+# 系统依赖：ddddocr(onnxruntime/opencv 需 libgl/libglib)、wkhtmltopdf(imgkit)、CJK 字体、
+# mysql 客户端，以及供非无头浏览器使用的 Xvfb 虚拟显示器。
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget ca-certificates curl \
+    xvfb xauth \
     libgl1 libglib2.0-0 libgomp1 \
     fontconfig libfontconfig1 libfreetype6 \
     libx11-6 libxext6 libxrender1 \
@@ -74,4 +76,6 @@ RUN mkdir -p logs sessions db_file/SQLite db_file/dbflag data/kv
 # Web 控制台端口（与 config.WEB_UI_PORT 对齐，默认 18001）
 EXPOSE 18001
 
-CMD ["python", "main.py"]
+# 始终在容器内部提供虚拟显示器。插件使用 headless=False 时可直接启动有界面浏览器，
+# 无需宿主机 X Server，也无需修改 docker-compose；无头浏览器仍按原方式运行。
+CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "main.py"]
