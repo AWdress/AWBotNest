@@ -228,7 +228,7 @@ async def setup(ctx):
 
 平台可从 GitHub 仓库导入插件（前端「从 GitHub 导入」）。约定：
 
-1. **优先读市场清单 `manifest.json`**（或 `manifest.v2.json`，放仓库根或子目录）。有清单则渲染成插件市场（名称/版本/作者/图标/描述）。格式（对象，key=插件 id）：
+1. **优先读市场清单 `manifest.json`**（放仓库根或子目录）。有清单则渲染成插件市场（名称/版本/作者/图标/描述）。格式（对象，key=插件 id）：
    ```json
    {
      "jupai":   {"name":"举牌","version":"1.0.0","author":"AW","description":"...","icon":"https://.../i.png","path":"jupai.py"},

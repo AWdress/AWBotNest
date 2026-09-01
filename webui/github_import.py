@@ -8,7 +8,7 @@ webui/github_import.py
   3. 简写：owner/repo 或 owner/repo/subdir
 
 列插件优先级（list_plugins）：
-  A. 仓库根/子目录有 manifest.json（或 manifest.v2.json）→ 读清单，渲染插件市场
+  A. 仓库根/子目录有 manifest.json → 读清单，渲染插件市场
      （名称/版本/作者/图标/描述/入口路径）。
   B. 无清单 → 回退目录扫描：列 plugins/ 或根目录下的 .py 单文件
      与 <id>/__init__.py 文件夹插件。
@@ -45,7 +45,7 @@ def _proxy() -> Optional[str]:
     from libs.proxy import proxy_url
     return proxy_url()
 RAW_HOST = "raw.githubusercontent.com"
-MANIFEST_NAMES = ("manifest.json", "manifest.v2.json")
+MANIFEST_NAMES = ("manifest.json",)
 _TREE_CACHE_TTL = 30.0
 _TREE_CACHE: dict[tuple[str, str, str], tuple[float, list[dict]]] = {}
 _BRANCH_CACHE_TTL = 600.0
