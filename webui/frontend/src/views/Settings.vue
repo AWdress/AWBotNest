@@ -1513,6 +1513,12 @@ onBeforeRouteLeave(async () => {
             <SecretInput v-model="s.API_HASH"
                          @reveal="revealSystemSecret('API_HASH', (value, secret) => { value.API_HASH = secret })" /></div>
         </div>
+        <div class="actions">
+          <button class="btn btn-primary" @click="save" :disabled="saving || !dirty">
+            <span v-if="dirty" class="dirty-dot"></span>
+            {{ saving ? '保存中…' : (dirty ? '保存 Telegram 凭据' : '已保存') }}
+          </button>
+        </div>
       </div>
 
       <!-- 通知渠道 -->
