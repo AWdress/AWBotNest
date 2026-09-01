@@ -269,7 +269,10 @@ onUnmounted(() => {
       <div class="brand">
         <img :src="logoWhite" class="logo-img" alt="AWBotNest" />
         <div class="brand-text">
-          <div class="brand-name">AWBotNest</div>
+          <div class="brand-name">
+            <span>AWBotNest</span>
+            <span class="brand-badge-v2">V2</span>
+          </div>
           <div class="brand-sub">插件化机器人</div>
         </div>
       </div>
@@ -396,10 +399,28 @@ onUnmounted(() => {
 .brand { display: flex; align-items: center; gap: 12px; padding: 8px 10px 26px; }
 .logo-img { width: 40px; height: 40px; object-fit: contain; flex-shrink: 0; }
 .brand-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-weight: 700; font-size: 19px; color: #fff;
   letter-spacing: 0.5px; line-height: 1.1;
   font-family: 'Segoe UI', system-ui, sans-serif;
   text-shadow: 0 1px 8px rgba(48,128,240,0.35);
+}
+.brand-badge-v2 {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(48,128,240,0.32), rgba(99,102,241,0.32));
+  color: #60a5fa;
+  border: 1px solid rgba(96,165,250,0.45);
+  box-shadow: 0 0 10px rgba(48,128,240,0.25);
+  letter-spacing: 0.5px;
 }
 .brand-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; letter-spacing: 0.5px; }
 
