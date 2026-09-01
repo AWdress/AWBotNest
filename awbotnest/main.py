@@ -93,6 +93,7 @@ async def run_once() -> bool:
         port=settings.web_port,
         log_level="warning",
         access_log=False,
+        lifespan="off",
     ))
     async def stop_for_restart() -> None:
         await restart_event.wait()
