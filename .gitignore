@@ -1,0 +1,39 @@
+# 运行与数据目录
+data/
+sessions/
+*.session
+*.session-journal
+*.sqlite3
+*.db
+
+# 插件（仅保留模板）
+plugins/*
+!plugins/_TEMPLATE.py
+!plugins/.gitkeep
+
+# 敏感与临时配置
+.env
+.env.*
+config.json
+*.token
+
+# Python 缓存与虚拟环境
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+
+# 前端构建产物与依赖
+frontend/node_modules/
+frontend/dist/
+static/
+.DS_Store
+Thumbs.db
+
+# IDE 与 Agent 临时文件
+.codex/
+.vscode/
+.idea/
+

@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "AWBotNest"
+version = "2.0.0.dev1"
+description = "AWBotNest - Telethon based plugin platform"
+requires-python = ">=3.11"
+dependencies = [
+  "telethon>=1.40,<2",
+  "cryptg>=0.5,<1",
+  "fastapi>=0.115,<1",
+  "uvicorn[standard]>=0.34,<1",
+  "apscheduler>=3.11,<4",
+  "httpx[socks]>=0.28,<1",
+  "python-socks[asyncio]>=2.7,<3",
+  "python-multipart>=0.0.20,<1",
+  "packaging>=24,<27",
+  "playwright>=1.55,<2",
+  "psutil>=6,<8"
+]
+
+[project.scripts]
+awbotnest = "awbotnest.main:main"
+awbotnest-migrate = "awbotnest.migrate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["awbotnest"]
