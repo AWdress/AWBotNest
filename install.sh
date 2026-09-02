@@ -60,7 +60,7 @@ if [[ ! -f "${COMPOSE_FILE}" ]]; then
 services:
   awbotnest:
     image: ${IMAGE}
-    container_name: AWBotNest
+    container_name: AWBotNest_V2
     restart: always
     environment:
       - TZ=Asia/Shanghai
