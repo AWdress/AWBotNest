@@ -36,7 +36,7 @@ function applyAppearance() {
   document.documentElement.dataset.theme = localStorage.getItem('awbotnest-theme') || 'dark'
   // 透明主题提供电影质感默认背景；用户填写的图片/API 地址优先。
   const image = localStorage.getItem('awbotnest-bg-image') || (document.documentElement.dataset.theme === 'transparent'
-    ? 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=2400&q=82'
+    ? `https://www.loliapi.com/acg/?t=${Date.now()}`
     : '')
   document.documentElement.style.setProperty('--app-bg-image', image ? `url("${image.replace(/"/g, '')}")` : 'none')
 }
@@ -46,6 +46,7 @@ const authed = ref(false)
 const restoringSession = ref(!!getToken())
 let cancelDeferredRoutePreload = null
 let restartTimer = null
+let appearanceRotationTimer = null
 
 async function onAuthed() {
   restoringSession.value = true
@@ -240,6 +241,10 @@ let updateTimer = null
 onMounted(async () => {
   applyAppearance()
   window.addEventListener('awbotnest-appearance', applyAppearance)
+  appearanceRotationTimer = window.setInterval(() => {
+    const theme = localStorage.getItem('awbotnest-theme') || 'dark'
+    if (theme === 'transparent' && !localStorage.getItem('awbotnest-bg-image')) applyAppearance()
+  }, 30 * 60 * 1000)
   // 恢复登录态后补种资源 Cookie，并确认账号已经完成首次设置。
   if (getToken()) {
     await onAuthed()
@@ -251,6 +256,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('awbotnest-appearance', applyAppearance)
+  if (appearanceRotationTimer) window.clearInterval(appearanceRotationTimer)
   stopPlatformStatusPolling()
   cancelDeferredRoutePreload?.()
   clearInterval(updateTimer)
