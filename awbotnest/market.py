@@ -6,6 +6,8 @@ import tempfile
 import ast
 import time
 import logging
+import json
+import uuid
 from packaging.version import InvalidVersion, Version
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -43,6 +45,16 @@ class PluginMarket:
         self.settings = settings
         self._cache: dict[str, Any] | None = None
         self._cache_until = 0.0
+        self._state_path = PLUGINS_DIR.parent / "data" / "repo_sync.json"
+        self._last_sync: str | None = None
+        try:
+            state = json.loads(self._state_path.read_text(encoding="utf-8")) if self._state_path.exists() else {}
+            if isinstance(state, dict) and isinstance(state.get("store"), dict):
+                self._cache = state["store"]
+                self._cache_until = time.monotonic() + 300
+                self._last_sync = state.get("last_sync")
+        except (OSError, json.JSONDecodeError):
+            pass
 
     def clear_cache(self) -> None:
         self._cache = None
@@ -52,6 +64,75 @@ class PluginMarket:
         """强制刷新插件市场缓存，供启动流程和定时任务调用。"""
         self.clear_cache()
         return await self.list_all()
+
+    def _heat_state(self) -> dict[str, Any]:
+        state_path = PLUGINS_DIR.parent / "data" / "plugin_heat_state.json"
+        try:
+            value = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+            if not isinstance(value, dict): value = {}
+        except (OSError, json.JSONDecodeError):
+            value = {}
+        value.setdefault("installation_id", str(uuid.uuid4()))
+        value.setdefault("installs", {})
+        return value
+
+    def _save_heat_state(self, state: dict[str, Any]) -> None:
+        path = PLUGINS_DIR.parent / "data" / "plugin_heat_state.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(path)
+
+    async def record_install(self, plugin: dict[str, Any], event_type: str = "install") -> None:
+        """记录本地安装热度并尽力上报中心；网络失败不影响安装。"""
+        state_path = PLUGINS_DIR.parent / "data" / "plugin_heat_state.json"
+        state = self._heat_state()
+        plugin_id = str(plugin.get("id") or "").strip()
+        if not plugin_id:
+            return
+        installs = state.setdefault("installs", {})
+        installs[plugin_id] = max(0, int(installs.get(plugin_id, 0) or 0)) + 1
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        event = {
+            "event_id": str(uuid.uuid4()), "installation_id": str(state["installation_id"]),
+            "plugin_id": plugin_id,
+            "event_type": event_type if event_type in {"install", "update"} else "install",
+            "version": str(plugin.get("version") or "")[:64], "app_version": "2",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(4, connect=2)) as client:
+                await client.post(f"{PLUGIN_HEAT_SERVER_URL}/api/plugin-heat/events", json={"events": [event]})
+        except Exception:
+            logger.debug("插件安装热度上报暂时失败：%s", plugin_id)
+
+    async def poll_updates(self, runtime: Any) -> dict[str, Any]:
+        """刷新市场并自动更新已安装且有新版本的插件。"""
+        listing = await self.refresh()
+        updated: list[str] = []
+        errors: list[str] = []
+        for plugin in listing.get("plugins", []):
+            if not plugin.get("installed") or not plugin.get("update_available"):
+                continue
+            plugin_id = str(plugin.get("id") or "")
+            was_loaded = plugin_id in runtime.loaded
+            try:
+                if was_loaded: await runtime.disable(plugin_id, persist=False)
+                await self.install(plugin)
+                if was_loaded:
+                    result = await runtime.enable(plugin_id)
+                    if result.error: raise RuntimeError(result.error)
+                self.finish(plugin_id, True)
+                await self.record_install(plugin, "update")
+                updated.append(plugin_id)
+            except Exception as exc:
+                self.finish(plugin_id, False)
+                errors.append(f"{plugin_id}: {exc}")
+                if was_loaded:
+                    try: await runtime.enable(plugin_id)
+                    except Exception as restore_exc: errors.append(f"{plugin_id} 恢复失败: {restore_exc}")
+        if updated: self.clear_cache()
+        return {"ok": not errors, "updated": updated, "errors": errors}
 
     async def discover_repositories(self) -> dict[str, Any]:
         """发现官方仓库的 fork 及同名仓库，并验证 V2 清单后加入配置。"""
@@ -159,21 +240,43 @@ class PluginMarket:
 
     async def _install_counts(self) -> dict[str, int]:
         """读取全局插件热度；中心不可用时不影响插件商店。"""
+        state = self._heat_state()
+        local = state.get("installs") or {}
+        for entry in PLUGINS_DIR.iterdir() if PLUGINS_DIR.exists() else ():
+            plugin_id = entry.stem if entry.is_file() and entry.suffix == ".py" else (entry.name if entry.is_dir() and (entry / "__init__.py").exists() else "")
+            if plugin_id and plugin_id not in local:
+                local[plugin_id] = 1
+        state["installs"] = local
+        self._save_heat_state(state)
         try:
-            response = await self._github(f"{PLUGIN_HEAT_SERVER_URL}/api/plugin-heat/counts")
+            # 热度是增强信息，不应阻塞市场加载；中心不可达时立即回退本地缓存。
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(4, connect=2), follow_redirects=True,
+                proxy=self.settings.proxy_url or None,
+            ) as client:
+                response = await client.get(f"{PLUGIN_HEAT_SERVER_URL}/api/plugin-heat/counts")
             response.raise_for_status()
             if int(response.headers.get("content-length") or 0) > 1024 * 1024:
                 return {}
             raw = (response.json() or {}).get("counts")
             if not isinstance(raw, dict) or len(raw) > 10_000:
                 return {}
-            return {
+            counts = {
                 str(plugin_id): count for plugin_id, count in raw.items()
                 if isinstance(count, int) and not isinstance(count, bool)
                 and 0 <= count <= 9_007_199_254_740_991
             }
+            # 首次迁移时把当前已安装插件纳入本地热度缓存（与 V1 一致），
+            # 避免热度接口不可用或升级后全部显示为 0。
+            for entry in PLUGINS_DIR.iterdir() if PLUGINS_DIR.exists() else ():
+                plugin_id = entry.stem if entry.is_file() and entry.suffix == ".py" else (entry.name if entry.is_dir() and (entry / "__init__.py").exists() else "")
+                if plugin_id and plugin_id not in local:
+                    local[plugin_id] = 1
+            for plugin_id, count in local.items():
+                counts.setdefault(str(plugin_id), int(count or 0))
+            return counts
         except Exception:
-            return {}
+            return {str(plugin_id): int(count or 0) for plugin_id, count in local.items()}
 
     @staticmethod
     def _installed_version(plugin_id: str) -> str | None:
@@ -227,7 +330,11 @@ class PluginMarket:
             "plugins": plugins, "errors": errors, "manifest": MANIFEST_NAME,
             "install_counts": install_counts,
             "official_ids": official_ids,
+            "last_sync": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
+        self._last_sync = self._cache["last_sync"]
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state_path.write_text(json.dumps({"store": self._cache, "last_sync": self._last_sync}, ensure_ascii=False), encoding="utf-8")
         self._cache_until = time.monotonic() + 300
         return self._cache
 

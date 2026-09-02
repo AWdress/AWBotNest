@@ -122,7 +122,7 @@ class TelegramAccounts:
                         await self._cache_profile(f"bot_{bot_spec.id}", bot)
                     except Exception:
                         logger.warning("Bot [%s] 资料缓存失败", bot_spec.name, exc_info=True)
-                    logger.info("Telethon Bot [%s] 已连接", bot_spec.name)
+                    logger.info("Bot [%s] 启动成功", bot_spec.name)
                 except Exception:
                     await bot.disconnect()
                     logger.exception("Telethon Bot [%s] 连接失败，平台继续启动", bot_spec.name)
@@ -149,7 +149,7 @@ class TelegramAccounts:
                 await self._cache_profile(session_name, client)
             except Exception:
                 logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
-            logger.info("Telethon 用户账号 %s 已连接", session_name)
+            logger.info("用户账号 [%s] 启动成功", session_name)
         except Exception:
             await client.disconnect()
             logger.exception("用户账号 %s 连接失败", session_name)

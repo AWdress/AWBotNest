@@ -11,10 +11,10 @@ from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .storage import PluginKV
 from .config import DATA_DIR, Settings, save_settings
-from .services import PlatformServices
+from .services import PlatformServices, PluginAI
 from .routing import PluginRoutes
 from .notifier import NotificationService
-from .activity import activity
+from .activity import activity, set_current, reset_current, record_current
 
 EventCallback = Callable[[Any], Awaitable[Any]]
 
@@ -36,6 +36,7 @@ class PluginContext:
         self.data_dir = DATA_DIR / "plugins" / plugin_id
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.services = services
+        self._plugin_ai = PluginAI(services.ai, plugin_id, self.data_dir)
         self.routes = routes
         self.notifier = notifier
         policy = resources or {}
@@ -74,7 +75,7 @@ class PluginContext:
 
     @property
     def ai(self):
-        return self._services.ai
+        return self._plugin_ai
 
     @property
     def _services(self) -> PlatformServices:
@@ -95,13 +96,16 @@ class PluginContext:
         failures = 0
         async def guarded(*args: Any, **kwargs: Any) -> Any:
             nonlocal failures
-            activity.record(self.plugin_id, False)
+            event = args[0] if args else None
+            raw_id = getattr(event, "id", "") or getattr(getattr(event, "message", None), "id", "")
+            chat_id = getattr(event, "chat_id", "") or getattr(getattr(event, "message", None), "chat_id", "")
+            event_id = f"{chat_id}:{raw_id}" if raw_id else f"task:{id(asyncio.current_task())}"
+            token = set_current(self.plugin_id, event_id)
             try:
                 async with self._semaphore:
                     value = callback(*args, **kwargs)
                     result = await asyncio.wait_for(value, timeout=self.timeout) if isinstance(value, Awaitable) else value
                 failures = 0
-                activity.record(self.plugin_id, True)
                 return result
             except Exception:
                 failures += 1
@@ -112,6 +116,8 @@ class PluginContext:
                             registered_client.remove_event_handler(registered_callback, registered_builder)
                             self._handlers.remove((registered_client, registered_callback, registered_builder))
                     self.log.error("事件处理连续失败 %s 次，已触发熔断", self.failure_threshold)
+            finally:
+                reset_current(token)
         for client in clients:
             client.add_event_handler(guarded, builder)
             self._handlers.append((client, guarded, builder))
@@ -152,10 +158,14 @@ class PluginContext:
 
     async def notify(self, text: str, entity: object = None, *, channel: str = "",
                      level: str = "info", category: str = "") -> object:
-        return await self.notifier.send(
-            text, channel=channel, entity=entity, bot_id=self.bot_id,
-            plugin_id=self.plugin_id, plugin_name=self.plugin_id, level=level, category=category,
-        )
+        try:
+            result = await self.notifier.send(
+                text, channel=channel, entity=entity, bot_id=self.bot_id,
+                plugin_id=self.plugin_id, plugin_name=self.plugin_id, level=level, category=category,
+            )
+            return result
+        except Exception:
+            raise
 
     def on_webhook(self, path: str, callback: Callable[..., Any]) -> None:
         self.routes.webhook(self.plugin_id, path, callback)
@@ -165,12 +175,10 @@ class PluginContext:
 
     def schedule_interval(self, name: str, callback: Callable[..., Any], *, seconds: int) -> str:
         async def guarded_schedule() -> None:
-            activity.record(self.plugin_id, False)
             try:
                 value = callback()
                 if isinstance(value, Awaitable):
                     await asyncio.wait_for(value, timeout=self.timeout)
-                activity.record(self.plugin_id, True)
             except Exception:
                 self.log.exception("定时任务执行失败：%s", name)
         return self.scheduler.add_interval(
@@ -179,12 +187,10 @@ class PluginContext:
 
     def schedule_cron(self, name: str, callback: Callable[..., Any], **fields: Any) -> str:
         async def guarded_schedule() -> None:
-            activity.record(self.plugin_id, False)
             try:
                 value = callback()
                 if isinstance(value, Awaitable):
                     await asyncio.wait_for(value, timeout=self.timeout)
-                activity.record(self.plugin_id, True)
             except Exception:
                 self.log.exception("定时任务执行失败：%s", name)
         return self.scheduler.add_cron(self.plugin_id, name, guarded_schedule, **fields)

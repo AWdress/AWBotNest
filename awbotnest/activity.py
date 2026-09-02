@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import time
 import threading
+import contextvars
 from collections import Counter
 from pathlib import Path
 
@@ -15,6 +16,8 @@ class ActivityTracker:
         self._data = self._read()
         self._last_save = 0.0
         self._lock = threading.Lock()
+        self._seen_events: set[tuple[str, str]] = set()
+        self._seen_success: set[tuple[str, str]] = set()
 
     def _read(self) -> dict[str, dict[str, int]]:
         try:
@@ -23,8 +26,21 @@ class ActivityTracker:
         except (OSError, json.JSONDecodeError):
             return {}
 
-    def record(self, plugin_id: str, success: bool) -> None:
+    def record(self, plugin_id: str, success: bool, event_id: str | None = None) -> None:
         with self._lock:
+            if event_id:
+                key = (str(plugin_id), str(event_id))
+                if success:
+                    if key in self._seen_success:
+                        return
+                    self._seen_success.add(key)
+                else:
+                    if key in self._seen_events:
+                        return
+                    self._seen_events.add(key)
+                if len(self._seen_events) > 10000:
+                    self._seen_events.clear()
+                    self._seen_success.clear()
             bucket = str(int(time.time() // 3600) * 3600)
             values = self._data.setdefault(bucket, {})
             key = f"{plugin_id}:success" if success else f"{plugin_id}:total"
@@ -51,14 +67,18 @@ class ActivityTracker:
             stamp = current - offset * 3600
             values = data.get(str(stamp), {})
             counts: dict[str, int] = {}
+            success_counts: dict[str, int] = {}
             for key, count in values.items():
                 plugin_id, kind = key.rsplit(":", 1)
                 if kind == "total":
-                    counts[plugin_id] = int(count)
-                    totals[plugin_id] += int(count)
+                    counts[plugin_id] = counts.get(plugin_id, 0) + int(count)
                 else:
-                    successes[plugin_id] += int(count)
-            buckets.append({"time": stamp, "counts": counts})
+                    amount = int(count)
+                    success_counts[plugin_id] = success_counts.get(plugin_id, 0) + amount
+                    successes[plugin_id] += amount
+            for plugin_id, count in counts.items():
+                totals[plugin_id] += count
+            buckets.append({"time": stamp, "t": stamp, "counts": counts, "success_counts": success_counts})
         return {"buckets": buckets, "totals": dict(totals), "successes": dict(successes)}
 
     def flush(self) -> None:
@@ -71,3 +91,16 @@ class ActivityTracker:
 
 
 activity = ActivityTracker()
+_current_plugin = contextvars.ContextVar('activity_plugin', default=None)
+
+def set_current(plugin_id: str, event_id: str = ""):
+    return _current_plugin.set((plugin_id, event_id))
+
+def reset_current(token) -> None:
+    _current_plugin.reset(token)
+
+def record_current(success: bool = False) -> None:
+    current = _current_plugin.get()
+    if current:
+        plugin_id, event_id = current
+        activity.record(plugin_id, success, event_id or None)

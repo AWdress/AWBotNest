@@ -39,12 +39,14 @@ async def run_once() -> bool:
     scheduler.start()
     cleaner = settings.log_cleaner
     if cleaner.get("enabled", True):
+        cleaner_hour = max(0, min(int(cleaner.get("hour", 3)), 23))
+        cleaner_minute = max(0, min(int(cleaner.get("minute", 0)), 59))
         scheduler.add_cron(
             "__platform__", "log-cleaner",
             lambda: memory_logs.trim(int(cleaner.get("keep_lines", 1000))),
-            hour=max(0, min(int(cleaner.get("hour", 3)), 23)),
-            minute=max(0, min(int(cleaner.get("minute", 0)), 59)),
+            hour=cleaner_hour, minute=cleaner_minute,
         )
+        logger.info("日志清理定时任务已启动（每天 %d:%02d 执行）", cleaner_hour, cleaner_minute)
     services = PlatformServices(settings)
     routes = PluginRoutes()
     notifier = NotificationService(settings, accounts, services.http)
@@ -60,29 +62,57 @@ async def run_once() -> bool:
         len(bot_names), f" {bot_names}" if bot_names else "",
         len(user_names), f" {user_names}" if user_names else "",
     )
+    logger.info("账号连接自动恢复已启用")
 
     scanned_plugins = runtime.scan()
     await runtime.restore()
-    loaded_names = [p.meta.name for p in runtime.loaded.values()]
-    logger.info(
-        "插件系统初始化完成：扫描到 %d 个插件，已启用 %d 个%s",
-        len(scanned_plugins),
-        len(runtime.loaded),
-        f" ({', '.join(loaded_names)})" if loaded_names else "",
-    )
+    logger.info("插件恢复完成，已加载 %d 个（扫描到 %d 个）", len(runtime.loaded), len(scanned_plugins))
 
     scheduler.add_interval(
-        "__platform__", "插件市场轮询", market.refresh,
+        "__platform__", "插件市场轮询", lambda: market.poll_updates(runtime),
         seconds=max(1, int(settings.plugin_repo_interval)) * 60,
     )
+    logger.info("插件仓库轮询已注册：每 %d 分钟，%d 个仓库（含官方）",
+                max(1, int(settings.plugin_repo_interval)), len(settings.plugin_repos))
     scheduler.add_cron(
         "__platform__", "插件仓库自动发现", market.discover_repositories,
         hour=0, minute=0,
     )
+    logger.info("插件仓库自动发现已注册：每天 0:00 执行")
+    cookie_settings = settings.cookie_settings
+    if cookie_settings.get("remote_enabled"):
+        async def sync_remote_cookiecloud() -> None:
+            from .cookiecloud import pull, record_sync
+            try:
+                values = await pull(
+                    str(cookie_settings.get("remote_url") or ""),
+                    str(cookie_settings.get("remote_uuid") or ""),
+                    str(cookie_settings.get("remote_password") or ""),
+                    str(cookie_settings.get("remote_crypto_type") or "auto"),
+                    settings.proxy_url or None,
+                )
+                await services.cookies.replace(values)
+                count = sum(len(item) for item in values.values())
+                record_sync("remote", "success", "远程 CookieCloud 自动同步完成", len(values), count)
+                logger.info("远程 CookieCloud 同步完成：%d 个 Cookie，%d 个域名", count, len(values))
+            except Exception as exc:
+                record_sync("remote", "error", f"自动同步失败：{exc}")
+                raise
+        scheduler.add_interval(
+            "__platform__", "远程 CookieCloud 同步", sync_remote_cookiecloud,
+            seconds=max(5, int(cookie_settings.get("remote_interval_minutes") or 60)) * 60,
+        )
+        logger.info("远程 CookieCloud 定时同步已启动（每 %d 分钟）",
+                    max(5, int(cookie_settings.get("remote_interval_minutes") or 60)))
+        try:
+            await sync_remote_cookiecloud()
+        except Exception as exc:
+            logger.warning("远程 CookieCloud 首次同步失败：%s", exc)
     logger.info("定时任务调度器已就绪：已注册 %d 个后台任务", len(scheduler.jobs()))
 
     display_host = "127.0.0.1" if settings.web_host in {"0.0.0.0", "::"} else settings.web_host
     logger.info("Web 控制台已启动，访问地址: http://%s:%s", display_host, settings.web_port)
+    logger.info("AWBotNest 启动完成")
     logger.info("==================================================")
 
     restart_event = asyncio.Event()

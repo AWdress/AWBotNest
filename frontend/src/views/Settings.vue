@@ -8,12 +8,13 @@ import { applyUiProfile, uiProfile } from '../composables/uiProfile'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 import SecretInput from '../components/SecretInput.vue'
 
-const tab = ref('login')   // login | notify | ai | api | system | maint
+const tab = ref('login')   // login | notify | ai | cookies | api | system | maint
 
 const TABS = [
   { key: 'login',  label: '账号与凭据' },
   { key: 'notify', label: '通知渠道' },
   { key: 'ai',     label: 'AI 服务' },
+  { key: 'cookies', label: 'Cookie 服务' },
   { key: 'api',    label: '开放接口' },
   { key: 'system', label: '运行环境' },
   { key: 'maint',  label: '维护' },
@@ -108,6 +109,8 @@ watch(dirty, (d) => { if (d) restartHint.value = false })
 
 const AI_CAPABILITIES = [
   { key: 'text', label: '文字模型', desc: '总结、改写、问答和结构化处理' },
+  { key: 'vision', label: '视觉模型', desc: '识别图片、截图、验证码与视觉内容' },
+  { key: 'image', label: '生图模型', desc: '根据文字描述生成图片' },
 ]
 
 function newAiProvider() {
@@ -196,7 +199,7 @@ async function saveCookieSettings() {
   try {
     const data = await api.saveCookieSettings(cookieSettings.value)
     cookieSettings.value = data.settings
-    cookieStatus.value = data.sync_status || {}
+    cookieStatus.value = data.sync_status || data.status || {}
     cookieHistory.value = data.history || cookieHistory.value
     cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
     toast.success('Cookie 服务设置已保存并立即生效')
@@ -318,8 +321,9 @@ async function checkCookieSync() {
     const data = await api.checkCookieSync()
     cookieStatus.value = data.status || cookieStatus.value
     cookieHistory.value = data.history || cookieHistory.value
-    if (data.ok) toast.success(data.message)
-    else toast.error(data.message)
+    const message = data.message || data.detail || (data.ok ? 'Cookie 存储正常' : 'Cookie 状态异常')
+    if (data.ok) toast.success(message)
+    else toast.error(message)
   } catch (e) {
     toast.error('检查同步状态失败：' + e.message)
   } finally {
@@ -370,7 +374,7 @@ async function clearCookieData() {
 
 function formatCookieSyncTime(value) {
   if (!value) return '时间未知'
-  const date = new Date(value)
+  const date = new Date(typeof value === 'number' && value < 1e12 ? value * 1000 : value)
   if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ')
   return date.toLocaleString('zh-CN', { hour12: false })
 }
@@ -1953,7 +1957,7 @@ onBeforeRouteLeave(async () => {
                     @click="toggleCookieService"></button>
           </div>
 
-          <div v-if="false" class="card cookie-setup" style="margin-top:16px">
+          <div class="card cookie-setup" style="margin-top:16px">
             <div class="cookie-section-heading">
               <div>
                 <div class="card-title">浏览器直连</div>

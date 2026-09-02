@@ -1,9 +1,11 @@
 FROM node:22-slim AS frontend
 
-WORKDIR /frontend
-COPY frontend/package.json ./
-COPY frontend/package-lock.json ./
-RUN npm ci
+WORKDIR /app
+COPY VERSION ./VERSION
+WORKDIR /app/frontend
+# 不复制 Windows 生成的 lock：让 npm 按 Linux 平台解析 Rollup/Esbuild 原生可选依赖。
+COPY frontend/package.json frontend/sync-version.js ./
+RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
@@ -19,14 +21,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb xauth ca-certificates fonts-noto-cjk fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md ./
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt \
+    && playwright install --with-deps chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md VERSION ./
 COPY awbotnest ./awbotnest
 COPY plugins ./plugins
-COPY --from=frontend /static ./static
+COPY --from=frontend /app/static ./static
 
-RUN pip install --no-cache-dir . \
-    && playwright install --with-deps chromium \
-    && mkdir -p data sessions
+RUN pip install --no-cache-dir --no-deps . \
+    && mkdir -p data sessions plugins
 
 EXPOSE 18001
 VOLUME ["/app/data", "/app/sessions", "/app/plugins"]

@@ -1,0 +1,13 @@
+services:
+  awbotnest:
+    image: awdress/awbotnest_v2:latest
+    container_name: AWBotNest
+    restart: always
+    environment:
+      - TZ=Asia/Shanghai
+    ports:
+      - "18001:18001"
+    volumes:
+      - ./plugins:/app/plugins
+      - ./sessions:/app/sessions
+      - ./data:/app/data

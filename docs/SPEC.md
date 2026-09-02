@@ -54,4 +54,26 @@
 3. 发布包不得包含 Token、Session、Cookie、`.env`、真实配置或用户数据。
 4. 更新必须提升版本号，并说明不兼容变化。
 
+## V2 扩展能力
+
+### 多实例与依赖
+
+可选声明 `instance_mode`：`shared`（默认）或 `account`。账号实例通过 `ctx.account_name` 区分，并拥有隔离的 `ctx.kv` 与 `ctx.data_dir`。可声明 `dependencies`（前置插件 ID）和 `provides_capabilities`（能力名）；依赖未满足时禁止启用，能力提供者按优先级选择并支持回退。
+
+### 统一治理
+
+`setup`、事件、Webhook、插件 API、动作、定时任务、自检和 `teardown` 均经过平台统一的超时、并发、异常记录、熔断和清理管道。插件自行创建的连接、文件句柄和后台任务必须通过 `ctx.add_cleanup` 或 `teardown` 释放。
+
+### 平台能力
+
+业务配置只能放在插件自己的 `config_schema`、`ctx.kv` 和 `ctx.data_dir`。Cookie 必须声明 `cookie_domains`；浏览器、AI、通知和 HTTP 使用平台托管的 `ctx.browser`、`ctx.ai`、`ctx.notify`、`ctx.http`，不得自行保存平台密钥或 Telegram Session。
+
+### Vue 模块联邦
+
+V2 同时支持 `config_schema` 原生表单和 `render_mode: "vue"`。Vue 插件必须暴露 `./Config`，并随插件发布 `frontend/dist/remoteEntry.js`；组件通过宿主注入的 `host.getConfig`、`host.saveConfig`、`host.callApi` 访问平台能力。详见 `PLUGIN_GUIDE.md` 的 Vue 章节。
+
+### 发布清单
+
+`manifest_v2.json` 中的 ID、版本、作用域、作者、图标、标签必须与 `__plugin__` 一致；升级必须递增版本并附变更说明。发布包不得包含 Token、Session、Cookie、`.env`、真实配置或用户数据。
+
 违反安全边界、无法停用、污染其他插件数据或依赖 V1 Pyrogram/Kurigram API 的插件，不属于 AWBotNest 2 兼容插件。

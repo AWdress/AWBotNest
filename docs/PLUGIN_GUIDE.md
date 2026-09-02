@@ -50,6 +50,7 @@ __plugin__ = {
     "author": "作者",
     "description": "一句话说明功能",
     "tags": ["自动化", "消息处理", "数据统计"],
+    "render_mode": "schema",
     "scope": "standalone",
     "bot": "",
     "requirements": ["httpx>=0.28,<1"],
@@ -75,9 +76,21 @@ __plugin__ = {
 | `bot` | 否 | 指定 Bot ID；留空使用默认 Bot |
 | `requirements` | 否 | 启用前安装的 Python 依赖 |
 | `config_schema` | 否 | 自动配置表单 |
+| `render_mode` | 否 | `schema`（默认）或 `vue`；Vue 模式通过模块联邦加载插件配置组件 |
 | `resources` | 否 | 超时、并发、任务数和熔断限制 |
 
 作用域：`standalone` 不监听 Telegram；`bot` 监听 Bot；`user` 监听用户账号；`both` 同时挂载两者。
+
+### Vue / 模块联邦配置界面（可选）
+
+V2 默认使用 `config_schema` 自动生成配置界面。需要自定义 Vue 配置界面的目录插件可将 `render_mode` 设为 `vue`，并在 `frontend/dist` 发布模块联邦产物：
+
+- 入口文件：`remoteEntry.js`（可位于 `dist/` 或 `dist/assets/`）
+- 必须暴露：`./Config`
+- `Config` 接收 `pluginId` 与 `host` props；通过 `host.getConfig`、`host.saveConfig` 读写配置，通过 `host.callApi` 调用插件 API
+- 宿主会按插件 ID 动态注册远程模块，并在每次打开配置时刷新入口缓存
+
+该接口是 V2 的正式插件扩展点，不依赖或修改 V1 前端；插件仍可选择使用 `config_schema`。
 
 ## Telethon 事件
 
@@ -195,8 +208,13 @@ cache_file = ctx.data_dir / "cache.json"
 cookies = await ctx.cookies.get("example.com")
 await ctx.cookies.set("example.com", {"sid": "..."})
 html = await ctx.browser.page_source("https://example.com")
-reply = await ctx.ai.chat([{"role": "user", "content": "你好"}])
+reply = await ctx.ai.chat("你好", system="回答要简洁")
+description = await ctx.ai.vision("screenshot.png", "识别图片中的文字")
+generated = await ctx.ai.generate_image("一张蓝绿色的极简海报")
 ```
+
+`ctx.ai.is_available("text" | "vision" | "image")` 可判断能力是否可用；
+`ctx.ai.available_models(...)` 只返回管理员授权给当前插件的模型别名和能力。插件不得自行保存服务地址或密钥。
 
 ### 通知
 
@@ -243,6 +261,18 @@ async def setup(ctx):
 条目也可直接放在顶层。清单中的 ID、版本和作用域必须与 `__plugin__` 一致。安装后默认不启用。
 
 ## 发布前检查
+
+### V1 迁移补充
+
+V2 使用 Telethon，不兼容 V1 的 Pyrogram/Kurigram 事件对象和旧版平台配置写法。迁移时：
+
+- 消息处理器改用 `ctx.on_message`、`ctx.on_edited_message`、`ctx.on_callback`。
+- 定时任务改用 `ctx.schedule_interval`、`ctx.schedule_cron`，后台协程改用 `ctx.create_task`。
+- 业务配置迁移到 `__plugin__["config_schema"]`，运行时使用 `ctx.config` 和 `ctx.update_config`。
+- 文件、KV、通知和外部回调分别使用 `ctx.data_dir`、`ctx.kv`、`ctx.notify`、`ctx.on_webhook`。
+- 自定义配置界面使用 `render_mode: "vue"`，模块联邦必须暴露 `./Config`。
+
+发布前验证 Windows/Linux、停用与重载清理、`standalone` 无账号运行，以及依赖失败不影响其他插件。
 
 1. ID 与文件/目录名一致，版本与清单同步。
 2. 使用 Telethon Event 单参数回调，不导入 Pyrogram/Kurigram。

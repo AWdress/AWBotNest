@@ -1012,6 +1012,14 @@ async function loadStore(refresh = false) {
     store.value = d.plugins || []
     officialIds.value = d.official_ids || []
     storeLastSync.value = d.last_sync
+    const marketById = new Map(store.value.map((plugin) => [plugin.id, plugin]))
+    plugins.value.forEach((plugin) => {
+      const marketPlugin = marketById.get(plugin.id)
+      if (!marketPlugin) return
+      plugin.icon = plugin.icon || marketPlugin.icon || ''
+      plugin.official = !!(plugin.official || marketPlugin.official || officialIds.value.includes(plugin.id))
+      plugin.install_count = installCount(marketPlugin)
+    })
     if (d.errors && d.errors.length) storeErr.value = d.errors.join('；')
   } catch (e) {
     storeErr.value = e.message
@@ -1125,7 +1133,11 @@ async function saveRepos() {
   }
 }
 
-function goStore() { tab.value = 'store'; if (store.value.length === 0) loadStore(false) }
+function goStore() {
+  tab.value = 'store'
+  // 每次进入市场都主动加载，避免停留在旧的空状态或缓存状态。
+  if (!storeBusy.value) loadStore(true)
+}
 
 function scheduleStoreLoad() {
   if ('requestIdleCallback' in window) {
@@ -1522,6 +1534,9 @@ onUnmounted(() => {
                 <span v-else class="search-state available">可安装</span>
               </div>
               <div class="search-desc">{{ p.description || '暂无说明' }}</div>
+              <div v-if="p.tags?.length" class="plugin-tags search-tags" aria-label="插件功能标签">
+                <span v-for="tag in p.tags.slice(0, 4)" :key="tag" :title="tag">{{ tag }}</span>
+              </div>
               <div class="search-meta">
                 <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                       :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">

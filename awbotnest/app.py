@@ -437,24 +437,15 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.get("/api/plugins", dependencies=[Depends(require_admin)])
     async def plugins():
-        market_data = await market.list_all()
-        market_items = {
-            item["id"]: item for item in market_data.get("plugins", [])
-        }
-        official_ids = set(market_data.get("official_ids") or [])
         values = []
         for meta in runtime.scan():
             item = meta.to_dict()
-            market_item = market_items.get(meta.id, {})
-            item["icon"] = item.get("icon") or market_item.get("icon") or ""
-            item["official"] = meta.id in official_ids or bool(market_item.get("official"))
-            item["install_count"] = max(0, int(market_item.get("install_count") or 0))
             item.update(routes.describe(meta.id))
             values.append(item)
         order = [item for item in settings.plugin_order if any(meta["id"] == item for meta in values)]
         rank = {plugin_id: index for index, plugin_id in enumerate(order)}
         values.sort(key=lambda item: (rank.get(item["id"], len(rank)), item.get("name") or item["id"]))
-        return {"plugins": values, "official_ids": list(official_ids), "custom_order": bool(order)}
+        return {"plugins": values, "official_ids": [], "custom_order": bool(order)}
 
     @app.put("/api/plugins/order", dependencies=[Depends(require_admin)])
     async def save_plugin_order(request: Request):
@@ -492,6 +483,21 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
             return JSONResponse(content=result)
         return result
+
+    @app.api_route("/api/plugins/{plugin_id}/api/{path:path}",
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
+    async def plugin_api_legacy(plugin_id: str, path: str, request: Request):
+        """V1 Vue 插件 API 路径兼容别名。"""
+        return await plugin_webhook(plugin_id, path, request)
+
+    @app.post("/api/plugins/{plugin_id}/action/{action}", dependencies=[Depends(require_admin)])
+    async def plugin_action_legacy(plugin_id: str, action: str):
+        """V1 单数 action 路径兼容别名。"""
+        try:
+            result = await routes.dispatch_action(plugin_id, action, {})
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return {"ok": True, "result": result}
 
     @app.api_route("/api/v1/webhook", methods=["GET", "POST"], include_in_schema=False)
     async def platform_webhook(request: Request):
@@ -532,6 +538,38 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             logger.exception("平台 Webhook 通知失败")
             raise HTTPException(status_code=502, detail="Webhook 通知投递失败") from exc
         return {"ok": True}
+
+    @app.api_route("/api/v1/plugin/{plugin_id}/webhook", methods=["GET", "POST"], include_in_schema=False)
+    async def public_plugin_webhook(plugin_id: str, request: Request):
+        """V1 兼容的插件公开 Webhook，使用平台统一 WEBHOOK_SECRET。"""
+        secret = settings.webhook_secret.strip()
+        if not secret:
+            raise HTTPException(status_code=404, detail="Webhook 未开启")
+        supplied = str(request.query_params.get("apikey") or "")
+        if not hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
+            raise HTTPException(status_code=401, detail="apikey 无效")
+        body = await request.body()
+        if len(body) > 1024 * 1024:
+            raise HTTPException(status_code=413, detail="Webhook 请求体超过 1 MB")
+        path = "receive"
+        declared = routes.describe(plugin_id).get("webhooks", [])
+        if declared:
+            path = declared[0]
+        wrapped = WebhookRequest(
+            method=request.method, path=path,
+            query={k: v for k, v in request.query_params.items() if k != "apikey"},
+            headers={key.lower(): value for key, value in request.headers.items()}, body=body,
+        )
+        try:
+            result = await routes.dispatch_webhook(plugin_id, path, wrapped)
+        except LookupError as exc:
+            raise HTTPException(status_code=503, detail="插件未启用或未注册 Webhook") from exc
+        except Exception as exc:
+            logger.exception("公开插件 Webhook 执行失败：%s", plugin_id)
+            raise HTTPException(status_code=502, detail="插件 Webhook 执行失败") from exc
+        if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
+            return JSONResponse(content=result)
+        return result
 
     @app.post("/api/plugins/{plugin_id}/actions/{name}", dependencies=[Depends(require_admin)])
     async def plugin_action(plugin_id: str, name: str, body: PluginActionBody):
@@ -644,42 +682,85 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.post("/api/ai/test", dependencies=[Depends(require_admin)])
     async def test_ai_capability(request: Request):
         capability = str((await request.json()).get("capability") or "text")
-        if capability != "text":
-            raise HTTPException(status_code=409, detail=f"当前 AI 服务暂未配置 {capability} 能力")
         try:
-            result = await runtime.services.ai.chat([{"role": "user", "content": "Reply with OK only."}])
-            return {"ok": True, "capability": capability, "result": result[:200]}
+            if capability == "text":
+                result = await runtime.services.ai.chat([{"role": "user", "content": "Reply with OK only."}])
+            elif capability == "vision":
+                pixel = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+                result = await runtime.services.ai.vision("Describe this image in one short sentence.", pixel)
+            elif capability == "image":
+                generated = await runtime.services.ai.generate_image("A small blue circle on a white background")
+                result = "图片生成成功" if generated.get("url") or generated.get("b64_json") else "图片生成完成"
+            else:
+                raise HTTPException(status_code=400, detail="不支持的 AI 能力")
+            return {"ok": True, "capability": capability, "result": str(result)[:200],
+                    "message": f"{capability} 能力测试成功"}
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"AI 测试失败：{exc}") from exc
 
     @app.post("/api/ai/provider-models", dependencies=[Depends(require_admin)])
     async def ai_provider_models(request: Request):
         raw = await request.json()
-        provider_id = str(raw.get("provider") or "")
-        provider = next((item for item in current_ai_settings().get("providers", [])
-                         if isinstance(item, dict) and str(item.get("id")) == provider_id), None)
+        preview = raw.get("provider")
+        saved_providers = [item for item in current_ai_settings().get("providers", [])
+                           if isinstance(item, dict)]
+        if isinstance(preview, dict):
+            provider = dict(preview)
+            provider_id = str(provider.get("id") or "")
+            saved = next((item for item in saved_providers
+                          if str(item.get("id") or "") == provider_id), None)
+            if provider.get("api_key") == "********":
+                provider["api_key"] = str((saved or {}).get("api_key") or settings.ai_api_key)
+        else:
+            provider_id = str(preview or "")
+            provider = next((item for item in saved_providers
+                             if str(item.get("id") or "") == provider_id), None)
         if not provider:
             raise HTTPException(status_code=404, detail="AI 服务不存在")
         api_key = str(provider.get("api_key") or settings.ai_api_key)
+        base_url = str(provider.get("base_url") or settings.ai_base_url).strip().rstrip("/")
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise HTTPException(status_code=400, detail="AI 服务地址无效")
+        if not api_key or api_key == "********":
+            raise HTTPException(status_code=400, detail="请填写 API Key")
         try:
             response = await runtime.services.http.get(
-                f"{str(provider.get('base_url') or settings.ai_base_url).rstrip('/')}/models",
+                f"{base_url}/models",
                 headers={"Authorization": f"Bearer {api_key}"}, timeout=20,
             )
             response.raise_for_status()
             values = response.json().get("data", [])
-            return {"models": [str(item.get("id")) for item in values if isinstance(item, dict) and item.get("id")]}
+            models = [str(item.get("id")) for item in values if isinstance(item, dict) and item.get("id")]
+            return {"models": models, "count": len(models)}
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"读取模型失败：{exc}") from exc
 
+    async def cookie_sync_state() -> dict[str, object]:
+        from .cookiecloud import sync_history
+        domains = await runtime.services.cookies.domains()
+        history = sync_history()
+        latest_success = next((item for item in history if item.get("status") == "success"), None)
+        latest_error = next((item for item in history if item.get("status") == "error"), None)
+        cookie_count = sum(int(item.get("count") or 0) for item in domains)
+        last_sync = ""
+        if latest_success and latest_success.get("time"):
+            last_sync = datetime.fromtimestamp(float(latest_success["time"])).strftime("%Y-%m-%d %H:%M:%S")
+        error_message = ""
+        if latest_error and float(latest_error.get("time") or 0) > float((latest_success or {}).get("time") or 0):
+            error_message = str(latest_error.get("message") or "")
+        return {"has_data": cookie_count > 0, "domain_count": len(domains),
+                "cookie_count": cookie_count, "last_sync": last_sync,
+                "last_error": error_message}
+
     @app.get("/api/cookies/settings", dependencies=[Depends(require_admin)])
     async def get_cookie_settings():
+        from .cookiecloud import sync_history
         value = dict(settings.cookie_settings)
-        for key in ("uuid", "password", "token"):
+        for key in ("uuid", "password", "token", "remote_password"):
             if value.get(key):
                 value[key] = "********"
-        domains = await runtime.services.cookies.domains()
-        return {"settings": value, "status": {"domain_count": len(domains)}, "history": [],
+        return {"settings": value, "status": await cookie_sync_state(), "history": sync_history(),
                 "server_path": "/cookiecloud"}
 
     @app.put("/api/cookies/settings", dependencies=[Depends(require_admin)])
@@ -688,7 +769,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         value = raw.get("settings")
         if not isinstance(value, dict):
             raise HTTPException(status_code=400, detail="Cookie 设置格式不正确")
-        for key in ("uuid", "password", "token"):
+        for key in ("uuid", "password", "token", "remote_password"):
             if value.get(key) == "********":
                 value[key] = settings.cookie_settings.get(key, "")
         settings.cookie_settings = value
@@ -704,18 +785,143 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/cookies/check", dependencies=[Depends(require_admin)])
     async def check_cookie_sync():
+        from .cookiecloud import record_sync, sync_history
         domains = await runtime.services.cookies.domains()
-        return {"ok": True, "domain_count": len(domains), "detail": "Cookie 存储可用"}
+        cookie_count = sum(int(item.get("count") or 0) for item in domains)
+        message = f"Cookie 存储正常：{len(domains)} 个域名，{cookie_count} 个 Cookie"
+        record_sync("check", "success", message, len(domains), cookie_count)
+        return {"ok": True, "message": message, "detail": message,
+                "status": await cookie_sync_state(), "history": sync_history()}
 
     @app.post("/api/cookies/remote-sync", dependencies=[Depends(require_admin)])
     async def sync_remote_cookies():
-        raise HTTPException(status_code=409, detail="2.0 使用本机 Cookie 存储；远程 CookieCloud 拉取尚未配置")
+        from .cookiecloud import CookieCloudError, pull, record_sync, sync_history
+        value = settings.cookie_settings
+        if not value.get("remote_enabled"):
+            raise HTTPException(status_code=409, detail="远程 CookieCloud 同步尚未启用")
+        url = str(value.get("remote_url") or "").strip()
+        uuid_value = str(value.get("remote_uuid") or "").strip()
+        password = str(value.get("remote_password") or "")
+        if not all((url, uuid_value, password)):
+            raise HTTPException(status_code=409, detail="请填写远程地址、UUID 和端到端加密密码")
+        try:
+            values = await pull(url, uuid_value, password,
+                                str(value.get("remote_crypto_type") or "auto"),
+                                settings.proxy_url or None)
+            domains = [str(item).lstrip("*. ").lower() for item in (value.get("remote_domains") or [])]
+            if domains:
+                values = {domain: cookies for domain, cookies in values.items()
+                          if any(domain == allowed or domain.endswith(f".{allowed}") for allowed in domains)}
+            await runtime.services.cookies.replace(values)
+            count = sum(len(item) for item in values.values())
+            record_sync("remote", "success", "远程 CookieCloud 同步完成", len(values), count)
+            return {"ok": True, "message": "远程 CookieCloud 同步完成",
+                    "domain_count": len(values),
+                    "cookie_count": count, "sync_status": await cookie_sync_state(),
+                    "history": sync_history()}
+        except CookieCloudError as exc:
+            record_sync("remote", "error", str(exc))
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     @app.delete("/api/cookies/data", dependencies=[Depends(require_admin)])
     async def clear_cookie_data():
+        from .cookiecloud import record_sync, sync_history
         path = DATA_DIR / "cookies.json"
         path.unlink(missing_ok=True)
-        return {"ok": True}
+        record_sync("clear", "success", "本地 Cookie 数据已清空")
+        return {"ok": True, "sync_status": await cookie_sync_state(), "history": sync_history()}
+
+    cookiecloud_rate: dict[str, list[float]] = {}
+
+    def check_cookiecloud_rate(request: Request) -> None:
+        client = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        recent = [stamp for stamp in cookiecloud_rate.get(client, []) if now - stamp < 900]
+        if len(recent) >= 240:
+            raise HTTPException(status_code=429, detail="Cookie 同步请求过于频繁")
+        recent.append(now)
+        cookiecloud_rate[client] = recent
+
+    def cookiecloud_headers() -> dict[str, str]:
+        return {
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Content-Encoding, X-CookieCloud-Auth",
+            "Access-Control-Allow-Private-Network": "true",
+            "Access-Control-Max-Age": "86400",
+            "Cache-Control": "no-store",
+        }
+
+    @app.options("/cookiecloud/{path:path}")
+    async def cookiecloud_options(path: str):
+        return Response(status_code=204, headers=cookiecloud_headers())
+
+    @app.api_route("/cookiecloud", methods=["GET", "POST"])
+    @app.api_route("/cookiecloud/", methods=["GET", "POST"])
+    async def cookiecloud_root():
+        return JSONResponse({"message": "AWBotNest CookieCloud API", "status": "OK"},
+                            headers=cookiecloud_headers())
+
+    @app.get("/cookiecloud/health")
+    async def cookiecloud_health(request: Request):
+        check_cookiecloud_rate(request)
+        enabled = bool(settings.cookie_settings.get("enabled"))
+        return JSONResponse({"status": "OK" if enabled else "DISABLED"},
+                            status_code=200 if enabled else 503,
+                            headers=cookiecloud_headers())
+
+    @app.post("/cookiecloud/update")
+    async def cookiecloud_update(request: Request):
+        from .cookiecloud import CookieCloudError, decrypt_payload, normalize_cookie_data, record_sync
+        if not settings.cookie_settings.get("enabled"):
+            raise HTTPException(status_code=404, detail="Cookie 服务未启用")
+        check_cookiecloud_rate(request)
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail="CookieCloud 请求格式无效") from exc
+        encrypted = str(payload.get("encrypted") or "") if isinstance(payload, dict) else ""
+        supplied_uuid = str(payload.get("uuid") or "") if isinstance(payload, dict) else ""
+        configured_uuid = str(settings.cookie_settings.get("uuid") or "")
+        if not supplied_uuid or not hmac.compare_digest(supplied_uuid, configured_uuid):
+            raise HTTPException(status_code=404, detail="Not Found")
+        if not encrypted:
+            raise HTTPException(status_code=400, detail="缺少加密 Cookie 数据")
+        try:
+            decoded = decrypt_payload(
+                encrypted,
+                str(settings.cookie_settings.get("uuid") or ""),
+                str(settings.cookie_settings.get("password") or ""),
+                str(payload.get("crypto_type") or payload.get("cryptoType") or
+                    settings.cookie_settings.get("crypto_type") or "auto"),
+            )
+            values = normalize_cookie_data(decoded)
+            await runtime.services.cookies.replace(values)
+            count = sum(len(item) for item in values.values())
+            record_sync("browser", "success", "浏览器 CookieCloud 数据已接收", len(values), count)
+            snapshot = DATA_DIR / "cookiecloud_snapshot.json"
+            temporary = snapshot.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"encrypted": encrypted,
+                                             "crypto_type": payload.get("crypto_type") or "auto"},
+                                            ensure_ascii=False), encoding="utf-8")
+            temporary.replace(snapshot)
+            return JSONResponse({"action": "done", "domain_count": len(values),
+                                 "cookie_count": count},
+                                headers=cookiecloud_headers())
+        except CookieCloudError as exc:
+            record_sync("browser", "error", str(exc))
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.api_route("/cookiecloud/get/{uuid_value}", methods=["GET", "POST"])
+    async def cookiecloud_get(uuid_value: str, request: Request):
+        check_cookiecloud_rate(request)
+        if not secrets.compare_digest(uuid_value, str(settings.cookie_settings.get("uuid") or "")):
+            raise HTTPException(status_code=404, detail="Not Found")
+        snapshot = DATA_DIR / "cookiecloud_snapshot.json"
+        if not snapshot.exists():
+            raise HTTPException(status_code=404, detail="Not Found")
+        return JSONResponse(json.loads(snapshot.read_text(encoding="utf-8")),
+                            headers=cookiecloud_headers())
 
     @app.put("/api/settings", dependencies=[Depends(require_admin)])
     async def update_settings(request: Request):
@@ -1192,9 +1398,14 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         if meta is None:
             raise HTTPException(status_code=404, detail="插件不存在")
         loaded = runtime.loaded.get(plugin_id)
+        context = loaded.context if loaded else None
         return {"id": plugin_id, "enabled": meta.enabled, "loaded": bool(loaded), "error": meta.error,
-                "handlers": len(loaded.context._handlers) if loaded else 0,
-                "background_tasks": len(loaded.context._tasks) if loaded else 0, "events": []}
+                "handlers": len(context._handlers) if context else 0,
+                "background_tasks": len(context._tasks) if context else 0,
+                "instances": ([{"id": plugin_id, "account": "全局实例"}] if context else []),
+                "circuits": [],
+                "policy": {"max_concurrency": context.max_concurrency if context else 0},
+                "events": []}
 
     @app.post("/api/plugins/{plugin_id}/events/{event_id}/replay", dependencies=[Depends(require_admin)])
     async def replay_plugin_event(plugin_id: str, event_id: str):
@@ -1213,6 +1424,24 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         async for dialog in client.iter_dialogs(limit=200):
             values.append({"id": str(dialog.id), "title": dialog.name or str(dialog.id)})
         return {"dialogs": values}
+
+    @app.get("/api/chats/{chat_id}", dependencies=[Depends(require_admin)])
+    async def get_chat_info(chat_id: str, session: str = ""):
+        client = accounts.users.get(session) if session else next(iter(accounts.connected_users), None)
+        if client is None:
+            raise HTTPException(status_code=409, detail="没有可用的已连接用户账号")
+        target: int | str = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+        try:
+            entity = await client.get_entity(target)
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=f"获取会话信息失败：{exc}") from exc
+        title = (getattr(entity, "title", None) or
+                 " ".join(part for part in (getattr(entity, "first_name", ""),
+                                               getattr(entity, "last_name", "")) if part) or
+                 getattr(entity, "username", None) or str(getattr(entity, "id", chat_id)))
+        kind = "channel" if getattr(entity, "broadcast", False) else (
+            "group" if getattr(entity, "megagroup", False) or getattr(entity, "title", None) else "private")
+        return {"id": getattr(entity, "id", chat_id), "title": title, "type": kind}
 
     @app.get("/api/plugins/repo/status", dependencies=[Depends(require_admin)])
     async def plugin_repo_status():
@@ -1271,6 +1500,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         settings.bot_routing.pop(plugin_id, None)
         settings.plugin_order = [item for item in settings.plugin_order if item != plugin_id]
         save_settings(settings)
+        # 删除后立即使市场缓存失效，避免已删除插件仍显示为“已安装”。
+        market.clear_cache()
         return {"ok": True}
 
     @app.get("/api/plugins/{plugin_id}/config", dependencies=[Depends(require_admin)])
@@ -1509,8 +1740,9 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         return {"ok": True, "removed": removed, "kept": min(len(memory_logs.records), keep)}
 
     @app.get("/api/plugins/store", dependencies=[Depends(require_admin)])
-    async def plugin_store():
-        return await market.list_all()
+    async def plugin_store(refresh: bool = False):
+        # 前端“刷新市场”显式绕过五分钟缓存；普通加载继续使用缓存。
+        return await (market.refresh() if refresh else market.list_all())
 
     @app.post("/api/plugins/store/install", dependencies=[Depends(require_admin)])
     async def install_market_plugin(body: MarketInstallBody):
@@ -1539,8 +1771,27 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 await runtime.enable(plugin_id)
                 raise HTTPException(status_code=409, detail=f"更新加载失败，已回滚：{meta.error}")
         market.finish(plugin_id, True)
+        await market.record_install(body.plugin, "update" if was_loaded else "install")
         market.clear_cache()
         return {"ok": True, "path": str(destination), "plugin": meta.to_dict()}
+
+    @app.post("/api/plugins/store/download", dependencies=[Depends(require_admin)])
+    async def download_market_plugins_legacy(request: Request):
+        """V1 批量商店下载接口兼容层。"""
+        payload = await request.json()
+        plugins = payload.get("plugins") if isinstance(payload, dict) else []
+        if not isinstance(plugins, list) or len(plugins) > 100:
+            raise HTTPException(status_code=400, detail="plugins 必须是数组且不超过 100 个")
+        installed, errors = [], []
+        for plugin in plugins:
+            if not isinstance(plugin, dict):
+                continue
+            try:
+                result = await install_market_plugin(MarketInstallBody(plugin=plugin))
+                installed.append(str(plugin.get("id") or ""))
+            except HTTPException as exc:
+                errors.append(f"{plugin.get('id', '')}: {exc.detail}")
+        return {"result": {"installed": installed, "errors": errors}}
 
     @app.post("/api/plugins/github/list", dependencies=[Depends(require_admin)])
     async def github_list(request: Request):

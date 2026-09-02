@@ -54,6 +54,24 @@ const seenLogs = new Set()
 const quickLogsBox = ref(null)
 const modalDialog = ref(null)
 
+function jobNextRun(job) {
+  const value = job?.next_run_at || job?.next_run || job?.next
+  if (!value) return '暂无计划'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '等待安排'
+  const remaining = date.getTime() - Date.now()
+  const clock = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+  if (remaining <= 0) return '即将执行'
+  if (remaining < 3600000) return `${Math.max(1, Math.ceil(remaining / 60000))}分钟后`
+  const now = new Date()
+  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  if (sameDay(now, date)) return `今天 ${clock}`
+  const tomorrow = new Date(now)
+  tomorrow.setDate(now.getDate() + 1)
+  if (sameDay(tomorrow, date)) return `明天 ${clock}`
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${clock}`
+}
+
 const modalTitle = computed(() => ({
   logs: '运行日志',
   network: '网络测试',
@@ -554,7 +572,7 @@ onUnmounted(() => {
           <div v-if="!jobs.length" class="empty">暂无定时任务</div>
           <div v-for="job in jobs" :key="job.id" class="job-row">
             <span><small>{{ jobOwnerLabel(job) }}</small><strong>{{ jobDisplayName(job) }}</strong><em v-if="job.running">{{ job.progress?.status === 'running' ? `${job.progress.step || '运行中'} · ${job.progress.progress || 0}%` : '正在运行' }}</em></span>
-            <code>{{ job.running && job.progress?.status === 'running' ? `已运行 ${job.progress.duration_seconds || 0} 秒` : (job.running ? '正在执行' : (job.next || '暂无计划')) }}</code>
+            <code>{{ job.running && job.progress?.status === 'running' ? `已运行 ${job.progress.duration_seconds || 0} 秒` : (job.running ? '正在执行' : jobNextRun(job)) }}</code>
             <button class="btn" :disabled="job.running" @click="runJob(job)">{{ job.running ? '运行中' : '执行' }}</button>
           </div>
         </div>

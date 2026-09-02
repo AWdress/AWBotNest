@@ -237,7 +237,7 @@ class PluginRuntime:
             if plugin_id not in self.settings.enabled_plugins:
                 self.settings.enabled_plugins.append(plugin_id)
                 save_settings(self.settings)
-            logger.info("插件已启用：%s", meta.name)
+            logger.info("插件已启用：%s（1 个运行实例）", meta.name)
         except Exception as exc:
             await context.close()
             meta.error = f"{type(exc).__name__}: {exc}"
