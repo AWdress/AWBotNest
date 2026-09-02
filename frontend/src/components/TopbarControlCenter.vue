@@ -754,7 +754,7 @@ onUnmounted(() => {
 .theme-trigger b { font-size: 14px; font-weight: 500; }
 .theme-trigger small { color: var(--text-secondary); font-size: 11px; }
 .theme-trigger em { color: var(--text-secondary); font-size: 24px; font-style: normal; line-height: 1; }
-.theme-submenu { position: absolute; top: 130px; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.72); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 2; }
+.theme-submenu { position: absolute; top: 130px; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.92); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 2; }
 .theme-sub-action { width: 100%; display: flex; align-items: center; gap: 6px; padding: 12px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; }
 .theme-sub-action em { margin-left: auto; font-size: 20px; font-style: normal; color: var(--text-secondary); }
 .theme-sub-action:hover, .theme-sub-action.selected { background: var(--bg-hover); color: var(--text-primary); }

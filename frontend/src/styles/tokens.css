@@ -64,7 +64,7 @@
 :root[data-theme="transparent"] .metric-strip { background: rgba(13,22,35,.68) !important; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
 :root[data-theme="transparent"] .control-pop,
 :root[data-theme="transparent"] .control-modal,
-:root[data-theme="transparent"] .dropdown { background: rgba(13,22,35,.68) !important; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+:root[data-theme="transparent"] .dropdown { background: rgba(13,22,35,.92) !important; backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); }
 
 * {
   box-sizing: border-box;
