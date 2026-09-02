@@ -207,6 +207,13 @@ export const api = {
   syncRemoteCookies: () => request('POST', '/api/cookies/remote-sync'),
   clearCookieData: () => request('DELETE', '/api/cookies/data'),
   restartPlatform: () => request('POST', '/api/system/restart'),
+  migrateV1: async (file) => {
+    const form = new FormData(); form.append('file', file)
+    const headers = authHeaders(); delete headers['Content-Type']
+    const res = await fetch('/api/system/migrate-v1', { method: 'POST', headers, body: form })
+    if (!res.ok) { let detail = res.statusText; try { detail = (await res.json()).detail || detail } catch {}; throw new Error(detail) }
+    return res.json()
+  },
   downloadBackup: async () => {
     const res = await fetch('/api/system/backup', { method: 'POST', headers: authHeaders() })
     if (res.status === 401) {

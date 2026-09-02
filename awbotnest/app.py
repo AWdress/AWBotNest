@@ -10,6 +10,8 @@ import inspect
 import platform
 import secrets
 import hashlib
+import tempfile
+from pathlib import Path
 from datetime import datetime
 from urllib.parse import urlparse, urlunparse
 from dataclasses import asdict
@@ -33,6 +35,7 @@ from .backup import BackupManager
 from .activity import activity
 from .resources import ResourceSampler
 from .open_api import register_open_api
+from .migrate import migrate as migrate_v1
 
 logger = logging.getLogger("awbotnest.api")
 
@@ -1713,6 +1716,28 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     async def create_backup():
         archive = BackupManager.create()
         return {"ok": True, "filename": archive.name}
+
+    @app.post("/api/system/migrate-v1", dependencies=[Depends(require_admin)])
+    async def system_migrate_v1(file: UploadFile = File(...)):
+        if not (file.filename or '').lower().endswith('.zip'):
+            raise HTTPException(status_code=400, detail='请上传 V1 数据目录的 zip 文件')
+        with tempfile.TemporaryDirectory(prefix='awbotnest-v1-') as temp_dir:
+            archive = Path(temp_dir) / 'v1.zip'
+            archive.write_bytes(await file.read())
+            source = Path(temp_dir) / 'source'
+            source.mkdir()
+            try:
+                with zipfile.ZipFile(archive) as zf:
+                    zf.extractall(source)
+                # 兼容 zip 内包了一层目录的导出结构。
+                root = source
+                if not (root / 'data').exists():
+                    candidates = [p for p in source.iterdir() if p.is_dir() and (p / 'data').exists()]
+                    if candidates:
+                        root = candidates[0]
+                return migrate_v1(root)
+            except (zipfile.BadZipFile, OSError, ValueError, json.JSONDecodeError) as exc:
+                raise HTTPException(status_code=400, detail=f'V1 数据包无效：{exc}') from exc
 
     @app.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():

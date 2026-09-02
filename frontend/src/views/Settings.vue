@@ -839,6 +839,19 @@ async function testDb() {
 const backupBusy = ref(false)
 const restoreBusy = ref(false)
 const restoreInput = ref(null)
+const migrateV1Busy = ref(false)
+const migrateV1Input = ref(null)
+function openMigrateV1Picker() { migrateV1Input.value?.click() }
+async function onMigrateV1File(e) {
+  const file = e.target.files?.[0]; e.target.value = ''
+  if (!file) return
+  const ok = await confirm({ title: 'V1 数据迁移', message: '将把 V1 配置、插件配置和数据迁移到当前 V2。建议先备份，继续？', confirmText: '开始迁移' })
+  if (!ok) return
+  migrateV1Busy.value = true
+  try { const result = await api.migrateV1(file); toast.success(result.message || 'V1 数据迁移完成') }
+  catch (err) { toast.error('迁移失败：' + err.message) }
+  finally { migrateV1Busy.value = false }
+}
 
 function openRestorePicker() {
   restoreInput.value?.click()
@@ -2256,6 +2269,13 @@ onBeforeRouteLeave(async () => {
                  placeholder="https://pypi.tuna.tsinghua.edu.cn/simple" />
           <div class="hint muted small">墙内建议填国内镜像（清华/阿里），境内直连不经墙。留空则走官方 pypi（此时若启用了上面的代理会自动用代理出墙）。</div>
         </div>
+      </div>
+
+      <div v-if="tab === 'system'" class="card" style="margin-top:16px">
+        <div class="card-title">V1 数据迁移</div>
+        <div class="hint muted small">上传 V1 数据目录的 zip 压缩包，迁移配置、插件作用域、Bot 路由、KV 和插件私有数据。Telegram 账号需要重新登录。</div>
+        <button class="btn sm" @click="openMigrateV1Picker" :disabled="migrateV1Busy">{{ migrateV1Busy ? '迁移中…' : '选择 V1 数据包' }}</button>
+        <input ref="migrateV1Input" type="file" accept=".zip,application/zip" style="display:none" @change="onMigrateV1File" />
       </div>
 
       <!-- 数据库 -->
