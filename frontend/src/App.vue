@@ -39,12 +39,8 @@ function applyAppearance() {
     ? `https://www.loliapi.com/acg/?t=${Date.now()}`
     : '')
   document.documentElement.style.setProperty('--app-bg-image', image ? `url("${image.replace(/"/g, '')}")` : 'none')
-  document.documentElement.classList.remove('appearance-ready')
-  if (!image) {
-    document.documentElement.classList.add('appearance-ready')
-  } else {
+  if (image) {
     const preload = new Image()
-    preload.onload = preload.onerror = () => document.documentElement.classList.add('appearance-ready')
     preload.src = image
   }
 }
