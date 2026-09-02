@@ -617,6 +617,8 @@ onUnmounted(() => {
 
 .metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); border-radius: 13px; overflow: hidden; }
 .metric-strip.compact { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.metric:first-child { background: linear-gradient(100deg, rgba(48,128,240,.10), transparent 72%); }
+.metric:first-child strong { color: #60a5fa; }
 .metric { min-width: 0; display: flex; align-items: center; gap: 13px; padding: 16px 18px; border-right: 1px solid var(--border); animation: metric-enter .4s ease both; animation-delay: var(--delay); }
 .metric:last-child { border-right: 0; }
 .metric-icon { position: relative; width: 42px; height: 42px; display: grid; place-items: center; flex: 0 0 auto; border-radius: 11px; }
@@ -742,6 +744,7 @@ onUnmounted(() => {
 .jobs-heading { min-height: 80px; padding-top: 18px; }
 .jobs-header-icon { width: 28px; height: 28px; display: grid; place-items: center; color: var(--text-secondary); }
 .jobs-header-icon svg { width: 27px; height: 27px; }
+.runtime-strip { border-color: rgba(48,128,240,.24); background: linear-gradient(90deg, rgba(48,128,240,.08), rgba(14,19,29,.94) 42%); }
 .job-row { display: grid; grid-template-columns: 40px minmax(0,1fr) auto; gap: 12px; align-items: center; min-height: 55px; margin: 0; padding: 10px 0; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: transparent; }
 .job-row:last-child { border-bottom: 0; }
 .job-mark { width: 40px; height: 40px; display: grid; place-items: center; border-radius: 10px; background: rgba(48,128,240,.12); color: var(--accent); }

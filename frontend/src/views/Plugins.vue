@@ -1912,6 +1912,7 @@ onUnmounted(() => {
   box-shadow: 0 8px 24px rgba(48,128,240,0.2), 0 2px 8px rgba(0,0,0,.3);
   transform: translateY(-3px);
 }
+.plugin-card.clickable:hover .store-icon { box-shadow: 0 0 0 2px rgba(48,128,240,.18); }
 .plugin-card.clickable:active { transform: translateY(-1px) scale(0.995); }
 .plugin-card.menu-open { position: relative; z-index: 50; }
 .plugin-card.err {
