@@ -154,6 +154,15 @@ class AIService:
         self.settings = settings
         self.http = http
 
+    def _timeout(self, capability: str) -> int:
+        config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
+        default = 300 if capability == "image" else 60
+        maximum = 600 if capability == "image" else 300
+        try:
+            return max(5, min(int(config.get("image_timeout_seconds" if capability == "image" else "timeout_seconds", default)), maximum))
+        except (TypeError, ValueError):
+            return default
+
     def _resolve(self, capability: str, model: str = "", plugin_id: str = "") -> tuple[str, str, str]:
         config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
         providers = {str(item.get("id")): item for item in config.get("providers", [])
@@ -209,7 +218,7 @@ class AIService:
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=payload,
-                timeout=120,
+                timeout=self._timeout("text"),
             )
             response.raise_for_status()
             data = response.json()
@@ -232,7 +241,7 @@ class AIService:
         try:
             response = await self.http.post(f"{base_url}/chat/completions",
                                             headers={"Authorization": f"Bearer {api_key}"},
-                                            json=payload, timeout=120)
+                                            json=payload, timeout=self._timeout("vision"))
             response.raise_for_status()
             return str(response.json()["choices"][0]["message"]["content"])
         except Exception:
@@ -250,7 +259,7 @@ class AIService:
             response = await self.http.post(f"{base_url}/images/generations",
                                             headers={"Authorization": f"Bearer {api_key}"},
                                             json={"model": resolved_model, "prompt": prompt, "size": size,
-                                                  "n": 1}, timeout=180)
+                                                  "n": 1}, timeout=self._timeout("image"))
             response.raise_for_status()
             data = response.json().get("data", [])
             if not data or not isinstance(data[0], dict):

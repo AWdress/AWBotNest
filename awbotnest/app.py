@@ -628,7 +628,11 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     def current_ai_settings() -> dict[str, object]:
         if settings.ai_settings:
-            return dict(settings.ai_settings)
+            value = dict(settings.ai_settings)
+            value.setdefault("timeout_seconds", 60)
+            value.setdefault("image_timeout_seconds", 300)
+            value.setdefault("max_concurrency", 3)
+            return value
         provider_id = "default"
         return {
             "providers": [{"id": provider_id, "name": "OpenAI 兼容服务", "enabled": True,
@@ -638,6 +642,9 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                         "capabilities": ["text"]}],
             "capabilities": {"text": {"default_model": settings.ai_model}, "vision": {}, "image": {}},
             "plugin_permissions": {},
+            "timeout_seconds": 60,
+            "image_timeout_seconds": 300,
+            "max_concurrency": 3,
         }
 
     @app.get("/api/ai/settings", dependencies=[Depends(require_admin)])
@@ -655,6 +662,9 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         value = raw.get("settings")
         if not isinstance(value, dict):
             raise HTTPException(status_code=400, detail="AI 设置格式不正确")
+        value.setdefault("timeout_seconds", 60)
+        value.setdefault("image_timeout_seconds", 300)
+        value.setdefault("max_concurrency", 3)
         old_keys = {str(item.get("id")): str(item.get("api_key") or "")
                     for item in settings.ai_settings.get("providers", []) if isinstance(item, dict)}
         for provider in value.get("providers", []):
