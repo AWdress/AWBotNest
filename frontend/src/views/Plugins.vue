@@ -677,7 +677,8 @@ const filteredPlugins = computed(() => {
   if (pluginFilter.value === 'enabled') filtered = filtered.filter((p) => p.enabled && !p.error)
   if (pluginFilter.value === 'disabled') filtered = filtered.filter((p) => !p.enabled && !p.error)
   if (pluginFilter.value === 'error') filtered = filtered.filter((p) => p.error)
-  return customPluginOrder.value ? [...filtered] : [...filtered].sort(sortByHeat)
+  // 热度数据加载完成前保持后端顺序，避免初始 0 值参与排序导致卡片跳动。
+  return customPluginOrder.value || !storeLoaded.value ? [...filtered] : [...filtered].sort(sortByHeat)
 })
 
 // ── 插件市场（多仓库聚合） ──
