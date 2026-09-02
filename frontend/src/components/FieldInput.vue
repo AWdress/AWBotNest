@@ -98,7 +98,8 @@ async function toggleChatPanel() {
   chatErr.value = ''
   try {
     const d = await api.listPluginChats(props.pluginId, props.spec.session || '')
-    chatList.value = d.chats || []
+    // V2 接口返回 dialogs；兼容旧版返回 chats，确保 Vue 插件使用平台会话列表。
+    chatList.value = d.dialogs || d.chats || []
     chatLoaded.value = true
   } catch (e) {
     chatErr.value = e.message || '拉取会话失败'

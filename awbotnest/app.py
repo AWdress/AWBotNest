@@ -1436,7 +1436,13 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             return {"dialogs": []}
         values = []
         async for dialog in client.iter_dialogs(limit=200):
-            values.append({"id": str(dialog.id), "title": dialog.name or str(dialog.id)})
+            entity = getattr(dialog, "entity", None)
+            values.append({
+                "id": str(dialog.id),
+                "title": dialog.name or str(dialog.id),
+                "type": "channel" if getattr(entity, "broadcast", False) else (
+                    "group" if getattr(entity, "title", None) else "private"),
+            })
         return {"dialogs": values}
 
     @app.get("/api/chats/{chat_id}", dependencies=[Depends(require_admin)])
