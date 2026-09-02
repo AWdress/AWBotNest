@@ -27,6 +27,16 @@ const err = ref('')          // 仅用于加载失败（页面无数据时内联
 const profile = uiProfile
 const profileAvatarInput = ref(null)
 const profileAvatarBusy = ref(false)
+const themeMode = ref(localStorage.getItem('awbotnest-theme') || 'dark')
+const backgroundUrl = ref(localStorage.getItem('awbotnest-bg-image') || '')
+function saveAppearance() {
+  localStorage.setItem('awbotnest-theme', themeMode.value)
+  localStorage.setItem('awbotnest-bg-image', backgroundUrl.value.trim())
+  document.documentElement.dataset.theme = themeMode.value
+  document.documentElement.style.setProperty('--app-bg-image', backgroundUrl.value.trim() ? `url("${backgroundUrl.value.trim().replace(/"/g, '')}")` : 'none')
+  window.dispatchEvent(new Event('awbotnest-appearance'))
+  toast.success('外观设置已保存')
+}
 
 // 未保存改动检测：快照 vs 当前
 const savedSnap = ref('')
@@ -1482,6 +1492,15 @@ onBeforeRouteLeave(async () => {
                    accept="image/png,image/jpeg,image/webp,image/gif"
                    hidden @change="changeProfileAvatar">
           </div>
+        </div>
+      </div>
+
+      <div v-if="tab === 'login'" class="card appearance-card">
+        <div class="card-title">界面外观</div>
+        <div class="hint muted">透明主题会保留深色玻璃底；背景支持固定图片或返回图片的随机 API。</div>
+        <div class="grid2">
+          <div class="field"><label>主题</label><select class="select" v-model="themeMode" @change="saveAppearance"><option value="dark">深色</option><option value="transparent">透明</option></select></div>
+          <div class="field"><label>背景图片 / 随机 API（可选）</label><input class="input" v-model="backgroundUrl" placeholder="留空使用默认深色背景" @change="saveAppearance" /></div>
         </div>
       </div>
 
