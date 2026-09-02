@@ -75,6 +75,7 @@
 html, body, #app {
   height: 100%;
 }
+html:not(.appearance-ready) #app { visibility: hidden; }
 
 body {
   font-family: 'Aptos', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
