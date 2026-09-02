@@ -1,7 +1,8 @@
 // AWBotNest PWA Service Worker
 // 极简策略：导航请求网络优先（保证控制台数据最新），静态资源缓存兜底。
 // 不缓存 /api/，避免登录态/数据陈旧。
-const CACHE = 'awbotnest-v2'
+const CACHE = 'awbotnest-v2-2'
+const ICON_CACHE = 'awbotnest-v2-icons'
 const ASSETS = ['/', '/index.html', '/favicon.ico', '/pwa-192.png', '/pwa-512.png']
 
 self.addEventListener('install', (e) => {
@@ -12,7 +13,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => ![CACHE, ICON_CACHE].includes(k)).map((k) => caches.delete(k)))
     )
   )
   self.clients.claim()
@@ -22,6 +23,20 @@ self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url)
   // API 与 WebSocket 一律走网络，不缓存
   if (url.pathname.startsWith('/api/') || e.request.method !== 'GET') return
+  // 插件 Logo 通常来自 GitHub/raw 仓库；跨页面持久缓存，避免每次打开市场重新下载。
+  if (e.request.destination === 'image' && url.origin !== self.location.origin) {
+    e.respondWith(
+      caches.open(ICON_CACHE).then(async (cache) => {
+        const cached = await cache.match(e.request)
+        const network = fetch(e.request).then((resp) => {
+          if (resp.ok || resp.type === 'opaque') cache.put(e.request, resp.clone()).catch(() => {})
+          return resp
+        }).catch(() => cached)
+        return cached || network
+      })
+    )
+    return
+  }
   // 带内容指纹的构建资源可长期缓存；文件变化时地址也会变化。
   if (url.pathname.startsWith('/assets/')) {
     e.respondWith(
