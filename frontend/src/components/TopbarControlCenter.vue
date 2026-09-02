@@ -535,7 +535,7 @@ onUnmounted(() => {
 
   <Teleport to="body">
     <div v-if="modal" class="control-modal-mask" @click.self="closeModal">
-      <section ref="modalDialog" class="control-modal" role="dialog" aria-modal="true"
+      <section ref="modalDialog" class="control-modal" :class="{ 'theme-dialog': modal === 'theme' }" role="dialog" aria-modal="true"
                :aria-label="modalTitle" tabindex="-1">
         <header><strong>{{ modalTitle }}</strong><button aria-label="关闭" @click="closeModal">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
@@ -753,7 +753,7 @@ onUnmounted(() => {
 .theme-trigger b { font-size: 14px; font-weight: 500; }
 .theme-trigger small { color: var(--text-secondary); font-size: 11px; }
 .theme-trigger em { color: var(--text-secondary); font-size: 24px; font-style: normal; line-height: 1; }
-.theme-submenu { position: absolute; top: 210px; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.72); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 2; }
+.theme-submenu { position: absolute; top: 130px; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.72); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 2; }
 .theme-sub-action { width: 100%; display: flex; align-items: center; gap: 6px; padding: 12px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; }
 .theme-sub-action em { margin-left: auto; font-size: 20px; font-style: normal; color: var(--text-secondary); }
 .theme-sub-action:hover, .theme-sub-action.selected { background: var(--bg-hover); color: var(--text-primary); }
@@ -792,6 +792,7 @@ onUnmounted(() => {
   position: relative;
   border: 1px solid var(--border-light); border-radius: 16px; background: var(--bg-card); box-shadow: var(--shadow-float);
 }
+.control-modal.theme-dialog { width: min(520px, calc(100vw - 40px)); max-height: 420px; }
 .control-modal > header { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; border-bottom: 1px solid var(--border); }
 .control-modal > header strong { font-size: 18px; }
 .control-modal > header button { width: 34px; height: 34px; border: 0; border-radius: 9px; background: transparent; color: var(--text-secondary); font-size: 23px; cursor: pointer; }
