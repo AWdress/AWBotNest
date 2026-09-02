@@ -79,6 +79,40 @@ class PluginRuntime:
                      and (path / "__init__.py").exists())
         return sorted(files)
 
+    def entry_file(self, plugin_id: str) -> Path | None:
+        return next((entry for entry in self._entries()
+                     if (entry.parent.name if entry.name == "__init__.py" else entry.stem) == plugin_id), None)
+
+    def uses_platform_ai(self, plugin_id: str) -> bool:
+        """静态识别插件是否实际调用 ctx.ai，不导入或执行插件代码。"""
+        entry = self.entry_file(plugin_id)
+        if entry is None:
+            return False
+        source_files = ([entry] if entry.name != "__init__.py" else [
+            path for path in entry.parent.rglob("*.py") if "__pycache__" not in path.parts
+        ])
+        return any(self._source_uses_platform_ai(path) for path in source_files)
+
+    @staticmethod
+    def _source_uses_platform_ai(path: Path) -> bool:
+        try:
+            source = path.read_text(encoding="utf-8")
+            if "ctx" not in source or "ai" not in source:
+                return False
+            tree = ast.parse(source, filename=str(path))
+        except (OSError, SyntaxError, UnicodeError):
+            return False
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Attribute) or node.attr != "ai":
+                continue
+            owner = node.value
+            if isinstance(owner, ast.Name) and owner.id == "ctx":
+                return True
+            # 兼容把插件上下文保存在 self.ctx 的目录插件；不匹配平台通用的 self._ctx 适配层。
+            if isinstance(owner, ast.Attribute) and owner.attr == "ctx":
+                return True
+        return False
+
     def frontend_dist_dir(self, plugin_id: str) -> Path:
         return self.plugins_dir / plugin_id / "frontend" / "dist"
 
@@ -178,8 +212,7 @@ class PluginRuntime:
     async def enable(self, plugin_id: str) -> PluginMeta:
         if plugin_id in self.loaded:
             return self.loaded[plugin_id].meta
-        entry = next((item for item in self._entries()
-                      if (item.parent.name if item.name == "__init__.py" else item.stem) == plugin_id), None)
+        entry = self.entry_file(plugin_id)
         if entry is None:
             raise FileNotFoundError(f"插件不存在：{plugin_id}")
         raw = self._metadata(entry)

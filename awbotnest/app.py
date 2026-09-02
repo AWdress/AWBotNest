@@ -673,7 +673,11 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.get("/api/ai/plugins", dependencies=[Depends(require_admin)])
     async def list_ai_plugins():
-        return {"plugins": [{"id": item.id, "name": item.name} for item in runtime.scan()]}
+        return {"plugins": [
+            {"id": item.id, "name": item.name}
+            for item in runtime.scan()
+            if not item.error and runtime.uses_platform_ai(item.id)
+        ]}
 
     @app.get("/api/ai/status", dependencies=[Depends(require_admin)])
     async def ai_status():
