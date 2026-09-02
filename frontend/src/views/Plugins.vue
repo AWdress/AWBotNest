@@ -1908,8 +1908,9 @@ onUnmounted(() => {
 }
 .plugin-card.clickable { cursor: pointer; }
 .plugin-card.clickable:hover {
-  border-color: rgba(48,128,240,.38);
-  box-shadow: 0 8px 24px rgba(48,128,240,0.2), 0 2px 8px rgba(0,0,0,.3);
+  border-color: rgba(96,165,250,.58);
+  background: linear-gradient(145deg, rgba(24,34,51,.98), rgba(15,20,30,.96));
+  box-shadow: 0 10px 30px rgba(48,128,240,0.24), 0 2px 8px rgba(0,0,0,.3);
   transform: translateY(-3px);
 }
 .plugin-card.clickable:hover .store-icon { box-shadow: 0 0 0 2px rgba(48,128,240,.18); }
