@@ -1091,8 +1091,8 @@ async function saveRepos() {
 
 function goStore() {
   tab.value = 'store'
-  // 每次进入市场都主动加载，避免停留在旧的空状态或缓存状态。
-  if (!storeBusy.value) loadStore(true)
+  // 进入市场优先展示已有缓存；仅首次进入且没有数据时加载，避免每次切换都触发刷新。
+  if (store.value.length === 0 && !storeBusy.value) loadStore(false)
 }
 
 function scheduleStoreLoad() {
