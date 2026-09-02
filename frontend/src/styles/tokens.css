@@ -102,6 +102,7 @@ body::before {
 }
 :root[data-theme="transparent"] body::before { z-index: 0; background: rgba(4, 8, 15, .42); }
 :root[data-theme="transparent"] #app { position: relative; z-index: 1; }
+:root[data-theme="transparent"] body { background-image: linear-gradient(rgba(5, 10, 18, .42), rgba(5, 10, 18, .42)), var(--app-bg-image), radial-gradient(900px 520px at 22% -12%, rgba(48,128,240,.13), transparent 68%), radial-gradient(760px 480px at 92% 108%, rgba(16,176,128,.08), transparent 70%); background-size: cover, cover, auto, auto; }
 
 a { color: inherit; text-decoration: none; }
 
