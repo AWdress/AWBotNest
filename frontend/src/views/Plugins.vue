@@ -140,6 +140,11 @@ async function load() {
   try {
     const data = await api.listPlugins()
     plugins.value = data.plugins
+    const marketById = new Map(store.value.map((plugin) => [plugin.id, plugin]))
+    plugins.value.forEach((plugin) => {
+      const marketPlugin = marketById.get(plugin.id)
+      if (marketPlugin) plugin.install_count = installCount(marketPlugin)
+    })
     if (Array.isArray(data.official_ids) && data.official_ids.length) {
       officialIds.value = Array.from(new Set([...officialIds.value, ...data.official_ids]))
     }
@@ -682,6 +687,7 @@ const officialIds = ref([])
 const storeBusy = ref(false)
 const storeErr = ref('')
 const storeLastSync = ref(null)
+const storeLoaded = ref(false)
 const dlBusy = ref({})
 
 // 应用筛选和排序
@@ -974,6 +980,7 @@ async function loadStore(refresh = false) {
     storeErr.value = e.message
   } finally {
     storeBusy.value = false
+    storeLoaded.value = true
   }
 }
 
@@ -1105,7 +1112,7 @@ function cancelStoreLoad() {
 
 onMounted(() => {
   pluginPageMounted = true
-  load().finally(() => { if (pluginPageMounted) scheduleStoreLoad() })
+  load().then(() => { if (pluginPageMounted) loadStore(false) })
   document.addEventListener('click', closePageDropdowns)
   window.addEventListener('resize', positionConfigScopeMenu)
   window.addEventListener('scroll', positionConfigScopeMenu, true)
@@ -1254,7 +1261,7 @@ onUnmounted(() => {
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
-              <span>{{ formatInstallCount(p.install_count) }}</span>
+              <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
             </span>
             <div class="kebab-wrap">
               <button class="kebab" :class="{ active: menuFor === p.id }" @click.stop="toggleMenu(p, $event)"
@@ -1336,7 +1343,7 @@ onUnmounted(() => {
                 <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                       :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
                   <Flame aria-hidden="true" />
-                  <span>{{ formatInstallCount(p.install_count) }}</span>
+                  <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
                 </span>
               </div>
 
@@ -1387,7 +1394,7 @@ onUnmounted(() => {
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
-              <span>{{ formatInstallCount(p.install_count) }}</span>
+              <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
             </span>
           </div>
 
@@ -1483,7 +1490,7 @@ onUnmounted(() => {
                 <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                       :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
                   <Flame aria-hidden="true" />
-                  <span>{{ formatInstallCount(p.install_count) }}</span>
+                  <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
                 </span>
                 <span class="mono">{{ p.id }}</span>
                 <span v-if="p.author">{{ p.author }}</span>
@@ -1912,7 +1919,7 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 1px rgba(224, 72, 79, .08);
 }
 .kebab-wrap { margin-left: auto; position: relative; }
-.plugin-card.clickable .heat-count { margin-left: 0; }
+.plugin-card.clickable .heat-count { margin-left: auto; }
 .plugin-card.clickable .kebab-wrap { margin-left: 0; }
 .store-card .heat-count { margin-left: auto; }
 .kebab {
