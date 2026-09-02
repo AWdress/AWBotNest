@@ -21,7 +21,7 @@ def sync_history() -> list[dict[str, Any]]:
         values = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return []
-    return [item for item in values[-50:] if isinstance(item, dict)][::-1]
+    return [item for item in values[-50:] if isinstance(item, dict)][::-1] if isinstance(values, list) else []
 
 
 def record_sync(source: str, status: str, message: str, domain_count: int = 0,
@@ -68,7 +68,10 @@ def _evp(password: bytes, salt: bytes) -> tuple[bytes, bytes]:
 
 
 def decrypt_payload(encrypted: str, uuid: str, password: str, mode: str = "auto") -> dict[str, Any]:
-    raw = _decode(encrypted)
+    try:
+        raw = _decode(encrypted)
+    except ValueError as exc:
+        raise CookieCloudError("Cookie 数据编码无效") from exc
     digest = hashlib.md5(f"{uuid.strip()}-{password.strip()}".encode()).hexdigest()  # noqa: S324
     candidates = [mode, "aes-128-cbc-fixed", "legacy"]
     for candidate in dict.fromkeys(candidates):
@@ -93,6 +96,8 @@ def normalize_cookie_data(payload: Any) -> dict[str, dict[str, str]]:
     source = payload.get("cookie_data", payload)
     if not isinstance(source, dict):
         raise CookieCloudError("远程 CookieCloud 缺少 Cookie 数据")
+    if "cookie_data" not in payload and (not source or any(not isinstance(items, list) for items in source.values())):
+        raise CookieCloudError("远程 CookieCloud 未返回 Cookie 数据")
     result: dict[str, dict[str, str]] = {}
     for source_domain, items in source.items():
         if not isinstance(items, list):

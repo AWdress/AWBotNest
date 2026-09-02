@@ -4,6 +4,10 @@ on:
   push:
     tags: ["v*"]
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -73,7 +77,7 @@ jobs:
               if [[ "$VER" == *"_dev" || "$VER" == *"-dev" ]]; then
                 gh release edit "$VER" --title "$VER" --notes-file release_notes.md --prerelease
               else
-                gh release edit "$VER" --title "$VER" --notes-file release_notes.md --latest
+                gh release edit "$VER" --title "$VER" --notes-file release_notes.md --prerelease=false --latest
               fi
             else
               if [[ "$VER" == *"_dev" || "$VER" == *"-dev" ]]; then

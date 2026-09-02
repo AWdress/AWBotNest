@@ -10,12 +10,16 @@ from .config import Settings
 bearer = HTTPBearer(auto_error=False)
 
 
+def token_matches(supplied: str, expected: str) -> bool:
+    return bool(supplied) and hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8"))
+
+
 def admin_dependency(settings: Settings):
     async def require_admin(
         credentials: HTTPAuthorizationCredentials | None = Security(bearer),
     ) -> None:
         supplied = credentials.credentials if credentials else ""
-        admin_ok = bool(supplied) and hmac.compare_digest(supplied, settings.admin_token)
+        admin_ok = token_matches(supplied, settings.admin_token)
         if not admin_ok:
             raise HTTPException(status_code=401, detail="管理令牌无效")
 
@@ -30,7 +34,7 @@ def api_key_dependency(settings: Settings):
         supplied = x_api_key or api_key
         if not settings.api_key:
             raise HTTPException(status_code=503, detail="开放平台 API Key 尚未配置")
-        if not supplied or not hmac.compare_digest(supplied, settings.api_key):
+        if not token_matches(supplied, settings.api_key):
             raise HTTPException(status_code=401, detail="API Key 无效或缺失")
 
     return require_api_key

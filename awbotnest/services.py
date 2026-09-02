@@ -169,6 +169,8 @@ class AIService:
                      if isinstance(item, dict) and item.get("enabled", True)}
         models = {str(item.get("id")): item for item in config.get("models", [])
                   if isinstance(item, dict) and item.get("enabled", True)}
+        model_aliases = {str(item.get("alias")): item for item in models.values()
+                         if str(item.get("alias") or "")}
         permissions = config.get("plugin_permissions", {})
         permission = permissions.get(plugin_id, {}) if plugin_id and isinstance(permissions, dict) else {}
         if permission:
@@ -177,7 +179,7 @@ class AIService:
             model = model or str((permission.get("models") or {}).get(capability) or "")
         assignment = (config.get("capabilities") or {}).get(capability, {})
         model = model or str(assignment.get("default_model") or "")
-        selected = models.get(model)
+        selected = models.get(model) or model_aliases.get(model)
         if selected:
             if capability not in selected.get("capabilities", []):
                 raise RuntimeError(f"模型不支持 {capability} 能力")

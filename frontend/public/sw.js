@@ -13,7 +13,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => ![CACHE, ICON_CACHE].includes(k)).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k.startsWith('awbotnest-') && ![CACHE, ICON_CACHE].includes(k)).map((k) => caches.delete(k)))
     )
   )
   self.clients.claim()
@@ -24,19 +24,26 @@ self.addEventListener('fetch', (e) => {
   // API 与 WebSocket 一律走网络，不缓存
   if (url.pathname.startsWith('/api/') || e.request.method !== 'GET') return
   // 插件 Logo 通常来自 GitHub/raw 仓库；跨页面持久缓存，避免每次打开市场重新下载。
-  if (e.request.destination === 'image' && url.origin !== self.location.origin) {
+  if (e.request.destination === 'image' && ['raw.githubusercontent.com', 'avatars.githubusercontent.com'].includes(url.hostname)) {
     e.respondWith(
       caches.open(ICON_CACHE).then(async (cache) => {
         const cached = await cache.match(e.request)
-        const network = fetch(e.request).then((resp) => {
-          if (resp.ok || resp.type === 'opaque') cache.put(e.request, resp.clone()).catch(() => {})
-          return resp
-        }).catch(() => cached)
-        return cached || network
+        if (cached) return cached
+        const response = await fetch(e.request)
+        if (response.ok || response.type === 'opaque') {
+          try {
+            await cache.put(e.request, response.clone())
+            const keys = await cache.keys()
+            await Promise.all(keys.slice(0, Math.max(0, keys.length - 200)).map(key => cache.delete(key)))
+          } catch {}
+        }
+        return response
       })
     )
     return
   }
+  // Random wallpaper APIs and unrelated origins must not accumulate in the asset cache.
+  if (url.origin !== self.location.origin) return
   // 带内容指纹的构建资源可长期缓存；文件变化时地址也会变化。
   if (url.pathname.startsWith('/assets/')) {
     e.respondWith(
@@ -60,6 +67,7 @@ self.addEventListener('fetch', (e) => {
         }
         return resp
       })
-      .catch(() => caches.match(e.request).then((r) => r || caches.match('/index.html')))
+      .catch(async () => (await caches.match(e.request)) ||
+        (e.request.mode === 'navigate' ? await caches.match('/index.html') : null) || Response.error())
   )
 })

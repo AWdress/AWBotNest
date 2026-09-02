@@ -69,6 +69,7 @@ class PluginRuntime:
         self.notifier = notifier
         self.plugins_dir = plugins_dir
         self.loaded: dict[str, LoadedPlugin] = {}
+        self._lifecycle_locks: dict[str, asyncio.Lock] = {}
         self.deps = DependencyManager(settings)
 
     def _entries(self) -> list[Path]:
@@ -132,7 +133,9 @@ class PluginRuntime:
             namespace.__package__ = package_name
             sys.modules[package_name] = namespace
         module_name = self._module_name(plugin_id)
-        sys.modules.pop(module_name, None)
+        for name in list(sys.modules):
+            if name == module_name or name.startswith(module_name + "."):
+                sys.modules.pop(name, None)
         kwargs = {"submodule_search_locations": [str(entry.parent)]} if entry.name == "__init__.py" else {}
         spec = importlib.util.spec_from_file_location(module_name, entry, **kwargs)
         if spec is None or spec.loader is None:
@@ -210,6 +213,10 @@ class PluginRuntime:
         return result
 
     async def enable(self, plugin_id: str) -> PluginMeta:
+        async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
+            return await self._enable(plugin_id)
+
+    async def _enable(self, plugin_id: str) -> PluginMeta:
         if plugin_id in self.loaded:
             return self.loaded[plugin_id].meta
         entry = self.entry_file(plugin_id)
@@ -278,6 +285,10 @@ class PluginRuntime:
         return meta
 
     async def disable(self, plugin_id: str, *, persist: bool = True) -> None:
+        async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
+            await self._disable(plugin_id, persist=persist)
+
+    async def _disable(self, plugin_id: str, *, persist: bool = True) -> None:
         loaded = self.loaded.pop(plugin_id, None)
         if loaded is not None:
             try:
@@ -349,7 +360,7 @@ class PluginRuntime:
             raise ValueError(f"包含未声明的配置项：{', '.join(sorted(unknown))}")
         for key, raw in schema.items():
             spec = raw if isinstance(raw, dict) else {}
-            if spec.get("required") and key not in values:
+            if spec.get("required") and (key not in values or values[key] is None or values[key] == ""):
                 raise ValueError(f"配置项 {key} 不能为空")
             if key not in values or values[key] in (None, ""):
                 continue

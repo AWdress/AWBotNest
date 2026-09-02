@@ -25,14 +25,22 @@ class MemoryLogHandler(logging.Handler):
         })
 
     def recent(self, limit: int = 200) -> list[dict[str, str]]:
-        return list(self.records)[:max(1, min(limit, 1000))]
+        self.acquire()
+        try:
+            return list(self.records)[:max(1, min(limit, 1000))]
+        finally:
+            self.release()
 
     def trim(self, keep: int) -> int:
         limit = max(1, min(int(keep), self.records.maxlen or 1000))
-        removed = max(0, len(self.records) - limit)
-        while len(self.records) > limit:
-            self.records.pop()
-        return removed
+        self.acquire()
+        try:
+            removed = max(0, len(self.records) - limit)
+            while len(self.records) > limit:
+                self.records.pop()
+            return removed
+        finally:
+            self.release()
 
 
 memory_logs = MemoryLogHandler()

@@ -3,7 +3,10 @@
 
 const TOKEN_KEY = 'awbotnest_token'
 export function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
-export function setToken(t) { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY) }
+export function setToken(t) {
+  if (t !== getToken()) clearStatusCache()
+  t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY)
+}
 
 function authHeaders() {
   const headers = { 'Content-Type': 'application/json' }
@@ -47,18 +50,29 @@ async function requestBlob(url, signal) {
 let statusRequest = null
 let statusCache = null
 let statusCacheAt = 0
+let statusGeneration = 0
+
+function clearStatusCache() {
+  statusGeneration += 1
+  statusRequest = null
+  statusCache = null
+  statusCacheAt = 0
+}
 
 async function getStatus(force = false) {
   const now = Date.now()
   if (!force && statusCache && now - statusCacheAt < 1000) return statusCache
   if (statusRequest) return statusRequest
+  const generation = statusGeneration
   statusRequest = request('GET', '/api/status')
     .then((data) => {
-      statusCache = data
-      statusCacheAt = Date.now()
+      if (generation === statusGeneration) {
+        statusCache = data
+        statusCacheAt = Date.now()
+      }
       return data
     })
-    .finally(() => { statusRequest = null })
+    .finally(() => { if (generation === statusGeneration) statusRequest = null })
   return statusRequest
 }
 
@@ -272,5 +286,5 @@ export const api = {
   setBotRouting: (plugin_id, bot_id) => request('PUT', '/api/bots/routing', { plugin_id, bot_id }),
 
   // 工具方法
-  clearCache: () => {},   // 预留：当前无客户端缓存，调用无副作用
+  clearCache: clearStatusCache,
 }

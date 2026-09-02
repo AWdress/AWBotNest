@@ -55,7 +55,9 @@ class PluginContext:
 
     @property
     def users(self) -> list[TelegramClient]:
-        return self.accounts.connected_users
+        selected = self.settings.plugin_accounts.get(self.plugin_id, [])
+        return [client for name, client in self.accounts.users.items()
+                if client.is_connected() and (not selected or name in selected)]
 
     @property
     def config(self) -> dict[str, object]:
@@ -91,6 +93,10 @@ class PluginContext:
 
     def _register(self, builder: object, callback: EventCallback) -> EventCallback:
         clients = self.accounts.clients_for_scope(self.scope, self.bot_id)
+        if self.settings.plugin_accounts.get(self.plugin_id):
+            user_clients = list(self.accounts.users.values())
+            allowed = self.users
+            clients = [client for client in clients if client not in user_clients or client in allowed]
         if not clients and self.scope != "standalone":
             raise RuntimeError(f"插件 {self.plugin_id} 没有可用的 {self.scope} Telegram 客户端")
         failures = 0

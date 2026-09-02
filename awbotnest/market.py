@@ -8,6 +8,7 @@ import time
 import logging
 import json
 import uuid
+import asyncio
 from packaging.version import InvalidVersion, Version
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -43,6 +44,8 @@ def _safe_path(value: str) -> PurePosixPath:
 class PluginMarket:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self.install_lock = asyncio.Lock()
+        self._pending_installs: dict[str, tuple[Path, Path]] = {}
         self._cache: dict[str, Any] | None = None
         self._cache_until = 0.0
         self._state_path = PLUGINS_DIR.parent / "data" / "repo_sync.json"
@@ -107,6 +110,10 @@ class PluginMarket:
             logger.debug("插件安装热度上报暂时失败：%s", plugin_id)
 
     async def poll_updates(self, runtime: Any) -> dict[str, Any]:
+        async with self.install_lock:
+            return await self._poll_updates(runtime)
+
+    async def _poll_updates(self, runtime: Any) -> dict[str, Any]:
         """刷新市场并自动更新已安装且有新版本的插件。"""
         listing = await self.refresh()
         updated: list[str] = []
@@ -375,16 +382,18 @@ class PluginMarket:
             self._validate_entry(content, plugin_id)
             destination = PLUGINS_DIR / f"{plugin_id}.py"
             backup = PLUGINS_DIR / f".{plugin_id}.backup.py"
+            if plugin_id in self._pending_installs:
+                raise RuntimeError("该插件已有安装任务")
             backup.unlink(missing_ok=True)
             if destination.exists():
                 shutil.copy2(destination, backup)
             temp = destination.with_suffix(".py.tmp")
             temp.write_bytes(content)
+            self._pending_installs[plugin_id] = (destination, backup)
             try:
                 temp.replace(destination)
             except Exception:
-                if backup.exists():
-                    backup.replace(destination)
+                self.finish(plugin_id, False)
                 raise
             return destination
 
@@ -417,35 +426,34 @@ class PluginMarket:
             self._validate_entry((staged / "__init__.py").read_bytes(), plugin_id)
             destination = PLUGINS_DIR / plugin_id
             backup = PLUGINS_DIR / f".{plugin_id}.backup"
+            if plugin_id in self._pending_installs:
+                raise RuntimeError("该插件已有安装任务")
             if backup.exists():
                 shutil.rmtree(backup)
             if destination.exists():
                 destination.replace(backup)
+            self._pending_installs[plugin_id] = (destination, backup)
             try:
                 shutil.copytree(staged, destination)
             except Exception:
-                if backup.exists() and not destination.exists():
-                    backup.replace(destination)
+                self.finish(plugin_id, False)
                 raise
             return destination
 
-    @staticmethod
-    def finish(plugin_id: str, success: bool) -> None:
-        file_backup = PLUGINS_DIR / f".{plugin_id}.backup.py"
-        dir_backup = PLUGINS_DIR / f".{plugin_id}.backup"
+    def finish(self, plugin_id: str, success: bool) -> None:
+        transaction = self._pending_installs.get(plugin_id)
+        if transaction is None:
+            return  # 下载/校验失败尚未修改插件，不能删除原安装。
+        destination, backup = transaction
         if not success:
-            if file_backup.exists():
-                file_backup.replace(PLUGINS_DIR / f"{plugin_id}.py")
+            if destination.is_dir():
+                shutil.rmtree(destination)
             else:
-                (PLUGINS_DIR / f"{plugin_id}.py").unlink(missing_ok=True)
-            if dir_backup.exists():
-                destination = PLUGINS_DIR / plugin_id
-                if destination.exists():
-                    shutil.rmtree(destination)
-                dir_backup.replace(destination)
-            elif (PLUGINS_DIR / plugin_id).exists():
-                shutil.rmtree(PLUGINS_DIR / plugin_id)
-            return
-        file_backup.unlink(missing_ok=True)
-        if dir_backup.exists():
-            shutil.rmtree(dir_backup)
+                destination.unlink(missing_ok=True)
+            if backup.exists():
+                backup.replace(destination)
+        elif backup.is_dir():
+            shutil.rmtree(backup)
+        else:
+            backup.unlink(missing_ok=True)
+        self._pending_installs.pop(plugin_id, None)

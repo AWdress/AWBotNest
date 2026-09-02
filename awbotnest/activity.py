@@ -69,11 +69,16 @@ class ActivityTracker:
             counts: dict[str, int] = {}
             success_counts: dict[str, int] = {}
             for key, count in values.items():
-                plugin_id, kind = key.rsplit(":", 1)
-                if kind == "total":
-                    counts[plugin_id] = counts.get(plugin_id, 0) + int(count)
-                else:
+                try:
+                    plugin_id, kind = str(key).rsplit(":", 1)
                     amount = int(count)
+                except (ValueError, TypeError):
+                    continue
+                if kind not in {"total", "success"} or amount < 0:
+                    continue
+                if kind == "total":
+                    counts[plugin_id] = counts.get(plugin_id, 0) + amount
+                else:
                     success_counts[plugin_id] = success_counts.get(plugin_id, 0) + amount
                     successes[plugin_id] += amount
             for plugin_id, count in counts.items():

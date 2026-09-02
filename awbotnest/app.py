@@ -27,7 +27,7 @@ from .config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, 
 from .plugins import PluginRuntime
 from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
-from .auth import admin_dependency
+from .auth import admin_dependency, token_matches
 from .market import PluginMarket, normalize_repo
 from .logs import memory_logs
 from .routing import PluginRoutes, WebhookRequest
@@ -35,7 +35,7 @@ from .backup import BackupManager, MAX_BACKUP_SIZE
 from .activity import activity
 from .resources import ResourceSampler
 from .open_api import register_open_api
-from .migrate import migrate as migrate_v1
+from .migrate import stage_migration
 
 logger = logging.getLogger("awbotnest.api")
 
@@ -124,7 +124,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 return hmac.compare_digest(value, settings.admin_password_hash)
             except ValueError:
                 return False
-        return hmac.compare_digest(password, settings.admin_token)
+        return token_matches(password, settings.admin_token)
 
     def masked_proxy() -> str:
         if not settings.proxy_url:
@@ -509,7 +509,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         if not secret:
             raise HTTPException(status_code=404, detail="Webhook 未开启")
         supplied = str(request.query_params.get("apikey") or "")
-        if not hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
+        if not token_matches(supplied, secret):
             raise HTTPException(status_code=401, detail="apikey 无效")
         body = await request.body()
         if len(body) > 1024 * 1024:
@@ -549,7 +549,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         if not secret:
             raise HTTPException(status_code=404, detail="Webhook 未开启")
         supplied = str(request.query_params.get("apikey") or "")
-        if not hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
+        if not token_matches(supplied, secret):
             raise HTTPException(status_code=401, detail="apikey 无效")
         body = await request.body()
         if len(body) > 1024 * 1024:
@@ -845,6 +845,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         from .cookiecloud import record_sync, sync_history
         path = DATA_DIR / "cookies.json"
         path.unlink(missing_ok=True)
+        (DATA_DIR / "cookiecloud_snapshot.json").unlink(missing_ok=True)
         record_sync("clear", "success", "本地 Cookie 数据已清空")
         return {"ok": True, "sync_status": await cookie_sync_state(), "history": sync_history()}
 
@@ -900,7 +901,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         encrypted = str(payload.get("encrypted") or "") if isinstance(payload, dict) else ""
         supplied_uuid = str(payload.get("uuid") or "") if isinstance(payload, dict) else ""
         configured_uuid = str(settings.cookie_settings.get("uuid") or "")
-        if not supplied_uuid or not hmac.compare_digest(supplied_uuid, configured_uuid):
+        if not token_matches(supplied_uuid, configured_uuid):
             raise HTTPException(status_code=404, detail="Not Found")
         if not encrypted:
             raise HTTPException(status_code=400, detail="缺少加密 Cookie 数据")
@@ -932,7 +933,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.api_route("/cookiecloud/get/{uuid_value}", methods=["GET", "POST"])
     async def cookiecloud_get(uuid_value: str, request: Request):
         check_cookiecloud_rate(request)
-        if not secrets.compare_digest(uuid_value, str(settings.cookie_settings.get("uuid") or "")):
+        if not token_matches(uuid_value, str(settings.cookie_settings.get("uuid") or "")):
             raise HTTPException(status_code=404, detail="Not Found")
         snapshot = DATA_DIR / "cookiecloud_snapshot.json"
         if not snapshot.exists():
@@ -953,7 +954,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 "bot_name": legacy.get("BOT_NAME", settings.bot_name),
                 "default_bot_id": legacy.get("DEFAULT_BOT_ID", settings.default_bot_id),
                 "default_bot_chat_id": legacy.get("DEFAULT_BOT_CHAT_ID", settings.default_bot_chat_id),
-                "web_host": legacy.get("WEB_UI_URL", settings.web_host),
+                "web_host": settings.web_host,
                 "web_port": legacy.get("WEB_UI_PORT", settings.web_port),
                 "bots": legacy.get("BOTS", []),
                 "ai_base_url": settings.ai_base_url,
@@ -1399,6 +1400,11 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             raise HTTPException(status_code=400, detail="账号范围包含不存在的账号")
         settings.plugin_accounts[plugin_id] = [str(item) for item in sessions]
         save_settings(settings)
+        if plugin_id in runtime.loaded:
+            await runtime.disable(plugin_id, persist=False)
+            meta = await runtime.enable(plugin_id)
+            if meta.error:
+                raise HTTPException(status_code=409, detail=meta.error)
         return {"ok": True, "selected": settings.plugin_accounts[plugin_id]}
 
     @app.get("/api/plugins/{plugin_id}/webhook", dependencies=[Depends(require_admin)])
@@ -1547,7 +1553,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.get("/api/plugins/{plugin_id}/fe/{path:path}")
     async def plugin_frontend_asset(plugin_id: str, path: str, request: Request):
         resource_token = request.cookies.get("awbotnest_resource", "")
-        if not resource_token or not hmac.compare_digest(resource_token, settings.admin_token):
+        if not token_matches(resource_token, settings.admin_token):
             raise HTTPException(status_code=403, detail="无权访问插件资源，请重新登录")
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
         if meta is None or meta.render_mode != "vue":
@@ -1658,7 +1664,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         protocols = [item.strip() for item in websocket.headers.get("sec-websocket-protocol", "").split(",")]
         auth_protocol = next((item for item in protocols if item.startswith("auth.")), "")
         token = auth_protocol.removeprefix("auth.")
-        token_ok = bool(token) and hmac.compare_digest(token, settings.admin_token)
+        token_ok = token_matches(token, settings.admin_token)
         if not token_ok:
             await websocket.close(code=4401)
             return
@@ -1725,33 +1731,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         if len(content) > MAX_BACKUP_SIZE:
             raise HTTPException(status_code=400, detail='V1 数据包超过 512 MB')
 
-        def run_migration() -> dict[str, object]:
-          with tempfile.TemporaryDirectory(prefix='awbotnest-v1-') as temp_dir:
-            archive = Path(temp_dir) / 'v1.zip'
-            archive.write_bytes(content)
-            source = Path(temp_dir) / 'source'
-            source.mkdir()
-            with zipfile.ZipFile(archive) as zf:
-                total = 0
-                for item in zf.infolist():
-                    target = (source / item.filename).resolve()
-                    if source.resolve() not in target.parents and target != source.resolve():
-                        raise ValueError('压缩包包含不安全路径')
-                    total += item.file_size
-                    if total > 1024 * 1024 * 1024:
-                        raise ValueError('压缩包解压内容超过 1 GB')
-                zf.extractall(source)
-            root = source
-            if not (root / 'data').exists():
-                candidates = [p for p in source.iterdir() if p.is_dir() and (p / 'data').exists()]
-                if candidates:
-                    root = candidates[0]
-            result = migrate_v1(root)
-            result['restart_required'] = True
-            return result
-
         try:
-            return await asyncio.to_thread(run_migration)
+            return await asyncio.to_thread(stage_migration, content)
         except (zipfile.BadZipFile, OSError, ValueError, json.JSONDecodeError) as exc:
             raise HTTPException(status_code=400, detail=f'V1 数据包无效：{exc}') from exc
 
@@ -1807,11 +1788,15 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/plugins/store/install", dependencies=[Depends(require_admin)])
     async def install_market_plugin(body: MarketInstallBody):
+        async with market.install_lock:
+            return await _install_market_plugin(body)
+
+    async def _install_market_plugin(body: MarketInstallBody):
         plugin_id = str(body.plugin.get("id") or "")
         was_loaded = plugin_id in runtime.loaded
         try:
             if was_loaded:
-                await runtime.disable(plugin_id)
+                await runtime.disable(plugin_id, persist=False)
             destination = await market.install(body.plugin)
         except ValueError as exc:
             if was_loaded:
@@ -1824,6 +1809,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
         if meta is None or meta.error:
             market.finish(plugin_id, False)
+            if was_loaded:
+                await runtime.enable(plugin_id)
             raise HTTPException(status_code=409, detail=meta.error if meta else "插件安装后未被识别")
         if was_loaded:
             meta = await runtime.enable(plugin_id)
@@ -1875,7 +1862,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             if not isinstance(plugin, dict):
                 continue
             try:
-                await market.install(plugin)
+                await install_market_plugin(MarketInstallBody(plugin=plugin))
                 installed.append(str(plugin.get("id") or ""))
             except Exception as exc:
                 errors.append(f"{plugin.get('id') or 'unknown'}: {exc}")

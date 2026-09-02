@@ -8,25 +8,31 @@ export const platformStatusLoading = ref(false)
 let pollingTimer = null
 let statusRequest = null
 let visibilityBound = false
+let generation = 0
 
 export async function refreshPlatformStatus(force = false) {
   if (document.hidden && !force) return platformStatus.value
   if (statusRequest) return statusRequest
 
   platformStatusLoading.value = !platformStatus.value
+  const startedGeneration = generation
   statusRequest = api.status(force)
     .then((data) => {
-      platformStatus.value = data
-      platformStatusError.value = ''
+      if (startedGeneration === generation) {
+        platformStatus.value = data
+        platformStatusError.value = ''
+      }
       return data
     })
     .catch((error) => {
-      platformStatusError.value = error.message || '读取平台状态失败'
+      if (startedGeneration === generation) platformStatusError.value = error.message || '读取平台状态失败'
       throw error
     })
     .finally(() => {
-      statusRequest = null
-      platformStatusLoading.value = false
+      if (startedGeneration === generation) {
+        statusRequest = null
+        platformStatusLoading.value = false
+      }
     })
 
   return statusRequest
@@ -50,6 +56,12 @@ export function startPlatformStatusPolling(interval = 10000) {
 }
 
 export function stopPlatformStatusPolling() {
+  generation += 1
+  statusRequest = null
+  platformStatus.value = null
+  platformStatusError.value = ''
+  platformStatusLoading.value = false
+  api.clearCache()
   if (pollingTimer) window.clearInterval(pollingTimer)
   pollingTimer = null
   if (visibilityBound) document.removeEventListener('visibilitychange', handleVisibilityChange)

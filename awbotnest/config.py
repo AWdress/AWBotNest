@@ -73,7 +73,7 @@ def _env(name: str, default: object) -> object:
     return default if value is None else value
 
 
-def load_settings() -> Settings:
+def load_settings(*, persist_defaults: bool = True) -> Settings:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
     PLUGINS_DIR.mkdir(parents=True, exist_ok=True)
@@ -81,10 +81,11 @@ def load_settings() -> Settings:
     if CONFIG_FILE.exists():
         try:
             value = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            if isinstance(value, dict):
-                raw = value
-        except (OSError, json.JSONDecodeError):
-            raw = {}
+            if not isinstance(value, dict):
+                raise ValueError("配置文件必须是 JSON 对象")
+            raw = value
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("配置文件无法读取，已保留原文件，请从备份恢复") from exc
     raw_bots = raw.get("bots") or []
     bots = [
         BotSettings(
@@ -110,7 +111,7 @@ def load_settings() -> Settings:
         web_host=str(_env("web_host", raw.get("web_host", "0.0.0.0")) or "0.0.0.0"),
         web_port=int(_env("web_port", raw.get("web_port", 18001)) or 18001),
         enabled_plugins=[
-            str(item) for item in (raw.get("enabled_plugins") or ["hello"])
+            str(item) for item in (raw.get("enabled_plugins", []) or [])
             if str(item).strip()
         ],
         user_sessions=[
@@ -155,13 +156,25 @@ def load_settings() -> Settings:
             "enabled": True, "keep_lines": 1000, "hour": 3, "minute": 0,
         },
     )
-    if not CONFIG_FILE.exists() or generated_admin_token:
+    if persist_defaults and (not CONFIG_FILE.exists() or generated_admin_token):
         save_settings(settings)
     return settings
 
 
 def save_settings(settings: Settings) -> None:
+    import tempfile
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    temp = CONFIG_FILE.with_suffix(".tmp")
-    temp.write_text(json.dumps(asdict(settings), ensure_ascii=False, indent=2), encoding="utf-8")
-    temp.replace(CONFIG_FILE)
+    payload = json.dumps(asdict(settings), ensure_ascii=False, indent=2)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DATA_DIR,
+                                     prefix=".config-", suffix=".tmp", delete=False) as stream:
+        temp = Path(stream.name)
+        try:
+            stream.write(payload)
+        except BaseException:
+            stream.close()
+            temp.unlink(missing_ok=True)
+            raise
+    try:
+        temp.replace(CONFIG_FILE)
+    finally:
+        temp.unlink(missing_ok=True)

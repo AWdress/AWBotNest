@@ -16,8 +16,14 @@ function preloadAvatar(url) {
   if (!url) return Promise.resolve(true)
   return new Promise((resolve) => {
     const image = new Image()
-    image.onload = () => resolve(true)
-    image.onerror = () => resolve(false)
+    const timer = setTimeout(() => finish(false), 6000)
+    function finish(ok) {
+      clearTimeout(timer)
+      image.onload = image.onerror = null
+      resolve(ok)
+    }
+    image.onload = () => finish(true)
+    image.onerror = () => finish(false)
     image.src = url
   })
 }
@@ -47,7 +53,7 @@ export async function loadUiProfile(force = false) {
       if (generation === profileGeneration) profileState.value = next
       return next
     })
-    .finally(() => { profileRequest = null })
+    .finally(() => { if (generation === profileGeneration) profileRequest = null })
   return profileRequest
 }
 

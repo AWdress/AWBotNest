@@ -2,7 +2,7 @@ name: docker-build
 
 on:
   push:
-    branches: [main]
+    branches: [v2]
     paths:
       - "Dockerfile"
       - "requirements.txt"

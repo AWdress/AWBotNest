@@ -160,7 +160,7 @@ class TelegramAccounts:
             raise RuntimeError("请先配置 Telegram API_ID/API_HASH")
         session_name = session_name.strip()
         phone = phone.strip()
-        if not session_name or not session_name.replace("_", "").isalnum():
+        if not re.fullmatch(r"[A-Za-z0-9_]+", session_name):
             raise ValueError("会话名称只能包含字母、数字和下划线")
         if not phone:
             raise ValueError("手机号不能为空")

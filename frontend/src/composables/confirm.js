@@ -13,6 +13,8 @@ export const confirmState = reactive({
 })
 
 export function confirm(opts = {}) {
+  // A second prompt must settle the previous caller instead of leaving it waiting forever.
+  if (confirmState._resolve) _resolveConfirm(false)
   confirmState.title = opts.title || '确认操作'
   confirmState.message = opts.message || ''
   confirmState.confirmText = opts.confirmText || '确定'
