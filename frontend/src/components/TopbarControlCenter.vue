@@ -517,10 +517,14 @@ onUnmounted(() => {
       </div>
       <div class="user-menu">
         <div class="appearance-menu">
-          <label>主题</label>
-          <select v-model="themeMode" @change="saveAppearance"><option value="dark">深色</option><option value="transparent">透明</option></select>
-          <label>背景图片或随机 API</label>
+          <div class="appearance-heading"><span class="menu-action-icon">✦</span><strong>定制主题</strong></div>
+          <label>背景图片或随机图片 API</label>
           <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认背景" @change="saveAppearance">
+          <label class="theme-label">主题</label>
+          <div class="theme-options" role="radiogroup" aria-label="主题">
+            <button type="button" :class="{ selected: themeMode === 'transparent' }" @click="themeMode='transparent'; saveAppearance()">透明主题</button>
+            <button type="button" :class="{ selected: themeMode === 'dark' }" @click="themeMode='dark'; saveAppearance()">深色主题</button>
+          </div>
         </div>
         <button class="menu-action" @click="goSettings"><span class="menu-action-icon">♙</span><span>个人信息</span></button>
         <button class="menu-action" @click.stop="openModal('about')"><span class="menu-action-icon">ⓘ</span><span>关于 AWBotNest</span></button>
@@ -744,7 +748,13 @@ onUnmounted(() => {
 .user-menu { display: grid; padding: 10px 12px 12px; }
 .appearance-menu { display: grid; gap: 6px; padding: 8px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .appearance-menu label { color: var(--text-muted); font-size: 10px; }
-.appearance-menu select, .appearance-input { width: 100%; min-width: 190px; padding: 7px 8px; border: 1px solid var(--border-light); border-radius: 7px; background: var(--bg-elevated); color: var(--text-primary); font: inherit; font-size: 11px; }
+.appearance-heading { display: flex; align-items: center; gap: 9px; padding: 2px 4px 5px; color: var(--text-primary); font-size: 13px; }
+.appearance-heading .menu-action-icon { color: var(--v2-violet); font-size: 17px; }
+.appearance-menu .appearance-input { width: 100%; min-width: 190px; padding: 8px 10px; border: 1px solid var(--border-light); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); font: inherit; font-size: 11px; }
+.theme-label { margin-top: 5px; }
+.theme-options { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.user-menu .theme-options button { padding: 8px 6px; border: 1px solid var(--border-light); border-radius: 8px; background: var(--bg-elevated); color: var(--text-secondary); text-align: center; font-size: 11px; }
+.user-menu .theme-options button.selected { border-color: var(--accent); background: var(--accent-dim); color: var(--text-primary); }
 .user-menu button { padding: 12px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .user-menu button:hover { background: var(--bg-hover); }
 .menu-action { display: flex; align-items: center; gap: 13px; font-size: 14px; }
