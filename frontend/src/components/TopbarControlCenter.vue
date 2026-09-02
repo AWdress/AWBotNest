@@ -522,10 +522,10 @@ onUnmounted(() => {
           <label>背景图片或随机 API</label>
           <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认背景" @change="saveAppearance">
         </div>
-        <button @click="goSettings">个人信息</button>
-        <button @click.stop="openModal('about')">关于 AWBotNest</button>
-        <button :disabled="restarting" @click="panel=''; emit('restart')">{{ restarting ? '重启中…' : '重启' }}</button>
-        <button class="danger" @click="emit('logout')">退出登录</button>
+        <button class="menu-action" @click="goSettings"><span class="menu-action-icon">♙</span><span>个人信息</span></button>
+        <button class="menu-action" @click.stop="openModal('about')"><span class="menu-action-icon">ⓘ</span><span>关于 AWBotNest</span></button>
+        <button class="menu-action" :disabled="restarting" @click="panel=''; emit('restart')"><span class="menu-action-icon">↻</span><span>{{ restarting ? '重启中…' : '重启' }}</span></button>
+        <button class="menu-action danger" @click="emit('logout')"><span class="menu-action-icon">⇥</span><span>退出登录</span></button>
       </div>
       <div class="user-status"><span :class="{ online }"></span>{{ connectionLabel }}<b v-if="version">v{{ version }}</b></div>
     </div>
@@ -736,17 +736,20 @@ onUnmounted(() => {
 .notice-text { margin: 4px 0; color: var(--text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .notice-item.expanded .notice-text { white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; word-break: break-word; }
 .notice-body small { color: var(--text-muted); }
-.user-pop { width: 280px; }
-.user-profile { display: flex; align-items: center; gap: 12px; padding: 18px; border-bottom: 1px solid var(--border); }
+.user-pop { width: 300px; border-radius: 16px; overflow: hidden; }
+.user-profile { display: flex; align-items: center; gap: 14px; padding: 22px 20px 18px; border-bottom: 1px solid var(--border); }
 .avatar-large { width: 58px; height: 58px; display: grid; place-items: center; overflow: hidden; flex: 0 0 58px; border: 1px solid var(--accent); border-radius: 13px; background: linear-gradient(145deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; }
 .user-profile small, .user-profile strong { display: block; }
 .user-profile small { color: var(--accent); }
-.user-menu { display: grid; padding: 8px; }
+.user-menu { display: grid; padding: 10px 12px 12px; }
 .appearance-menu { display: grid; gap: 6px; padding: 8px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .appearance-menu label { color: var(--text-muted); font-size: 10px; }
 .appearance-menu select, .appearance-input { width: 100%; min-width: 190px; padding: 7px 8px; border: 1px solid var(--border-light); border-radius: 7px; background: var(--bg-elevated); color: var(--text-primary); font: inherit; font-size: 11px; }
-.user-menu button { padding: 11px 12px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.user-menu button { padding: 12px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .user-menu button:hover { background: var(--bg-hover); }
+.menu-action { display: flex; align-items: center; gap: 13px; font-size: 14px; }
+.menu-action-icon { width: 22px; color: var(--text-secondary); font-size: 21px; line-height: 1; text-align: center; }
+.menu-action.danger .menu-action-icon { color: var(--danger); }
 .user-menu .danger { color: var(--danger); }
 .user-status { display: flex; align-items: center; gap: 7px; padding: 12px 18px; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 11px; }
 .user-status > span { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
