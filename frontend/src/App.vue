@@ -34,8 +34,10 @@ const connectionLabel = computed(() => online.value
 
 function applyAppearance() {
   document.documentElement.dataset.theme = localStorage.getItem('awbotnest-theme') || 'dark'
-  // 默认不请求外部图片，避免网络波动拖慢登录和首屏；用户可在外观设置中填写随机图片 API。
-  const image = localStorage.getItem('awbotnest-bg-image') || ''
+  // 透明主题提供电影质感默认背景；用户填写的图片/API 地址优先。
+  const image = localStorage.getItem('awbotnest-bg-image') || (document.documentElement.dataset.theme === 'transparent'
+    ? 'https://images.unsplash.com/photo-1489599849927-2ee91cede3ba?auto=format&fit=crop&w=2400&q=82'
+    : '')
   document.documentElement.style.setProperty('--app-bg-image', image ? `url("${image.replace(/"/g, '')}")` : 'none')
 }
 
