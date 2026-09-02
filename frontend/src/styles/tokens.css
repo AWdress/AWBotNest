@@ -61,7 +61,7 @@
 :root[data-theme="transparent"] .topbar { background: rgba(8,13,22,.52) !important; backdrop-filter: blur(18px); }
 :root[data-theme="transparent"] .card,
 :root[data-theme="transparent"] .surface,
-:root[data-theme="transparent"] .metric-strip { background: rgba(13,22,35,.48) !important; backdrop-filter: blur(14px); }
+:root[data-theme="transparent"] .metric-strip { background: rgba(13,22,35,.68) !important; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
 :root[data-theme="transparent"] .control-pop,
 :root[data-theme="transparent"] .control-modal,
 :root[data-theme="transparent"] .dropdown { background: rgba(13,22,35,.68) !important; backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
@@ -99,6 +99,8 @@ body::before {
   pointer-events: none;
   background: radial-gradient(600px 360px at 50% 0%, rgba(255, 255, 255, .018), transparent 72%);
 }
+:root[data-theme="transparent"] body::before { z-index: 0; background: rgba(4, 8, 15, .42); }
+:root[data-theme="transparent"] #app { position: relative; z-index: 1; }
 
 a { color: inherit; text-decoration: none; }
 
