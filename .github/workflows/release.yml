@@ -31,9 +31,8 @@ jobs:
           {
             echo "tags<<__EOF__"
             echo "${IMAGE}:${VER}"
-            if [[ "${VER}" != *"_dev" && "${VER}" != *"-dev" ]]; then
-              echo "${IMAGE}:latest"
-            fi
+            # 每个 V2 构建都同步 latest，保证一键安装始终可用。
+            echo "${IMAGE}:latest"
             echo "__EOF__"
             echo "labels<<__EOF__"
             echo "org.opencontainers.image.title=awbotnest_v2"
