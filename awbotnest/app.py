@@ -31,7 +31,7 @@ from .auth import admin_dependency
 from .market import PluginMarket, normalize_repo
 from .logs import memory_logs
 from .routing import PluginRoutes, WebhookRequest
-from .backup import BackupManager
+from .backup import BackupManager, MAX_BACKUP_SIZE
 from .activity import activity
 from .resources import ResourceSampler
 from .open_api import register_open_api
@@ -1721,23 +1721,39 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     async def system_migrate_v1(file: UploadFile = File(...)):
         if not (file.filename or '').lower().endswith('.zip'):
             raise HTTPException(status_code=400, detail='请上传 V1 数据目录的 zip 文件')
-        with tempfile.TemporaryDirectory(prefix='awbotnest-v1-') as temp_dir:
+        content = await file.read(MAX_BACKUP_SIZE + 1)
+        if len(content) > MAX_BACKUP_SIZE:
+            raise HTTPException(status_code=400, detail='V1 数据包超过 512 MB')
+
+        def run_migration() -> dict[str, object]:
+          with tempfile.TemporaryDirectory(prefix='awbotnest-v1-') as temp_dir:
             archive = Path(temp_dir) / 'v1.zip'
-            archive.write_bytes(await file.read())
+            archive.write_bytes(content)
             source = Path(temp_dir) / 'source'
             source.mkdir()
-            try:
-                with zipfile.ZipFile(archive) as zf:
-                    zf.extractall(source)
-                # 兼容 zip 内包了一层目录的导出结构。
-                root = source
-                if not (root / 'data').exists():
-                    candidates = [p for p in source.iterdir() if p.is_dir() and (p / 'data').exists()]
-                    if candidates:
-                        root = candidates[0]
-                return migrate_v1(root)
-            except (zipfile.BadZipFile, OSError, ValueError, json.JSONDecodeError) as exc:
-                raise HTTPException(status_code=400, detail=f'V1 数据包无效：{exc}') from exc
+            with zipfile.ZipFile(archive) as zf:
+                total = 0
+                for item in zf.infolist():
+                    target = (source / item.filename).resolve()
+                    if source.resolve() not in target.parents and target != source.resolve():
+                        raise ValueError('压缩包包含不安全路径')
+                    total += item.file_size
+                    if total > 1024 * 1024 * 1024:
+                        raise ValueError('压缩包解压内容超过 1 GB')
+                zf.extractall(source)
+            root = source
+            if not (root / 'data').exists():
+                candidates = [p for p in source.iterdir() if p.is_dir() and (p / 'data').exists()]
+                if candidates:
+                    root = candidates[0]
+            result = migrate_v1(root)
+            result['restart_required'] = True
+            return result
+
+        try:
+            return await asyncio.to_thread(run_migration)
+        except (zipfile.BadZipFile, OSError, ValueError, json.JSONDecodeError) as exc:
+            raise HTTPException(status_code=400, detail=f'V1 数据包无效：{exc}') from exc
 
     @app.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():

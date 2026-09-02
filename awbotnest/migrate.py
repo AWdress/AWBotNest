@@ -54,14 +54,16 @@ def migrate(source: Path) -> dict[str, object]:
     settings.bot_routing = {
         str(key): str(value) for key, value in (old_plugins.get("bot_choice") or {}).items()
     }
-    old_order = _read(source / "data" / "webui" / "plugin_order.json")
-    if not old_order:
-        try:
-            value = json.loads((source / "data" / "webui" / "plugin_order.json").read_text(encoding="utf-8"))
-            if isinstance(value, list):
-                settings.plugin_order = [str(item) for item in value]
-        except (OSError, json.JSONDecodeError):
-            pass
+    try:
+        value = json.loads((source / "data" / "webui" / "plugin_order.json").read_text(encoding="utf-8"))
+        if isinstance(value, list):
+            settings.plugin_order = [str(item) for item in value]
+        elif isinstance(value, dict):
+            order = value.get("order") or value.get("plugins") or []
+            if isinstance(order, list):
+                settings.plugin_order = [str(item) for item in order]
+    except (OSError, json.JSONDecodeError):
+        pass
     settings.ai_base_url = str(old_config.get("AI_BASE_URL") or settings.ai_base_url)
     settings.ai_api_key = str(old_config.get("AI_API_KEY") or settings.ai_api_key)
     settings.ai_model = str(old_config.get("AI_MODEL") or settings.ai_model)

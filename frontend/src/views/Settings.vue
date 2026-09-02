@@ -848,7 +848,10 @@ async function onMigrateV1File(e) {
   const ok = await confirm({ title: 'V1 数据迁移', message: '将把 V1 配置、插件配置和数据迁移到当前 V2。建议先备份，继续？', confirmText: '开始迁移' })
   if (!ok) return
   migrateV1Busy.value = true
-  try { const result = await api.migrateV1(file); toast.success(result.message || 'V1 数据迁移完成') }
+  try {
+    const result = await api.migrateV1(file)
+    toast.success(`${result.message || 'V1 数据迁移完成'}${result.restart_required ? ' 请重启平台使全部配置生效。' : ''}`)
+  }
   catch (err) { toast.error('迁移失败：' + err.message) }
   finally { migrateV1Busy.value = false }
 }
