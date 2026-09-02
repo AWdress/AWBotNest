@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted, computed, nextTick } from 'vue'
 import { getToken } from '../api'
 import { formatLogTime } from '../utils/logTime'
-import { isDisplayLog, logLevelLabel, logMessageLabel, logSourceLabel } from '../utils/logDisplay'
+import { isDisplayLog, logLevelLabel, logMessageLabel } from '../utils/logDisplay'
 
 const logs = ref([])
 const connected = ref(false)
@@ -139,7 +139,6 @@ onUnmounted(() => {
       <div v-for="(l, i) in filtered" :key="l.id || `${l.timestamp}-${i}`" class="log-line">
         <span class="time">{{ logTime(l) }}</span>
         <span class="level" :class="levelClass(l.level)">{{ logLevelLabel(l.level) }}</span>
-        <span class="source">{{ logSourceLabel(l.source) }}</span>
         <span class="msg">{{ logMessageLabel(l.msg) }}</span>
       </div>
     </div>

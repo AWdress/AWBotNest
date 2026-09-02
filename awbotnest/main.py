@@ -26,9 +26,7 @@ from .market import PluginMarket
 async def run_once() -> bool:
     logging.getLogger().addHandler(memory_logs)
     logger = logging.getLogger("awbotnest.main")
-    logger.info("==================================================")
     logger.info("  AWBotNest v%s (Python %s)", __version__, platform.python_version())
-    logger.info("==================================================")
 
     restored = BackupManager.apply_pending()
     if restored:
@@ -113,7 +111,6 @@ async def run_once() -> bool:
     display_host = "127.0.0.1" if settings.web_host in {"0.0.0.0", "::"} else settings.web_host
     logger.info("Web 控制台已启动，访问地址: http://%s:%s", display_host, settings.web_port)
     logger.info("AWBotNest 启动完成")
-    logger.info("==================================================")
 
     restart_event = asyncio.Event()
     app = create_app(settings, accounts, runtime, scheduler, routes, restart_event, market)
