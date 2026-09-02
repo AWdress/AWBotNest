@@ -1714,7 +1714,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/backups", dependencies=[Depends(require_admin)])
     async def create_backup():
-        archive = BackupManager.create()
+        archive = await asyncio.to_thread(BackupManager.create)
         return {"ok": True, "filename": archive.name}
 
     @app.post("/api/system/migrate-v1", dependencies=[Depends(require_admin)])
@@ -1741,7 +1741,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():
-        archive = BackupManager.create()
+        archive = await asyncio.to_thread(BackupManager.create)
         return FileResponse(archive, filename=archive.name, media_type="application/zip")
 
     @app.get("/api/backups", dependencies=[Depends(require_admin)])
