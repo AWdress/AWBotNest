@@ -416,10 +416,10 @@ onUnmounted(() => {
   line-height: 1;
   padding: 2px 6px;
   border-radius: 999px;
-  background: linear-gradient(135deg, rgba(139,92,246,.34), rgba(34,211,238,.22));
-  color: #c4b5fd;
-  border: 1px solid rgba(167,139,250,.58);
-  box-shadow: 0 0 14px rgba(139,92,246,.3);
+  background: linear-gradient(135deg, rgba(48,128,240,.24), rgba(16,176,128,.16));
+  color: #93c5fd;
+  border: 1px solid rgba(96,165,250,.42);
+  box-shadow: 0 0 10px rgba(48,128,240,.18);
   letter-spacing: 0.5px;
 }
 .brand-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; letter-spacing: 0.5px; }
@@ -525,7 +525,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   position: relative;
   z-index: 40;
-  background: linear-gradient(100deg, rgba(8,13,22,.94), rgba(26,20,49,.72) 66%, rgba(8,13,22,.84));
+  background: linear-gradient(100deg, rgba(8,13,22,.94), rgba(14,25,40,.84) 66%, rgba(8,13,22,.88));
   backdrop-filter: blur(18px);
 }
 .page-heading { min-width: 0; display: flex; flex-direction: column; justify-content: center; position: relative; padding-bottom: 5px; }
