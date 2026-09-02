@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import platform
+import json
 
 import uvicorn
 
@@ -21,6 +22,8 @@ from .notifier import NotificationService
 from .backup import BackupManager
 from .activity import activity
 from .market import PluginMarket
+from .migrate import migrate as migrate_v1
+from .config import APP_ROOT, DATA_DIR
 
 
 async def run_once() -> bool:
@@ -31,6 +34,20 @@ async def run_once() -> bool:
     restored = BackupManager.apply_pending()
     if restored:
         logging.getLogger("awbotnest.backup").info("已应用待恢复备份")
+    # Docker 直升：同一数据卷中检测 V1 配置并只自动迁移一次。
+    migration_marker = DATA_DIR / ".v1-migrated"
+    legacy_config = DATA_DIR / "config.json"
+    if not migration_marker.exists() and legacy_config.exists():
+        try:
+            legacy = json.loads(legacy_config.read_text(encoding="utf-8"))
+            if isinstance(legacy, dict) and any(key in legacy for key in ("API_ID", "API_HASH", "BOTS", "AI_SERVICES")):
+                logger.info("检测到 V1 数据，开始自动迁移到 V2…")
+                result = migrate_v1(APP_ROOT)
+                migration_marker.write_text("v2\n", encoding="utf-8")
+                logger.info("V1 数据自动迁移完成：插件配置 %d 项，复制文件 %d 个",
+                            result.get("plugin_config_count", 0), len(result.get("data_files_copied", [])))
+        except Exception as exc:
+            logger.exception("V1 数据自动迁移失败，继续启动 V2：%s", exc)
     settings = load_settings()
     accounts = TelegramAccounts(settings)
     scheduler = PluginScheduler()
