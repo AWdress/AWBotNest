@@ -32,6 +32,12 @@ const connectionLabel = computed(() => online.value
   ? '连接正常'
   : (platformStatusError.value ? '连接异常' : '正在连接'))
 
+function applyAppearance() {
+  document.documentElement.dataset.theme = localStorage.getItem('awbotnest-theme') || 'dark'
+  const image = localStorage.getItem('awbotnest-bg-image') || 'https://api.btstu.cn/sjbz/api.php?lx=dongman'
+  document.documentElement.style.setProperty('--app-bg-image', image ? `url("${image.replace(/"/g, '')}")` : 'none')
+}
+
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
 const restoringSession = ref(!!getToken())
@@ -229,6 +235,8 @@ const icons = {
 let updateTimer = null
 
 onMounted(async () => {
+  applyAppearance()
+  window.addEventListener('awbotnest-appearance', applyAppearance)
   // 恢复登录态后补种资源 Cookie，并确认账号已经完成首次设置。
   if (getToken()) {
     await onAuthed()
@@ -239,6 +247,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('awbotnest-appearance', applyAppearance)
   stopPlatformStatusPolling()
   cancelDeferredRoutePreload?.()
   clearInterval(updateTimer)

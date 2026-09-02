@@ -52,6 +52,7 @@
 
   --sidebar-width: 224px;
 }
+:root[data-theme="transparent"] { --bg-base: rgba(7,12,20,.62); --bg-sidebar: rgba(8,13,21,.68); --bg-card: rgba(13,22,35,.58); --bg-elevated: rgba(23,33,49,.62); --bg-panel: rgba(12,21,34,.58); --border: rgba(125,155,190,.22); --border-light: rgba(150,180,220,.34); }
 
 * {
   box-sizing: border-box;
@@ -74,6 +75,8 @@ body {
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  background-image: var(--app-bg-image), radial-gradient(900px 520px at 22% -12%, rgba(48,128,240,.13), transparent 68%), radial-gradient(760px 480px at 92% 108%, rgba(16,176,128,.08), transparent 70%);
+  background-size: cover, auto, auto; background-position: center; background-attachment: fixed;
 }
 
 body::before {

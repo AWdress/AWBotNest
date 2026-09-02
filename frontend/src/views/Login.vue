@@ -78,7 +78,8 @@ async function submit() {
 <style scoped>
 .login-bg {
   height: 100vh; display: flex; align-items: center; justify-content: center;
-  background: radial-gradient(1200px 600px at 50% 0%, #0d1426 0%, #0a0e17 55%, #07090f 100%);
+  background-image: var(--app-bg-image), radial-gradient(1200px 600px at 50% 0%, #0d1426 0%, #0a0e17 55%, #07090f 100%);
+  background-size: cover, auto; background-position: center;
   position: relative; overflow: hidden;
 }
 .login-bg::before, .login-bg::after {

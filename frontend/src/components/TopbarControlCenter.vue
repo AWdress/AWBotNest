@@ -53,6 +53,14 @@ let networkSequence = Promise.resolve()
 const seenLogs = new Set()
 const quickLogsBox = ref(null)
 const modalDialog = ref(null)
+const themeMode = ref(localStorage.getItem('awbotnest-theme') || 'dark')
+const backgroundUrl = ref(localStorage.getItem('awbotnest-bg-image') || '')
+function saveAppearance() {
+  localStorage.setItem('awbotnest-theme', themeMode.value)
+  localStorage.setItem('awbotnest-bg-image', backgroundUrl.value.trim())
+  window.dispatchEvent(new Event('awbotnest-appearance'))
+  toast.success('外观设置已保存')
+}
 
 function jobNextRun(job) {
   const value = job?.next_run_at || job?.next_run || job?.next
@@ -508,6 +516,12 @@ onUnmounted(() => {
         <div><small>管理员</small><strong>{{ profile.username }}</strong></div>
       </div>
       <div class="user-menu">
+        <div class="appearance-menu">
+          <label>主题</label>
+          <select v-model="themeMode" @change="saveAppearance"><option value="dark">深色</option><option value="transparent">透明</option></select>
+          <label>背景图片或随机 API</label>
+          <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认背景" @change="saveAppearance">
+        </div>
         <button @click="goSettings">个人信息</button>
         <button @click.stop="openModal('about')">关于 AWBotNest</button>
         <button :disabled="restarting" @click="panel=''; emit('restart')">{{ restarting ? '重启中…' : '重启' }}</button>
@@ -728,6 +742,9 @@ onUnmounted(() => {
 .user-profile small, .user-profile strong { display: block; }
 .user-profile small { color: var(--accent); }
 .user-menu { display: grid; padding: 8px; }
+.appearance-menu { display: grid; gap: 6px; padding: 8px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
+.appearance-menu label { color: var(--text-muted); font-size: 10px; }
+.appearance-menu select, .appearance-input { width: 100%; min-width: 190px; padding: 7px 8px; border: 1px solid var(--border-light); border-radius: 7px; background: var(--bg-elevated); color: var(--text-primary); font: inherit; font-size: 11px; }
 .user-menu button { padding: 11px 12px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .user-menu button:hover { background: var(--bg-hover); }
 .user-menu .danger { color: var(--danger); }
