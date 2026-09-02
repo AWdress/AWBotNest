@@ -55,6 +55,7 @@ const quickLogsBox = ref(null)
 const modalDialog = ref(null)
 const themeMode = ref(localStorage.getItem('awbotnest-theme') || 'dark')
 const backgroundUrl = ref(localStorage.getItem('awbotnest-bg-image') || '')
+const themeSubmenu = ref(false)
 function saveAppearance() {
   localStorage.setItem('awbotnest-theme', themeMode.value)
   localStorage.setItem('awbotnest-bg-image', backgroundUrl.value.trim())
@@ -516,7 +517,8 @@ onUnmounted(() => {
         <div><small>管理员</small><strong>{{ profile.username }}</strong></div>
       </div>
       <div class="user-menu">
-        <div class="appearance-menu">
+        <button class="menu-action theme-trigger" @click.stop="themeSubmenu = !themeSubmenu"><span class="menu-action-icon">▦</span><span><b>主题</b><small>{{ themeMode === 'transparent' ? '透明 · 垂直' : '深色' }}</small></span><em>›</em></button>
+        <div v-if="themeSubmenu" class="theme-submenu">
           <div class="appearance-heading"><span class="menu-action-icon">✦</span><strong>定制主题</strong></div>
           <label>背景图片或随机图片 API</label>
           <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认背景" @change="saveAppearance">
@@ -740,12 +742,17 @@ onUnmounted(() => {
 .notice-text { margin: 4px 0; color: var(--text-secondary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .notice-item.expanded .notice-text { white-space: pre-wrap; overflow: visible; overflow-wrap: anywhere; word-break: break-word; }
 .notice-body small { color: var(--text-muted); }
-.user-pop { width: 300px; border-radius: 16px; overflow: hidden; }
+.user-pop { width: 300px; border-radius: 16px; overflow: visible; }
 .user-profile { display: flex; align-items: center; gap: 14px; padding: 22px 20px 18px; border-bottom: 1px solid var(--border); }
 .avatar-large { width: 58px; height: 58px; display: grid; place-items: center; overflow: hidden; flex: 0 0 58px; border: 1px solid var(--accent); border-radius: 13px; background: linear-gradient(145deg, var(--accent), var(--accent-2)); color: #fff; font-weight: 700; }
 .user-profile small, .user-profile strong { display: block; }
 .user-profile small { color: var(--accent); }
 .user-menu { display: grid; padding: 10px 12px 12px; }
+.theme-trigger span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 1px; }
+.theme-trigger b { font-size: 14px; font-weight: 500; }
+.theme-trigger small { color: var(--text-secondary); font-size: 11px; }
+.theme-trigger em { color: var(--text-secondary); font-size: 24px; font-style: normal; line-height: 1; }
+.theme-submenu { position: absolute; top: 210px; right: calc(100% + 12px); width: 290px; padding: 16px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.88); box-shadow: var(--shadow-float); backdrop-filter: blur(22px); z-index: 2; }
 .appearance-menu { display: grid; gap: 6px; padding: 8px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .appearance-menu label { color: var(--text-muted); font-size: 10px; }
 .appearance-heading { display: flex; align-items: center; gap: 9px; padding: 2px 4px 5px; color: var(--text-primary); font-size: 13px; }
