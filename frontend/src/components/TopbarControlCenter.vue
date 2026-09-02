@@ -103,11 +103,12 @@ const filteredLogs = computed(() => logs.value.filter(item => {
 
 function togglePanel(name) {
   panel.value = panel.value === name ? '' : name
+  if (name !== 'user' || panel.value !== 'user') themeSubmenu.value = false
   if (panel.value === 'notifications') loadNotifications()
 }
 
 function closePanels(event) {
-  if (!event?.target?.closest?.('.control-center')) panel.value = ''
+  if (!event?.target?.closest?.('.control-center')) { panel.value = ''; themeSubmenu.value = false }
 }
 
 async function loadNotifications() {
