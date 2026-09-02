@@ -2,7 +2,7 @@ name: release
 
 on:
   push:
-    tags: ["v*.*.*"]
+    tags: ["v*"]
 
 jobs:
   release:
@@ -31,7 +31,9 @@ jobs:
           {
             echo "tags<<__EOF__"
             echo "${IMAGE}:${VER}"
-            echo "${IMAGE}:latest"
+            if [[ "${VER}" != *"_dev" && "${VER}" != *"-dev" ]]; then
+              echo "${IMAGE}:latest"
+            fi
             echo "__EOF__"
             echo "labels<<__EOF__"
             echo "org.opencontainers.image.title=awbotnest_v2"
@@ -69,9 +71,17 @@ jobs:
           VER="${{ github.ref_name }}"
           publish() {
             if gh release view "$VER" >/dev/null 2>&1; then
-              gh release edit "$VER" --title "$VER" --notes-file release_notes.md
+              if [[ "$VER" == *"_dev" || "$VER" == *"-dev" ]]; then
+                gh release edit "$VER" --title "$VER" --notes-file release_notes.md --prerelease
+              else
+                gh release edit "$VER" --title "$VER" --notes-file release_notes.md --latest
+              fi
             else
-              gh release create "$VER" --title "$VER" --notes-file release_notes.md
+              if [[ "$VER" == *"_dev" || "$VER" == *"-dev" ]]; then
+                gh release create "$VER" --title "$VER" --notes-file release_notes.md --prerelease
+              else
+                gh release create "$VER" --title "$VER" --notes-file release_notes.md --latest
+              fi
             fi
           }
           for i in 1 2 3 4 5; do
