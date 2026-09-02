@@ -1899,8 +1899,11 @@ onUnmounted(() => {
 .plugin-card {
   width: 100%; min-width: 0; min-height: 180px;
   display: flex; flex-direction: column; gap: 14px;
+  position: relative;
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
 }
+.plugin-card::before { content: ''; position: absolute; left: 20px; right: 20px; top: -1px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, rgba(139,92,246,.0), rgba(139,92,246,.62), rgba(34,211,238,.5), rgba(34,211,238,0)); opacity: .38; transition: opacity .2s ease; }
+.plugin-card:hover::before { opacity: .95; }
 .plugin-card:hover {
   border-color: var(--border-light);
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
