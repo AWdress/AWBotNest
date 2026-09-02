@@ -29,6 +29,7 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY pyproject.toml README.md VERSION ./
 COPY awbotnest ./awbotnest
 COPY plugins ./plugins
+COPY docker-entrypoint.sh ./docker-entrypoint.sh
 COPY --from=frontend /app/static ./static
 
 RUN pip install --no-cache-dir --no-deps . \
@@ -39,4 +40,4 @@ VOLUME ["/app/data", "/app/sessions", "/app/plugins"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/api/health', timeout=3)" || exit 1
 
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-m", "awbotnest.main"]
+CMD ["sh", "/app/docker-entrypoint.sh"]
