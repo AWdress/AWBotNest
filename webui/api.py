@@ -28,6 +28,7 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from starlette.background import BackgroundTask
+from starlette.concurrency import run_in_threadpool
 from pyrogram.errors import PeerIdInvalid
 
 from core import config, logger
@@ -2230,7 +2231,9 @@ async def restart_platform(user=Depends(_auth_pwc)):
 async def create_system_backup(user=Depends(_auth_pwc)):
     """导出平台备份压缩包。"""
     try:
-        archive_path, filename = create_backup_archive(APP_VERSION)
+        # 遍历文件、SQLite 快照和 ZIP 压缩都是同步 I/O/CPU 工作。
+        # 放到工作线程，避免大备份生成时阻塞 FastAPI 事件循环和其它接口。
+        archive_path, filename = await run_in_threadpool(create_backup_archive, APP_VERSION)
     except (BackupError, OSError, sqlite3.Error) as e:
         raise HTTPException(status_code=500, detail=f"生成备份失败: {e}") from e
     logger.info("备份已生成: %s", archive_path)
