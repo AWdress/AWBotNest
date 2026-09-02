@@ -34,7 +34,8 @@ const connectionLabel = computed(() => online.value
 
 function applyAppearance() {
   document.documentElement.dataset.theme = localStorage.getItem('awbotnest-theme') || 'dark'
-  const image = localStorage.getItem('awbotnest-bg-image') || 'https://api.btstu.cn/sjbz/api.php?lx=dongman'
+  // 默认不请求外部图片，避免网络波动拖慢登录和首屏；用户可在外观设置中填写随机图片 API。
+  const image = localStorage.getItem('awbotnest-bg-image') || ''
   document.documentElement.style.setProperty('--app-bg-image', image ? `url("${image.replace(/"/g, '')}")` : 'none')
 }
 
