@@ -87,6 +87,7 @@ const modalTitle = computed(() => ({
   health: '系统健康检查',
   services: '定时任务',
   about: '关于 AWBotNest',
+  theme: '定制主题',
 }[modal.value] || ''))
 
 const filteredLogs = computed(() => logs.value.filter(item => {
@@ -519,14 +520,9 @@ onUnmounted(() => {
       <div class="user-menu">
         <button class="menu-action theme-trigger" @click.stop="themeSubmenu = !themeSubmenu"><span class="menu-action-icon">▦</span><span><b>主题</b><small>{{ themeMode === 'transparent' ? '透明 · 垂直' : '深色' }}</small></span><em>›</em></button>
         <div v-if="themeSubmenu" class="theme-submenu">
-          <div class="appearance-heading"><span class="menu-action-icon">✦</span><strong>定制主题</strong></div>
-          <label>背景图片或随机图片 API</label>
-          <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认背景" @change="saveAppearance">
-          <label class="theme-label">主题</label>
-          <div class="theme-options" role="radiogroup" aria-label="主题">
-            <button type="button" :class="{ selected: themeMode === 'transparent' }" @click="themeMode='transparent'; saveAppearance()">透明主题</button>
-            <button type="button" :class="{ selected: themeMode === 'dark' }" @click="themeMode='dark'; saveAppearance()">深色主题</button>
-          </div>
+          <button class="theme-sub-action" @click.stop="openModal('theme')">✦　定制主题 <em>›</em></button>
+          <button class="theme-sub-action" :class="{ selected: themeMode === 'transparent' }" @click="themeMode='transparent'; saveAppearance()">◈　透明主题</button>
+          <button class="theme-sub-action" :class="{ selected: themeMode === 'dark' }" @click="themeMode='dark'; saveAppearance()">◐　深色主题</button>
         </div>
         <button class="menu-action" @click="goSettings"><span class="menu-action-icon">♙</span><span>个人信息</span></button>
         <button class="menu-action" @click.stop="openModal('about')"><span class="menu-action-icon">ⓘ</span><span>关于 AWBotNest</span></button>
@@ -647,6 +643,11 @@ onUnmounted(() => {
             </section>
           </template>
         </div>
+        <div v-else-if="modal === 'theme'" class="modal-body theme-modal-body">
+          <label>背景图片或随机图片 API</label>
+          <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认二次元背景">
+          <button class="btn primary" @click="saveAppearance(); closeModal()">保存定制主题</button>
+        </div>
       </section>
 
       <div v-if="selectedVersion" class="release-note-mask" @click.self="selectedVersion = null">
@@ -752,7 +753,13 @@ onUnmounted(() => {
 .theme-trigger b { font-size: 14px; font-weight: 500; }
 .theme-trigger small { color: var(--text-secondary); font-size: 11px; }
 .theme-trigger em { color: var(--text-secondary); font-size: 24px; font-style: normal; line-height: 1; }
-.theme-submenu { position: absolute; top: 210px; right: calc(100% + 12px); width: 290px; padding: 16px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.88); box-shadow: var(--shadow-float); backdrop-filter: blur(22px); z-index: 2; }
+.theme-submenu { position: absolute; top: 210px; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.72); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 2; }
+.theme-sub-action { width: 100%; display: flex; align-items: center; gap: 6px; padding: 12px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; }
+.theme-sub-action em { margin-left: auto; font-size: 20px; font-style: normal; color: var(--text-secondary); }
+.theme-sub-action:hover, .theme-sub-action.selected { background: var(--bg-hover); color: var(--text-primary); }
+.theme-modal-body { display: grid; gap: 10px; }
+.theme-modal-body label { color: var(--text-secondary); font-size: 12px; }
+.theme-modal-body .appearance-input { width: 100%; padding: 10px; border: 1px solid var(--border-light); border-radius: 8px; background: var(--bg-elevated); color: var(--text-primary); }
 .appearance-menu { display: grid; gap: 6px; padding: 8px 4px 10px; margin-bottom: 4px; border-bottom: 1px solid var(--border); }
 .appearance-menu label { color: var(--text-muted); font-size: 10px; }
 .appearance-heading { display: flex; align-items: center; gap: 9px; padding: 2px 4px 5px; color: var(--text-primary); font-size: 13px; }
