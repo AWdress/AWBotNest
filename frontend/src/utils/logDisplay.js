@@ -42,7 +42,9 @@ export function logLevelLabel(level) {
   return String(level || 'INFO').toUpperCase()
 }
 
-const NOISY_SOURCES = /^(telethon\.|apscheduler\.|httpx$|httpcore\.|uvicorn\.access$)/i
+// WebSocket 握手、连接建立和 Uvicorn 启动信息属于服务器内部噪声，
+// 不在平台日志中展示；真正的 Web/平台错误仍会保留。
+const NOISY_SOURCES = /^(telethon\.|apscheduler\.|httpx$|httpcore\.|uvicorn(?:\.|$))/i
 
 export function isDisplayLog(item = {}) {
   const level = String(item.level || 'INFO').toUpperCase()

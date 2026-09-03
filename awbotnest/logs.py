@@ -12,6 +12,10 @@ class MemoryLogHandler(logging.Handler):
         self.records: deque[dict[str, str]] = deque(maxlen=capacity)
 
     def emit(self, record: logging.LogRecord) -> None:
+        # Uvicorn access/connection chatter is not an application event and
+        # only obscures the platform log stream. Warnings and errors remain.
+        if record.name.startswith("uvicorn") and record.levelno < logging.WARNING:
+            return
         message = self.format(record)
         if record.name == "asyncio" and "ConnectionResetError: [WinError 10054]" in message:
             return
