@@ -14,10 +14,8 @@ try {
   // frontend/ 与 VERSION 均属于同一个可独立分发的 AWBotNest 项目。
   const versionFile = join(__dirname, '..', 'VERSION');
   const displayVersion = readFileSync(versionFile, 'utf-8').trim().replace(/^v/i, '');
-  // npm 仅接受三段 SemVer；平台开发版 2.0.0.0_dev 映射为合法包版本。
-  const version = displayVersion === '2.0.0.0_dev'
-    ? '2.0.0-dev.0'
-    : displayVersion.replace(/_dev$/i, '-dev.0');
+  // 正式版本直接同步；开发标签才转换为 npm 可接受的预发布版本。
+  const version = displayVersion.replace(/_dev$/i, '-dev.0');
 
   // 读取 package.json
   const packageFile = join(__dirname, 'package.json');

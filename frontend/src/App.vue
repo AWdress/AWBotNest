@@ -73,7 +73,10 @@ async function onAuthed() {
     authed.value = true
     cancelDeferredRoutePreload?.()
     cancelDeferredRoutePreload = scheduleDeferredRoutePreload()
-    startPlatformStatusPolling().then(checkUpdate).catch(() => {})
+    // 状态轮询会持续运行，不会自然 resolve；更新检查必须立即独立触发，
+    // 否则底部和“关于”里的新版本提示永远等不到第一次检查。
+    startPlatformStatusPolling().catch(() => {})
+    checkUpdate().catch(() => {})
   } catch (error) {
     authed.value = false
     if (getToken()) toast.error(`读取管理员资料失败：${error.message}`)
@@ -156,7 +159,9 @@ function isNewer(remote, local) {
     if ((a[i] || 0) > (b[i] || 0)) return true
     if ((a[i] || 0) < (b[i] || 0)) return false
   }
-  return false
+  // 开发版与同数字的正式版相比仍然是旧版本，例如
+  // 2.0.0.0_dev 应提示升级到 2.0.0.0。
+  return /(?:_dev|[-.]dev)/i.test(String(local)) && !/(?:_dev|[-.]dev)/i.test(String(remote))
 }
 
 // 查 GitHub 最新发布版本，与当前对比（失败静默，不影响使用）
