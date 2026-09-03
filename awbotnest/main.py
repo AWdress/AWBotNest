@@ -153,7 +153,7 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         host=settings.web_host,
         port=settings.web_port,
         log_config=None,
-        log_level="info",
+        log_level="warning",
         access_log=False,
         lifespan="off",
         timeout_graceful_shutdown=3,
@@ -214,7 +214,7 @@ async def run() -> None:
     )
     # Keep the user-facing stream focused on platform activity. Third-party
     # clients still report warnings and errors, without flooding it at INFO.
-    for logger_name in ("apscheduler", "httpx", "httpcore", "uvicorn.access"):
+    for logger_name in ("apscheduler", "httpx", "httpcore", "uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(logger_name).setLevel(logging.WARNING)
     # Telegram reconnects automatically; its transient disconnect warnings are
     # implementation noise in the admin UI. Actual failures remain visible.
