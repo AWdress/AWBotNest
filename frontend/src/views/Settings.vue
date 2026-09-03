@@ -1559,7 +1559,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 通知渠道 -->
-      <div v-if="tab === 'notify'" class="card">
+      <div v-if="tab === 'notify'" class="card notify-channels-card">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
           设置消息发送渠道参数
@@ -1639,7 +1639,7 @@ onBeforeRouteLeave(async () => {
       </div>
 
       <!-- 推送路由 -->
-      <div v-if="tab === 'notify'" class="card" style="margin-top:16px">
+      <div v-if="tab === 'notify'" class="card notify-route-card" style="margin-top:16px">
         <div class="card-title">推送路由</div>
         <div class="hint muted small" style="margin-bottom:12px">
           选择每个插件的通知发到哪个渠道；选择立即生效（无需保存设置）。未单独选择时使用当前默认渠道。
@@ -2789,6 +2789,10 @@ onBeforeRouteLeave(async () => {
 .bot-add-plus { font-size: 22px; line-height: 1; }
 
 .route-search { margin-bottom: 8px; }
+.panel { display: flex; flex-direction: column; }
+/* 通知路由优先于渠道卡片，保持与 V1 的菜单顺序一致。 */
+.notify-route-card { order: 1; }
+.notify-channels-card { order: 2; }
 .route-table { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
 .route-row { display: flex; align-items: center; gap: 10px; }
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
