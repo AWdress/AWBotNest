@@ -193,6 +193,13 @@ def migrate(source: Path) -> dict[str, object]:
     def copy_tree_files(old_root: Path, new_root: Path, label: str) -> None:
         if not old_root.exists():
             return
+        # Docker 直升时 V1 配置位于当前 /app/data；来源与目标可能相同。
+        # 不能在 rglob 的同时把文件复制回自身，否则目录会持续增长并卡死启动。
+        try:
+            if old_root.resolve() == new_root.resolve():
+                return
+        except OSError:
+            pass
         for old_path in old_root.rglob("*"):
             if not old_path.is_file() or old_path.is_symlink():
                 continue
