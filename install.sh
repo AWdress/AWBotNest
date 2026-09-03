@@ -8,6 +8,15 @@ IMAGE="${AWBOTNEST_IMAGE:-awdress/awbotnest_v2:latest}"
 info() { printf '\n[AWBotNest] %s\n' "$1"; }
 fail() { printf '\n[AWBotNest] 安装失败：%s\n' "$1" >&2; exit 1; }
 
+compose_tmp=""
+docker_installer=""
+cleanup() {
+  [[ -z "${compose_tmp}" ]] || rm -f -- "${compose_tmp}"
+  [[ -z "${docker_installer}" ]] || rm -f -- "${docker_installer}"
+  return 0
+}
+trap cleanup EXIT
+
 [[ "$(uname -s)" == "Linux" ]] || fail "一键安装脚本目前只支持 Linux 服务器。"
 [[ "${EUID}" -eq 0 ]] || fail "请使用 sudo 运行安装命令。"
 
@@ -27,13 +36,14 @@ WEB_PORT="${WEB_PORT:-18001}"
 COMPOSE_FILE="${INSTALL_DIR}/docker-compose.yml"
 
 [[ "${WEB_PORT}" =~ ^[0-9]+$ ]] || fail "端口必须是数字。"
+(( ${#WEB_PORT} <= 5 )) || fail "端口必须在 1 到 65535 之间。"
+WEB_PORT=$((10#${WEB_PORT}))
 (( WEB_PORT >= 1 && WEB_PORT <= 65535 )) || fail "端口必须在 1 到 65535 之间。"
 command -v curl >/dev/null 2>&1 || fail "服务器缺少 curl，请先安装 curl 后重试。"
 
 if ! command -v docker >/dev/null 2>&1; then
   info "未检测到 Docker，正在安装 Docker..."
   docker_installer="$(mktemp)"
-  trap 'rm -f "${docker_installer:-}"' EXIT
   curl -fsSL https://get.docker.com -o "${docker_installer}"
   sh "${docker_installer}"
 fi
@@ -72,12 +82,62 @@ services:
       - ./data:/app/data
 EOF
 else
-  info "检测到已有配置，将保留 ${COMPOSE_FILE}。"
+  command -v awk >/dev/null 2>&1 || fail "更新已有配置需要 awk。"
+  [[ ! -L "${COMPOSE_FILE}" ]] || fail "配置是符号链接，请手动修改端口，避免覆盖链接。"
+  # Edit only a single short-form TCP mapping for the web port. Never rewrite
+  # the whole YAML: preserve mounts, environment, comments and other services.
+  compose_tmp="$(mktemp "${INSTALL_DIR}/.awbotnest-compose.XXXXXX.yml")"
+  if ! awk -v port="${WEB_PORT}" '
+function indent(s) { match(s, /[^ ]/); return RSTART - 1 }
+/^[[:space:]]*($|#)/ { print; next }
+{
+  depth = indent($0)
+  if ($0 ~ /^services:[[:space:]]*(#.*)?$/) {
+    services = 1; service = 0; ports = 0; print; next
+  }
+  if (depth == 0) { services = 0; service = 0; ports = 0 }
+  if (services && $0 ~ /^  awbotnest:[[:space:]]*(#.*)?$/) {
+    service = 1; ports = 0; print; next
+  }
+  if (service && depth <= 2) { service = 0; ports = 0 }
+  if (service && $0 ~ /^    ports:[[:space:]]*(#.*)?$/) {
+    ports = 1; print; next
+  }
+  if (ports && depth <= 4) ports = 0
+  if (ports) {
+    # Ignore comments while matching so comment text cannot select a mapping.
+    candidate = $0; sub(/[[:space:]]*#.*/, "", candidate)
+    if (candidate ~ /^[[:space:]]*-[[:space:]]+/ &&
+        match(candidate, /[0-9]+:18001(\/tcp)?["\047]?[[:space:]]*$/)) {
+      start = RSTART
+      prefix = substr(candidate, 1, start - 1)
+      # Only accept a literal published port, optionally preceded by a bind IP.
+      if (prefix !~ /[[:space:]"\047:]$/) { print; next }
+      tail = substr($0, start)
+      sub(/^[0-9]+/, port, tail)
+      $0 = substr($0, 1, start - 1) tail
+      updated++
+    }
+  }
+  print
+}
+END { if (updated != 1) exit 2 }
+' "${COMPOSE_FILE}" >"${compose_tmp}"; then
+    fail "无法安全识别唯一的 awbotnest 网页端口映射，配置未改动。请将该服务 ports 设置为短格式（例如 \"${WEB_PORT}:18001\"）后重试。"
+  fi
+  "${compose[@]}" -f "${compose_tmp}" config -q || fail "修改后的 Compose 校验失败，原配置未改动。"
+  compose_backup="$(mktemp "${COMPOSE_FILE}.bak.XXXXXX")"
+  cp -p -- "${COMPOSE_FILE}" "${compose_backup}"
+  chmod --reference="${COMPOSE_FILE}" "${compose_tmp}"
+  chown --reference="${COMPOSE_FILE}" "${compose_tmp}"
+  mv -- "${compose_tmp}" "${COMPOSE_FILE}"
+  compose_tmp=""
+  info "已将网页访问端口更新为 ${WEB_PORT}，其他配置保留。原配置备份：${compose_backup}"
 fi
 
 info "正在拉取最新镜像并启动 AWBotNest..."
-"${compose[@]}" -f "${COMPOSE_FILE}" pull
-"${compose[@]}" -f "${COMPOSE_FILE}" up -d --remove-orphans
+"${compose[@]}" -f "${COMPOSE_FILE}" pull awbotnest
+"${compose[@]}" -f "${COMPOSE_FILE}" up -d awbotnest
 
 server_ip=""
 if command -v hostname >/dev/null 2>&1 && command -v awk >/dev/null 2>&1; then
