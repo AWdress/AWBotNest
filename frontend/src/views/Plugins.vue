@@ -1035,7 +1035,12 @@ async function openRepos() {
   try {
     const d = await api.getSettings()
     const s = d.settings || {}
-    repoList.value = (s.PLUGIN_REPOS || []).map((r) => ({ url: normalizeRepo(r.url) || '' }))
+    // 后端兼容接口返回的是字符串，旧版页面曾按 {url} 读取，
+    // 导致已保存的仓库在弹窗中全部变成空白占位符。
+    repoList.value = (s.PLUGIN_REPOS || []).map((r) => {
+      const value = typeof r === 'string' ? r : r?.url
+      return { url: normalizeRepo(value || '') || '' }
+    })
     repoOpen.value = true
   } catch (e) {
     repoErr.value = e.message
@@ -1074,7 +1079,8 @@ async function saveRepos() {
         continue
       }
       seen.add(key)
-      repos.push({ url })
+      // 后端兼容设置接口接收仓库字符串；对象格式只用于弹窗内部编辑。
+      repos.push(url)
     }
     await api.saveSettings({
       PLUGIN_REPOS: repos,

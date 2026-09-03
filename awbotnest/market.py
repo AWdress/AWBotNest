@@ -50,6 +50,7 @@ class PluginMarket:
         self._cache_until = 0.0
         self._state_path = PLUGINS_DIR.parent / "data" / "repo_sync.json"
         self._last_sync: str | None = None
+        self._skipped_manifest_logged: set[str] = set()
         try:
             state = json.loads(self._state_path.read_text(encoding="utf-8")) if self._state_path.exists() else {}
             if isinstance(state, dict) and isinstance(state.get("store"), dict):
@@ -319,7 +320,19 @@ class PluginMarket:
         plugins: list[dict[str, Any]] = []
         errors: list[str] = []
         seen: set[str] = set()
-        for repo in self.settings.plugin_repos:
+        # 官方仓库是内置来源，不依赖旧配置是否曾经保存过它；否则从
+        # V1/旧版本迁移且只配置第三方仓库时，市场会完全没有官方插件。
+        repos = [OFFICIAL_REPO, *self.settings.plugin_repos]
+        seen_repos: set[str] = set()
+        for repo in repos:
+            try:
+                repo = normalize_repo(repo)
+            except Exception as exc:
+                errors.append(f"{repo}: {exc}")
+                continue
+            if repo.casefold() in seen_repos:
+                continue
+            seen_repos.add(repo.casefold())
             try:
                 listing = await self.list_repo(repo)
             except Exception as exc:
@@ -327,7 +340,9 @@ class PluginMarket:
                 # 清单不应阻断市场，也不应把整条官方/自定义仓库列表标红。
                 # 真实网络错误仍保留，方便用户排查仓库不可达问题。
                 if MANIFEST_NAME in str(exc) and "缺少" in str(exc):
-                    logger.info("插件仓库提示：已跳过不含 V2 清单的仓库 %s", repo)
+                    if repo.casefold() not in self._skipped_manifest_logged:
+                        logger.info("插件仓库提示：已跳过不含 V2 清单的仓库 %s", repo)
+                        self._skipped_manifest_logged.add(repo.casefold())
                     continue
                 errors.append(f"{repo}: {exc}")
                 continue
