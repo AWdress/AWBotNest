@@ -278,6 +278,9 @@ class PluginRuntime:
                 self.settings.enabled_plugins.append(plugin_id)
                 save_settings(self.settings)
             logger.info("插件已启用：%s（1 个运行实例）", meta.name)
+        except asyncio.CancelledError:
+            await context.close()
+            raise
         except Exception as exc:
             await context.close()
             meta.error = f"{type(exc).__name__}: {exc}"
@@ -310,10 +313,13 @@ class PluginRuntime:
 
     async def restore(self) -> None:
         available = {meta.id for meta in self.scan() if not meta.error}
-        for plugin_id in self.settings.enabled_plugins:
+        for plugin_id in list(self.settings.enabled_plugins):
             if plugin_id in available:
                 try:
-                    await self.enable(plugin_id)
+                    async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
+                        # The web UI can disable a plugin while earlier plugins are restoring.
+                        if plugin_id in self.settings.enabled_plugins:
+                            await self._enable(plugin_id)
                 except Exception:
                     logger.exception("恢复插件失败，平台继续启动：%s", plugin_id)
 

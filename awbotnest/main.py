@@ -6,6 +6,7 @@ import asyncio
 import logging
 import platform
 import json
+import sys
 
 import uvicorn
 
@@ -27,7 +28,6 @@ from .config import APP_ROOT, DATA_DIR
 
 
 async def run_once() -> bool:
-    logging.getLogger().addHandler(memory_logs)
     logger = logging.getLogger("awbotnest.main")
     logger.info("  AWBotNest v%s (Python %s)", __version__, platform.python_version())
 
@@ -72,6 +72,14 @@ async def run_once() -> bool:
     notifier = NotificationService(settings, accounts, services.http)
     runtime = PluginRuntime(settings, accounts, scheduler, services, routes, notifier)
     market = PluginMarket(settings)
+
+    return await serve_platform(settings, accounts, runtime, scheduler, routes, market)
+
+
+async def start_platform(settings, accounts, runtime, scheduler, market) -> None:
+    logger = logging.getLogger("awbotnest.main")
+    services = runtime.services
+    logger.info("正在初始化 Telegram 账号与插件服务")
 
     await accounts.start()
     bot_spec_map = {spec.id: spec.name for spec in settings.bot_specs()}
@@ -133,19 +141,22 @@ async def run_once() -> bool:
             logger.warning("远程 CookieCloud 首次同步失败：%s", exc)
     logger.info("定时任务调度器已就绪：已注册 %d 个后台任务", len(scheduler.jobs()))
 
-    display_host = "127.0.0.1" if settings.web_host in {"0.0.0.0", "::"} else settings.web_host
-    logger.info("Web 控制台已启动，访问地址: http://%s:%s", display_host, settings.web_port)
     logger.info("AWBotNest 启动完成")
 
+
+async def serve_platform(settings, accounts, runtime, scheduler, routes, market) -> bool:
+    logger = logging.getLogger("awbotnest.main")
     restart_event = asyncio.Event()
     app = create_app(settings, accounts, runtime, scheduler, routes, restart_event, market)
     server = uvicorn.Server(uvicorn.Config(
         app,
         host=settings.web_host,
         port=settings.web_port,
-        log_level="warning",
+        log_config=None,
+        log_level="info",
         access_log=False,
         lifespan="off",
+        timeout_graceful_shutdown=3,
     ))
     async def stop_for_restart() -> None:
         await restart_event.wait()
@@ -158,15 +169,39 @@ async def run_once() -> bool:
             server.force_exit = True
 
     restart_watcher = asyncio.create_task(stop_for_restart())
+    platform_task = asyncio.create_task(start_platform(settings, accounts, runtime, scheduler, market))
+    server_task = asyncio.create_task(server.serve())
     try:
-        await server.serve()
+        # V1 starts the web console independently of Telegram and plugin setup.
+        done, _ = await asyncio.wait({platform_task, server_task}, return_when=asyncio.FIRST_COMPLETED)
+        if platform_task in done:
+            await platform_task  # Propagate startup failures; do not leave a half-started server.
+        await server_task
+    except Exception:
+        logger.exception("平台后台任务异常，正在停止服务")
+        raise
     finally:
         restart_watcher.cancel()
-        await runtime.stop()
-        await accounts.stop()
-        scheduler.stop()
-        activity.flush()
-        logging.getLogger().removeHandler(memory_logs)
+        platform_task.cancel()
+        await asyncio.gather(restart_watcher, platform_task, return_exceptions=True)
+        server.should_exit = True
+        try:
+            if not server_task.done():
+                await asyncio.wait_for(asyncio.shield(server_task), timeout=5)
+        except TimeoutError:
+            logger.warning("Web 服务退出超时，取消任务并继续清理")
+        finally:
+            if not server_task.done():
+                server_task.cancel()
+            await asyncio.gather(server_task, return_exceptions=True)
+            try:
+                await runtime.stop()
+            finally:
+                try:
+                    await accounts.stop()
+                finally:
+                    scheduler.stop()
+                    activity.flush()
     return restart_event.is_set()
 
 
@@ -174,6 +209,8 @@ async def run() -> None:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stdout,
+        force=True,
     )
     # Keep the user-facing stream focused on platform activity. Third-party
     # clients still report warnings and errors, without flooding it at INFO.
@@ -182,8 +219,12 @@ async def run() -> None:
     # Telegram reconnects automatically; its transient disconnect warnings are
     # implementation noise in the admin UI. Actual failures remain visible.
     logging.getLogger("telethon").setLevel(logging.ERROR)
-    while await run_once():
-        logging.getLogger("awbotnest.main").info("平台正在重新加载配置并启动")
+    logging.getLogger().addHandler(memory_logs)
+    try:
+        while await run_once():
+            logging.getLogger("awbotnest.main").info("平台正在重新加载配置并启动")
+    finally:
+        logging.getLogger().removeHandler(memory_logs)
 
 
 def main() -> None:

@@ -123,6 +123,9 @@ class TelegramAccounts:
                     except Exception:
                         logger.warning("Bot [%s] 资料缓存失败", bot_spec.name, exc_info=True)
                     logger.info("Bot [%s] 启动成功", bot_spec.name)
+                except asyncio.CancelledError:
+                    await bot.disconnect()
+                    raise
                 except Exception:
                     await bot.disconnect()
                     logger.exception("Telethon Bot [%s] 连接失败，平台继续启动", bot_spec.name)
@@ -150,6 +153,9 @@ class TelegramAccounts:
             except Exception:
                 logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
             logger.info("用户账号 [%s] 启动成功", session_name)
+        except asyncio.CancelledError:
+            await client.disconnect()
+            raise
         except Exception:
             await client.disconnect()
             logger.exception("用户账号 %s 连接失败", session_name)
