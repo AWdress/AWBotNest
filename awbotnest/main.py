@@ -208,7 +208,9 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
 async def run() -> None:
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        # Docker 控制台只显示时间、级别和内容；来源仍保留在内存日志
+        # 记录中供前端筛选，不把模块/文件名混入用户看到的日志正文。
+        format="%(asctime)s %(levelname)s: %(message)s",
         stream=sys.stdout,
         force=True,
     )
