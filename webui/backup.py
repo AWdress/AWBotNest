@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import sqlite3
 import stat
 import tempfile
+import time
 import uuid
 import zipfile
 from contextlib import closing
@@ -23,6 +25,9 @@ MAX_ARCHIVE_BYTES = 1024 * 1024 * 1024  # 1 GiB compressed upload
 MAX_EXPANDED_BYTES = 4 * 1024 * 1024 * 1024  # 4 GiB extracted data
 MAX_ARCHIVE_FILES = 100_000
 COPY_CHUNK_SIZE = 1024 * 1024
+SQLITE_BACKUP_TIMEOUT = 30.0
+BACKUP_TIMEOUT = 600.0
+logger = logging.getLogger("main")
 
 _MANIFEST_NAME = "backup_manifest.json"
 _SKIPPED_SUFFIXES = ("-journal", "-wal", "-shm")
@@ -55,6 +60,7 @@ def _iter_backup_files():
         root = Path(root_name)
         if not root.exists():
             continue
+        logger.info("备份：开始扫描目录 %s", root_name)
         if root.is_file():
             if not _is_excluded(root):
                 yield root
@@ -72,16 +78,43 @@ def _is_sqlite_file(path: Path) -> bool:
         return False
 
 
-def _write_sqlite_snapshot(zf: zipfile.ZipFile, source: Path, arcname: str) -> None:
+def _write_backup_file(zf: zipfile.ZipFile, source: Path, arcname: str, deadline: float) -> None:
+    """Check the export deadline between chunks, including while compressing large files."""
+    info = zipfile.ZipInfo.from_file(source, arcname)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    with source.open("rb") as src, zf.open(info, "w", force_zip64=True) as dst:
+        while True:
+            if time.monotonic() >= deadline:
+                raise BackupError(f"备份生成超时，当前文件: {arcname}")
+            chunk = src.read(COPY_CHUNK_SIZE)
+            if not chunk:
+                break
+            dst.write(chunk)
+
+
+def _write_sqlite_snapshot(
+    zf: zipfile.ZipFile, source: Path, arcname: str, deadline: float | None = None,
+) -> None:
+    started = time.monotonic()
+    deadline = deadline if deadline is not None else started + BACKUP_TIMEOUT
+    logger.info("备份：开始 SQLite 快照 %s", arcname)
+
+    def check_progress(status, remaining, total):
+        if time.monotonic() >= deadline:
+            raise BackupError(f"备份生成超时，当前文件: {arcname}")
+        if time.monotonic() - started >= SQLITE_BACKUP_TIMEOUT:
+            raise BackupError(f"数据库快照超时（{SQLITE_BACKUP_TIMEOUT:g} 秒）: {arcname}；请稍后重试，检查是否有程序长期占用数据库")
+
     fd, snapshot_name = tempfile.mkstemp(suffix=".sqlite")
     os.close(fd)
     snapshot = Path(snapshot_name)
     try:
         source_uri = f"{source.resolve().as_uri()}?mode=ro"
-        with closing(sqlite3.connect(source_uri, timeout=30, uri=True)) as src:
+        with closing(sqlite3.connect(source_uri, timeout=0.1, uri=True)) as src:
             with closing(sqlite3.connect(str(snapshot))) as dst:
-                src.backup(dst)
-        zf.write(snapshot, arcname=arcname)
+                src.backup(dst, pages=256, progress=check_progress, sleep=0.1)
+        _write_backup_file(zf, snapshot, arcname, deadline)
+        logger.info("备份：SQLite 快照完成 %s，耗时 %.2f 秒", arcname, time.monotonic() - started)
     finally:
         snapshot.unlink(missing_ok=True)
 
@@ -93,6 +126,10 @@ def create_backup_archive(app_version: str, output_dir: Path | None = None) -> t
     target_dir = output_dir or (Path(tempfile.gettempdir()) / "awbotnest-backups")
     target_dir.mkdir(parents=True, exist_ok=True)
     archive_path = target_dir / filename
+    started = time.monotonic()
+    processed = 0
+    current_file = "扫描目录"
+    logger.info("备份：开始生成 %s", filename)
 
     manifest = {
         "app": "AWBotNest",
@@ -109,14 +146,22 @@ def create_backup_archive(app_version: str, output_dir: Path | None = None) -> t
                 zf.writestr(f"{root_name}/", b"")
             for file_path in _iter_backup_files():
                 arcname = file_path.as_posix()
+                current_file = arcname
+                if time.monotonic() - started >= BACKUP_TIMEOUT:
+                    raise BackupError(f"备份生成超时，当前文件: {arcname}")
+                if processed % 100 == 0 or file_path.stat().st_size >= 10 * 1024 * 1024:
+                    logger.info("备份：已处理 %s 个文件，正在压缩 %s", processed, arcname)
                 if _is_sqlite_file(file_path):
-                    _write_sqlite_snapshot(zf, file_path, arcname)
+                    _write_sqlite_snapshot(zf, file_path, arcname, started + BACKUP_TIMEOUT)
                 else:
-                    zf.write(file_path, arcname=arcname)
+                    _write_backup_file(zf, file_path, arcname, started + BACKUP_TIMEOUT)
+                processed += 1
     except Exception:
+        logger.exception("备份失败：%s，当前文件 %s，已处理 %s 个文件，耗时 %.2f 秒", filename, current_file, processed, time.monotonic() - started)
         archive_path.unlink(missing_ok=True)
         raise
 
+    logger.info("备份完成：%s，共 %s 个文件，大小 %s 字节，耗时 %.2f 秒", filename, processed, archive_path.stat().st_size, time.monotonic() - started)
     return archive_path, filename
 
 
