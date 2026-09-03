@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from collections import deque
 from datetime import datetime, timezone
 
@@ -48,3 +49,35 @@ class MemoryLogHandler(logging.Handler):
 
 
 memory_logs = MemoryLogHandler()
+
+# V1 also persisted the application stream to a rotating file.  Keep that
+# durability in V2 while retaining the clean Docker stdout format.
+LOG_DIR = Path("logs")
+LOG_FILE = LOG_DIR / "app.log"
+
+
+class PyrogramNoiseFilter(logging.Filter):
+    """Drop known framework chatter that is not useful to operators."""
+    _noisy = ("PEER_ID_INVALID", "ID not found:", "PeerIdInvalid",
+              "CHANNEL_INVALID", "CHANNEL_PRIVATE")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if not record.name.startswith("pyrogram"):
+            return True
+        text = f"{record.getMessage()} {record.exc_text or ''}"
+        return not any(item in text for item in self._noisy)
+
+
+def create_file_handler(formatter: logging.Formatter) -> logging.Handler | None:
+    """Create V1-compatible UTF-8 rotating persistence, failing soft on mounts."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        from logging.handlers import RotatingFileHandler
+        handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024,
+                                      backupCount=5, encoding="utf-8")
+        handler.setFormatter(formatter)
+        handler.addFilter(PyrogramNoiseFilter())
+        return handler
+    except OSError as exc:
+        logging.getLogger("awbotnest.logs").warning("文件日志不可用，继续使用终端日志：%s", exc)
+        return None

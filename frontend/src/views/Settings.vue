@@ -1303,7 +1303,16 @@ const routeSaving = ref({})
 
 async function loadRouting() {
   routingLoading.value = true
-  try { routing.value = await api.getBotsRouting() }
+  try {
+    routing.value = await api.getBotsRouting()
+    // 平台启动早期插件运行时可能尚未完成恢复；短暂空结果不应把
+    // 路由设置误显示成“还没有插件”，给恢复流程一个重试机会。
+    if (!(routing.value.plugins || []).length) {
+      await new Promise(resolve => setTimeout(resolve, 800))
+      const retry = await api.getBotsRouting()
+      if ((retry.plugins || []).length) routing.value = retry
+    }
+  }
   catch (e) { toast.error('加载推送路由失败：' + e.message) }
   finally { routingLoading.value = false }
 }

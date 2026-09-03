@@ -1231,6 +1231,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/accounts/login/start", dependencies=[Depends(require_admin)])
     async def start_login(body: LoginStartBody):
+        logger.info("账号登录开始：%s", body.session)
         try:
             return await accounts.begin_user_login(body.session, body.phone)
         except (ValueError, RuntimeError) as exc:
@@ -1239,6 +1240,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             hint = "请在「系统设置 → 运行环境 → 运行代理」配置可访问 Telegram 的 HTTP/SOCKS 代理，保存并重启后重试"
             raise HTTPException(status_code=502, detail=f"Telegram 连接失败。{hint}") from exc
         except Exception as exc:
+            logger.exception("账号登录发送验证码失败：%s", body.session)
             raise HTTPException(status_code=502, detail=f"Telegram 发送验证码失败：{exc}") from exc
 
     @app.post("/api/accounts/login/send_code", dependencies=[Depends(require_admin)])
@@ -1247,6 +1249,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/accounts/login/complete", dependencies=[Depends(require_admin)])
     async def complete_login(body: LoginCompleteBody):
+        logger.info("账号验证码校验开始：%s", body.session)
         try:
             result = await accounts.complete_user_login(
                 body.session, code=body.code, password=body.password,
@@ -1254,12 +1257,14 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
+            logger.exception("账号登录失败：%s", body.session)
             raise HTTPException(status_code=502, detail=f"Telegram 登录失败：{exc}") from exc
         if result.get("authorized") and body.session not in settings.user_sessions:
             settings.user_sessions.append(body.session)
             save_settings(settings)
         if result.get("authorized"):
             await runtime.refresh_telegram_plugins()
+            logger.info("账号登录成功：%s", body.session)
         return result
 
     @app.post("/api/accounts/login/submit_code", dependencies=[Depends(require_admin)])
@@ -1327,6 +1332,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/plugins/{plugin_id}/enable", dependencies=[Depends(require_admin)])
     async def enable_plugin(plugin_id: str):
+        logger.info("插件启用开始：%s", plugin_id)
         try:
             meta = await runtime.enable(plugin_id)
         except FileNotFoundError as exc:
@@ -1334,17 +1340,21 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if meta.error:
+            logger.error("插件启用失败：%s（%s）", plugin_id, meta.error)
             raise HTTPException(status_code=409, detail=meta.error)
+        logger.info("插件启用成功：%s", plugin_id)
         value = meta.to_dict()
         return {**value, "plugin": value}
 
     @app.post("/api/plugins/{plugin_id}/disable", dependencies=[Depends(require_admin)])
     async def disable_plugin(plugin_id: str):
+        logger.info("插件停用开始：%s", plugin_id)
         await runtime.disable(plugin_id)
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
         value = meta.to_dict() if meta else {"id": plugin_id, "enabled": False, "loaded": False}
         value["enabled"] = False
         value["loaded"] = False
+        logger.info("插件停用成功：%s", plugin_id)
         return {"ok": True, "plugin": value}
 
     @app.post("/api/plugins/{plugin_id}/reload", dependencies=[Depends(require_admin)])
@@ -1480,6 +1490,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.post("/api/plugins/upload", dependencies=[Depends(require_admin)])
     async def upload_plugin(file: UploadFile = File(...)):
         filename = file.filename or ""
+        logger.info("插件上传安装开始：%s", filename or "<空文件名>")
         if not filename.endswith(".py") or not filename[:-3].replace("_", "").isalnum():
             raise HTTPException(status_code=400, detail="仅支持名称安全的 .py 插件文件")
         content = await file.read(2 * 1024 * 1024 + 1)
@@ -1496,12 +1507,14 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             if meta is None or meta.error:
                 raise ValueError(meta.error if meta else "插件元数据无法识别")
         except Exception as exc:
+            logger.error("插件上传安装失败：%s（%s）", filename or "<空文件名>", exc)
             target.unlink(missing_ok=True)
             if backup is not None:
                 target.write_bytes(backup)
             raise HTTPException(status_code=400, detail=f"插件校验失败：{exc}") from exc
         finally:
             temporary.unlink(missing_ok=True)
+        logger.info("插件上传安装完成：%s", target.stem)
         return {"ok": True, "plugin": meta.to_dict()}
 
     @app.delete("/api/plugins/{plugin_id}", dependencies=[Depends(require_admin)])
@@ -1720,7 +1733,9 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/backups", dependencies=[Depends(require_admin)])
     async def create_backup():
+        logger.info("备份导出开始")
         archive = await asyncio.to_thread(BackupManager.create)
+        logger.info("备份导出完成：%s", archive.name)
         return {"ok": True, "filename": archive.name}
 
     @app.post("/api/system/migrate-v1", dependencies=[Depends(require_admin)])
@@ -1738,7 +1753,9 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():
+        logger.info("备份下载开始")
         archive = await asyncio.to_thread(BackupManager.create)
+        logger.info("备份下载完成：%s", archive.name)
         return FileResponse(archive, filename=archive.name, media_type="application/zip")
 
     @app.get("/api/backups", dependencies=[Depends(require_admin)])
@@ -1794,33 +1811,41 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     async def _install_market_plugin(body: MarketInstallBody):
         plugin_id = str(body.plugin.get("id") or "")
         was_loaded = plugin_id in runtime.loaded
+        action = "更新" if was_loaded else "安装"
+        logger.info("插件%s开始：%s", action, plugin_id)
         try:
             if was_loaded:
                 await runtime.disable(plugin_id, persist=False)
             destination = await market.install(body.plugin)
         except ValueError as exc:
+            logger.warning("插件%s失败：%s（%s）", action, plugin_id, exc)
             if was_loaded:
                 await runtime.enable(plugin_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
+            logger.exception("插件%s下载失败：%s", action, plugin_id)
             if was_loaded:
                 await runtime.enable(plugin_id)
             raise HTTPException(status_code=502, detail=f"插件下载失败：{exc}") from exc
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
         if meta is None or meta.error:
+            error_detail = meta.error if meta else "插件安装后未被识别"
+            logger.error("插件%s失败：%s（安装后校验失败：%s）", action, plugin_id, error_detail)
             market.finish(plugin_id, False)
             if was_loaded:
                 await runtime.enable(plugin_id)
-            raise HTTPException(status_code=409, detail=meta.error if meta else "插件安装后未被识别")
+            raise HTTPException(status_code=409, detail=error_detail)
         if was_loaded:
             meta = await runtime.enable(plugin_id)
             if meta.error:
                 market.finish(plugin_id, False)
                 await runtime.enable(plugin_id)
+                logger.error("插件%s失败：%s（重新加载失败：%s，已回滚）", action, plugin_id, meta.error)
                 raise HTTPException(status_code=409, detail=f"更新加载失败，已回滚：{meta.error}")
         market.finish(plugin_id, True)
         await market.record_install(body.plugin, "update" if was_loaded else "install")
         market.clear_cache()
+        logger.info("插件%s完成：%s", action, plugin_id)
         return {"ok": True, "path": str(destination), "plugin": meta.to_dict()}
 
     @app.post("/api/plugins/store/download", dependencies=[Depends(require_admin)])

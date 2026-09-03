@@ -17,7 +17,7 @@ from .plugins import PluginRuntime
 from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .services import PlatformServices
-from .logs import memory_logs
+from .logs import create_file_handler, memory_logs
 from .routing import PluginRoutes
 from .notifier import NotificationService
 from .backup import BackupManager
@@ -61,9 +61,18 @@ async def run_once() -> bool:
     if cleaner.get("enabled", True):
         cleaner_hour = max(0, min(int(cleaner.get("hour", 3)), 23))
         cleaner_minute = max(0, min(int(cleaner.get("minute", 0)), 59))
+        async def clean_logs_job():
+            logger.info("定时任务开始：日志自动清理")
+            try:
+                removed = memory_logs.trim(int(cleaner.get("keep_lines", 1000)))
+                logger.info("定时任务完成：日志自动清理（清理 %d 条）", removed)
+                return removed
+            except Exception:
+                logger.exception("定时任务失败：日志自动清理")
+                raise
         scheduler.add_cron(
             "__platform__", "log-cleaner",
-            lambda: memory_logs.trim(int(cleaner.get("keep_lines", 1000))),
+            clean_logs_job,
             hour=cleaner_hour, minute=cleaner_minute,
         )
         logger.info("日志清理定时任务已启动（每天 %d:%02d 执行）", cleaner_hour, cleaner_minute)
@@ -97,7 +106,25 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     logger.info("插件恢复完成，已加载 %d 个（扫描到 %d 个）", len(runtime.loaded), len(scanned_plugins))
 
     async def poll_plugin_market():
-        return await market.poll_updates(runtime)
+        logger.info("定时任务开始：插件市场轮询")
+        try:
+            await market.refresh()
+            result = await market.poll_updates(runtime)
+            logger.info("定时任务完成：插件市场轮询")
+            return result
+        except Exception:
+            logger.exception("定时任务失败：插件市场轮询")
+            raise
+
+    async def refresh_market_at_startup():
+        logger.info("启动任务开始：刷新插件市场")
+        try:
+            await market.refresh()
+            logger.info("启动任务完成：插件市场刷新")
+        except Exception:
+            logger.exception("启动任务失败：插件市场刷新")
+
+    asyncio.create_task(refresh_market_at_startup(), name="market-startup-refresh")
 
     scheduler.add_interval(
         "__platform__", "插件市场轮询", poll_plugin_market,
@@ -105,8 +132,18 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     )
     logger.info("插件仓库轮询已注册：每 %d 分钟，%d 个仓库（含官方）",
                 max(1, int(settings.plugin_repo_interval)), len(settings.plugin_repos))
+    async def discover_repositories_job():
+        logger.info("定时任务开始：插件仓库自动发现")
+        try:
+            result = await market.discover_repositories()
+            logger.info("定时任务完成：插件仓库自动发现")
+            return result
+        except Exception:
+            logger.exception("定时任务失败：插件仓库自动发现")
+            raise
+
     scheduler.add_cron(
-        "__platform__", "插件仓库自动发现", market.discover_repositories,
+        "__platform__", "插件仓库自动发现", discover_repositories_job,
         hour=0, minute=0,
     )
     logger.info("插件仓库自动发现已注册：每天 0:00 执行")
@@ -114,6 +151,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     if cookie_settings.get("remote_enabled"):
         async def sync_remote_cookiecloud() -> None:
             from .cookiecloud import pull, record_sync
+            logger.info("定时任务开始：远程 CookieCloud 同步")
             try:
                 values = await pull(
                     str(cookie_settings.get("remote_url") or ""),
@@ -128,6 +166,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
                 logger.info("远程 CookieCloud 同步完成：%d 个 Cookie，%d 个域名", count, len(values))
             except Exception as exc:
                 record_sync("remote", "error", f"自动同步失败：{exc}")
+                logger.exception("定时任务失败：远程 CookieCloud 同步")
                 raise
         scheduler.add_interval(
             "__platform__", "远程 CookieCloud 同步", sync_remote_cookiecloud,
@@ -221,12 +260,19 @@ async def run() -> None:
     # Telegram reconnects automatically; its transient disconnect warnings are
     # implementation noise in the admin UI. Actual failures remain visible.
     logging.getLogger("telethon").setLevel(logging.ERROR)
-    logging.getLogger().addHandler(memory_logs)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(memory_logs)
+    file_handler = create_file_handler(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+    if file_handler is not None:
+        root_logger.addHandler(file_handler)
     try:
         while await run_once():
             logging.getLogger("awbotnest.main").info("平台正在重新加载配置并启动")
     finally:
-        logging.getLogger().removeHandler(memory_logs)
+        root_logger.removeHandler(memory_logs)
+        if file_handler is not None:
+            root_logger.removeHandler(file_handler)
+            file_handler.close()
 
 
 def main() -> None:
