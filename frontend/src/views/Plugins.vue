@@ -686,6 +686,12 @@ const store = ref([])
 const officialIds = ref([])
 const storeBusy = ref(false)
 const storeErr = ref('')
+let storeErrTimer = null
+function showStoreNotice(message) {
+  storeErr.value = message
+  if (storeErrTimer) clearTimeout(storeErrTimer)
+  storeErrTimer = setTimeout(() => { storeErr.value = '' }, 6000)
+}
 const storeLastSync = ref(null)
 const storeLoaded = ref(false)
 const dlBusy = ref({})
@@ -975,9 +981,9 @@ async function loadStore(refresh = false) {
       plugin.official = !!(plugin.official || marketPlugin.official || officialIds.value.includes(plugin.id))
       plugin.install_count = installCount(marketPlugin)
     })
-    if (d.errors && d.errors.length) storeErr.value = d.errors.join('；')
+    if (d.errors && d.errors.length) showStoreNotice(d.errors.join('；'))
   } catch (e) {
-    storeErr.value = e.message
+    showStoreNotice(e.message)
   } finally {
     storeBusy.value = false
     storeLoaded.value = true
@@ -991,7 +997,7 @@ async function download(p) {
     const r = await api.storeDownload([p])
     const res = r.result || {}
     if (res.errors && res.errors.length) {
-      storeErr.value = res.errors.join('；')
+      showStoreNotice(res.errors.join('；'))
       toast.error(`${p.name} ${isUpdate ? '更新' : '安装'}失败`)
     } else {
       p.installed = true
@@ -1002,7 +1008,7 @@ async function download(p) {
       const restored = (res.restored || []).includes(p.id)
       const reloadError = (res.reload_errors || []).find(item => item.startsWith(`${p.id}:`))
       if (reloadError) {
-        storeErr.value = reloadError
+        showStoreNotice(reloadError)
         toast.error(`插件「${p.name}」文件已更新，但重新加载失败，请检查插件日志`)
       } else {
         toast.success(isUpdate
@@ -1011,7 +1017,7 @@ async function download(p) {
       }
     }
   } catch (e) {
-    storeErr.value = `${p.name}: ${e.message}`
+    showStoreNotice(`${p.name}: ${e.message}`)
     toast.error(`${p.name} ${isUpdate ? '更新' : '安装'}失败`)
   } finally {
     dlBusy.value[p.id] = false

@@ -323,6 +323,12 @@ class PluginMarket:
             try:
                 listing = await self.list_repo(repo)
             except Exception as exc:
+                # 仓库可能同时包含 V1 内容或只是普通插件仓库；缺少 V2
+                # 清单不应阻断市场，也不应把整条官方/自定义仓库列表标红。
+                # 真实网络错误仍保留，方便用户排查仓库不可达问题。
+                if MANIFEST_NAME in str(exc) and "缺少" in str(exc):
+                    logger.info("插件仓库提示：已跳过不含 V2 清单的仓库 %s", repo)
+                    continue
                 errors.append(f"{repo}: {exc}")
                 continue
             for plugin in listing["plugins"]:
