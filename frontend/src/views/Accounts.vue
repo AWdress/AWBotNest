@@ -100,8 +100,8 @@ async function submitCode() {
   wizardBusy.value = true; wizardErr.value = ''
   try {
     const r = await api.loginSubmitCode(form.value.session.trim(), form.value.code.trim())
-    if (r.need === 'password') step.value = 'password'
-    else if (r.ok) { doneInfo.value = r; step.value = 'done'; await load() }
+    if (r.need === 'password' || r.needs_password) step.value = 'password'
+    else if (r.ok || r.authorized) { doneInfo.value = r; step.value = 'done'; await load() }
   } catch (e) {
     wizardErr.value = e.message
   } finally {
@@ -114,7 +114,7 @@ async function submitPassword() {
   wizardBusy.value = true; wizardErr.value = ''
   try {
     const r = await api.loginSubmitPassword(form.value.session.trim(), form.value.password)
-    if (r.ok) { doneInfo.value = r; step.value = 'done'; await load() }
+    if (r.ok || r.authorized) { doneInfo.value = r; step.value = 'done'; await load() }
   } catch (e) {
     wizardErr.value = e.message
   } finally {

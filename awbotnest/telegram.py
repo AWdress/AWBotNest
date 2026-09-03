@@ -223,6 +223,7 @@ class TelegramAccounts:
         except Exception:
             logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
         return {
+            "ok": True,
             "session": session_name,
             "needs_password": False,
             "authorized": True,
