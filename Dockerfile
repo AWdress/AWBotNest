@@ -18,7 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    xvfb xauth ca-certificates fonts-noto-cjk fonts-noto-color-emoji \
+    tini xvfb xauth ca-certificates fonts-noto-cjk fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
@@ -34,12 +34,14 @@ COPY --from=frontend /app/static ./static
 RUN pip install --no-cache-dir --no-deps . \
     && mkdir -p data sessions plugins
 
-# Exercise the same direct Xvfb invocation used by V1 before publishing.
-RUN ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-c", "import os, socket; s = socket.socket(socket.AF_UNIX); s.connect('/tmp/.X11-unix/X' + os.environ['DISPLAY'].split(':')[-1].split('.')[0]); s.close(); print('Xvfb startup OK')"]
+# Keep xvfb-run away from PID 1: its X-server readiness handshake uses signals.
+# Bound the check so a broken handshake fails the build instead of hanging it.
+RUN ["timeout", "--kill-after=5s", "30s", "/usr/bin/tini", "-s", "-g", "--", "xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-c", "import os, socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('/tmp/.X11-unix/X' + os.environ['DISPLAY'].split(':')[-1].split('.')[0]); s.close(); print('Xvfb startup OK')"]
 
 EXPOSE 18001
 VOLUME ["/app/data", "/app/sessions", "/app/plugins"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/api/health', timeout=3)" || exit 1
 
-CMD ["xvfb-run", "-a", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-m", "awbotnest.main"]
+ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
+CMD ["xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-m", "awbotnest.main"]
