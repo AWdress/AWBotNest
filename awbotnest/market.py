@@ -170,8 +170,10 @@ class PluginMarket:
 
         existing = {repo.casefold() for repo in self.settings.plugin_repos}
         added: list[str] = []
+        skipped_existing = 0
         for candidate in sorted(candidates):
             if candidate.casefold() in existing or candidate.casefold() == OFFICIAL_REPO.casefold():
+                skipped_existing += 1
                 continue
             try:
                 await self.list_repo(candidate)
@@ -184,7 +186,8 @@ class PluginMarket:
             save_settings(self.settings)
             self.clear_cache()
             logger.info("插件仓库自动发现：新增 %d 个仓库 %s", len(added), added)
-        return {"ok": not errors, "added": added, "errors": errors}
+        return {"ok": not errors, "found": len(candidates), "added": added,
+                "skipped_existing": skipped_existing, "errors": errors}
 
     async def _github(self, url: str) -> httpx.Response:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True,

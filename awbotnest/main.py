@@ -106,11 +106,13 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     logger.info("插件恢复完成，已加载 %d 个（扫描到 %d 个）", len(runtime.loaded), len(scanned_plugins))
 
     async def poll_plugin_market():
-        logger.info("定时任务开始：插件市场轮询")
         try:
             await market.refresh()
             result = await market.poll_updates(runtime)
-            logger.info("定时任务完成：插件市场轮询")
+            if result.get("updated"):
+                logger.info("插件市场自动更新完成：%s", "、".join(result["updated"]))
+            for error in result.get("errors", []):
+                logger.error("插件市场自动更新失败：%s", error)
             return result
         except Exception:
             logger.exception("定时任务失败：插件市场轮询")
@@ -133,10 +135,13 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     logger.info("插件仓库轮询已注册：每 %d 分钟，%d 个仓库（含官方）",
                 max(1, int(settings.plugin_repo_interval)), len(settings.plugin_repos))
     async def discover_repositories_job():
-        logger.info("定时任务开始：插件仓库自动发现")
         try:
             result = await market.discover_repositories()
-            logger.info("定时任务完成：插件仓库自动发现")
+            logger.info("插件仓库自动发现完成：搜索到 %d 个，新增 %d 个，跳过已有 %d 个",
+                        int(result.get("found", 0)), len(result.get("added", [])),
+                        int(result.get("skipped_existing", 0)))
+            for error in result.get("errors", []):
+                logger.warning("插件仓库自动发现：%s", error)
             return result
         except Exception:
             logger.exception("定时任务失败：插件仓库自动发现")

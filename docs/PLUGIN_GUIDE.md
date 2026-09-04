@@ -176,6 +176,10 @@ async def setup(ctx):
     ctx.create_task(worker(), name="worker")
 ```
 
+注意：`schedule_cron` 的时间字段使用 APScheduler 的字段名（如
+`hour=8, minute=0`），不要传入 V1 的 `schedulers` 模块或自行导入调度器。
+回调必须是 `async def`；没有有效时间字段的平台会拒绝注册并写入错误日志。
+
 停用时平台会移除事件、调度、Webhook 和动作，并取消通过 `ctx.create_task()` 创建的后台任务。不要直接创建平台无法追踪的永久任务。
 
 ## 平台服务
@@ -238,6 +242,16 @@ async def setup(ctx):
 ```
 
 公开地址为 `/api/plugin/<插件ID>/receive`。请求对象提供 `method`、`path`、`query`、`headers`、`body`、`text` 和 `json`。插件必须自行验证调用方。
+
+Webhook 路径必须与注册值完全一致（这里的 `receive` 不能改成 `/receive`，也不能省略）：
+
+```text
+注册：ctx.on_webhook("receive", receive)
+调用：POST /api/plugin/hello_world/receive
+```
+
+调用未注册的路径会返回“Webhook 不存在”。插件停用或重载后旧路由会被清理，
+调用方应在插件重新启用后再请求。签名校验失败时应返回错误结果，不要抛出包含密钥的异常。
 
 ## 资源保护
 

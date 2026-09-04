@@ -695,6 +695,7 @@ function showStoreNotice(message) {
 const storeLastSync = ref(null)
 const storeLoaded = ref(false)
 const dlBusy = ref({})
+let storeIdleTask = null
 
 // 应用筛选和排序
 function applyStoreFilters(list) {
@@ -973,6 +974,9 @@ async function loadStore(refresh = false) {
     store.value = d.plugins || []
     officialIds.value = d.official_ids || []
     storeLastSync.value = d.last_sync
+    // 只有成功拿到市场热度数据后才允许“我的插件”按热度排序；失败时
+    // 保持后端原顺序，避免先按 0 排序、随后又跳变造成闪烁。
+    storeLoaded.value = true
     const marketById = new Map(store.value.map((plugin) => [plugin.id, plugin]))
     plugins.value.forEach((plugin) => {
       const marketPlugin = marketById.get(plugin.id)
@@ -986,7 +990,6 @@ async function loadStore(refresh = false) {
     showStoreNotice(e.message)
   } finally {
     storeBusy.value = false
-    storeLoaded.value = true
   }
 }
 
@@ -1103,14 +1106,15 @@ async function saveRepos() {
 
 function goStore() {
   tab.value = 'store'
-  // 进入市场优先展示已有缓存；仅首次进入且没有数据时加载，避免每次切换都触发刷新。
-  if (store.value.length === 0 && !storeBusy.value) loadStore(false)
+  // 首次进入按 V1 约定主动刷新；已有结果则直接使用缓存。
+  if (store.value.length === 0 && !storeBusy.value) loadStore(true)
 }
 
 onMounted(() => {
   pluginPageMounted = true
-  // 插件基础列表与市场增强数据并行预加载，首屏直接具备 Logo、热度和更新状态。
-  Promise.all([load(), loadStore(false)]).catch(() => {})
+  Promise.all([load()]).catch(() => {})
+  // 按 V1 在浏览器空闲时预加载市场，避免阻塞“我的插件”首屏。
+  storeIdleTask = window.setTimeout(() => loadStore(true), 800)
   document.addEventListener('click', closePageDropdowns)
   window.addEventListener('resize', positionConfigScopeMenu)
   window.addEventListener('scroll', positionConfigScopeMenu, true)
@@ -1123,6 +1127,7 @@ onMounted(() => {
 onUnmounted(() => {
   pluginPageMounted = false
   logsDisconnect()
+  if (storeIdleTask !== null) window.clearTimeout(storeIdleTask)
   stopNotificationSync?.()
   document.removeEventListener('click', closePageDropdowns)
   window.removeEventListener('resize', positionConfigScopeMenu)

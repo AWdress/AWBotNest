@@ -1,6 +1,7 @@
-# AWBotNest 2 插件规范
+# AWBotNest 2 平台开发规范
 
-本文定义插件与平台之间的硬性兼容边界。教程见 `PLUGIN_GUIDE.md`。
+本文定义 AWBotNest 2 平台的运行、扩展、安全与发布边界。插件开发教程见 `PLUGIN_GUIDE.md`；
+本文中的插件相关条目仅用于说明平台对插件的兼容约束，不是插件开发教程。
 
 ## 入口与元数据
 
@@ -29,6 +30,13 @@
 4. 公开 Webhook 必须验证调用方，并限制请求体和处理时间。
 5. 网络请求必须设置合理超时，禁止无限重试。
 6. 插件不得绕过平台代理、安全校验、资源限制或停用清理。
+
+## 平台扩展兼容性边界
+
+1. 不得导入 V1 的 `schedulers`、Pyrogram 或 Kurigram 模块；统一使用 `ctx.schedule_interval`、`ctx.schedule_cron` 和 Telethon 事件接口。
+2. `schedule_cron` 至少要提供一个有效的 APScheduler 时间字段；无效表达式不得静默忽略。
+3. Webhook 调用路径必须与 `ctx.on_webhook(path, callback)` 注册的路径逐字一致，且不得依赖停用插件留下的旧路由。
+4. 插件安装后必须能被扫描器识别；语法错误、元数据错误或依赖缺失应通过 `ctx.log`/异常日志说明具体原因。
 
 ## Windows 与 Linux
 
