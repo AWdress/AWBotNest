@@ -280,6 +280,7 @@ class PluginRuntime:
         context = PluginContext(
             plugin_id, scope, self.accounts, self.scheduler, self.settings,
             self.services, self.routes, self.notifier, meta.bot, meta.resources or {},
+            plugin_name=meta.name,
         )
         try:
             value = setup(context)

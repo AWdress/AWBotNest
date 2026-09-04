@@ -19,14 +19,20 @@ from .activity import activity, set_current, reset_current, record_current
 EventCallback = Callable[[Any], Awaitable[Any]]
 
 
+class PluginLogger(logging.LoggerAdapter):
+    def process(self, msg, kwargs):
+        return f"[{self.extra['plugin_name']}] {msg}", kwargs
+
+
 class PluginContext:
     """Telethon 原生的插件能力入口。"""
 
     def __init__(self, plugin_id: str, scope: str, accounts: TelegramAccounts,
                  scheduler: PluginScheduler, settings: Settings, services: PlatformServices,
                  routes: PluginRoutes, notifier: NotificationService, bot_id: str = "",
-                 resources: dict[str, object] | None = None) -> None:
+                 resources: dict[str, object] | None = None, plugin_name: str = "") -> None:
         self.plugin_id = plugin_id
+        self.plugin_name = plugin_name or plugin_id
         self.scope = scope
         self.accounts = accounts
         self.scheduler = scheduler
@@ -45,7 +51,8 @@ class PluginContext:
         self.max_tasks = max(1, min(int(policy.get("max_background_tasks", 32)), 500))
         self.max_concurrency = max(1, min(int(policy.get("max_concurrency", 8)), 100))
         self._semaphore = asyncio.Semaphore(self.max_concurrency)
-        self.log = logging.getLogger(f"awbotnest.plugin.{plugin_id}")
+        self.log = PluginLogger(logging.getLogger(f"awbotnest.plugin.{plugin_id}"),
+                                {"plugin_name": self.plugin_name})
         self._handlers: list[tuple[TelegramClient, EventCallback, object]] = []
         self._tasks: set[asyncio.Task[Any]] = set()
 
@@ -167,7 +174,7 @@ class PluginContext:
         try:
             result = await self.notifier.send(
                 text, channel=channel, entity=entity, bot_id=self.bot_id,
-                plugin_id=self.plugin_id, plugin_name=self.plugin_id, level=level, category=category,
+                plugin_id=self.plugin_id, plugin_name=self.plugin_name, level=level, category=category,
             )
             return result
         except Exception:

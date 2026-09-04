@@ -336,7 +336,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         read_at = runtime.notifier.read_at()
         plugin_names = {item.id: item.name for item in runtime.scan()}
         for item in values:
-            item["plugin_name"] = item.get("plugin_name") or plugin_names.get(str(item.get("plugin_id") or ""), "系统")
+            item["plugin_name"] = plugin_names.get(str(item.get("plugin_id") or "")) or item.get("plugin_name") or "系统"
             item["plugin_icon"] = ""
             item["unread"] = float(item.get("t") or 0) > read_at
         return {"notifications": values, "unread": sum(bool(item["unread"]) for item in values)}
@@ -483,7 +483,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("插件 Webhook 执行失败：%s/%s", plugin_id, path)
+            logger.exception("插件 Webhook 执行失败：%s/%s", runtime.display_name(plugin_id), path)
             raise HTTPException(status_code=502, detail="插件 Webhook 执行失败") from exc
         if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
             return JSONResponse(content=result)
@@ -595,7 +595,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         except LookupError as exc:
             raise HTTPException(status_code=503, detail="插件未启用或未注册 Webhook") from exc
         except Exception as exc:
-            logger.exception("公开插件 Webhook 执行失败：%s", plugin_id)
+            logger.exception("公开插件 Webhook 执行失败：%s", runtime.display_name(plugin_id))
             raise HTTPException(status_code=502, detail="插件 Webhook 执行失败") from exc
         if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
             return JSONResponse(content=result)
