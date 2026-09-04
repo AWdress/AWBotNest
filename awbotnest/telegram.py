@@ -295,6 +295,24 @@ class TelegramAccounts:
             clients.extend(self.connected_users)
         return clients
 
+    async def default_notification_target(self) -> int | None:
+        """默认接收人固定为配置中的首个用户账号，不随在线顺序切换。"""
+        if not self.settings.user_sessions:
+            return None
+        name = self.settings.user_sessions[0]
+        profile = self._profiles().get(name, {})
+        try:
+            target = int(profile.get("user_id") or 0)
+        except (TypeError, ValueError):
+            target = 0
+        if target > 0:
+            return target
+        client = self.users.get(name)
+        if client is not None and client.is_connected():
+            me = await asyncio.wait_for(client.get_me(), timeout=15)
+            return int(me.id) if me and not getattr(me, "bot", False) else None
+        return None
+
     def choose_bot(self, bot_id: str = "") -> TelegramClient | None:
         if bot_id:
             client = self.bots.get(bot_id)

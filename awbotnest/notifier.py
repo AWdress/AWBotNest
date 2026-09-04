@@ -93,8 +93,16 @@ class NotificationService:
         if kind == "telegram":
             target = entity if entity is not None else (config.get("chat_id") or self.settings.default_bot_chat_id)
             bot = self.accounts.choose_bot(bot_id or str(config.get("bot_id") or config.get("id") or ""))
-            if bot is None or not bot.is_connected() or target in (None, ""):
-                raise RuntimeError("Telegram 通知缺少可用 Bot 或目标会话")
+            if bot is None or not bot.is_connected():
+                raise RuntimeError("Telegram 通知 Bot 不可用，请检查所选 Bot 是否在线")
+            if isinstance(target, str):
+                target = target.strip()
+            if target in (None, "", 0):
+                target = await self.accounts.default_notification_target()
+            if target in (None, "", 0):
+                raise RuntimeError("Telegram 通知未找到接收人：请登录首个用户账号或填写 Chat ID")
+            if isinstance(target, str) and target.lstrip("-").isdigit():
+                target = int(target)
             return await bot.send_message(target, plain_text)
         if kind == "bark":
             url = str(config.get("url") or config.get("server") or "").rstrip("/")

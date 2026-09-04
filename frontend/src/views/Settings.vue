@@ -2434,7 +2434,7 @@ onBeforeRouteLeave(async () => {
             <label>Chat ID（可选）</label>
             <input class="input" v-model="channelForm.config.chat_id"
                    placeholder="接收消息的用户、群组或频道 Chat ID" />
-            <div class="hint muted small">接收消息通知的用户、群组或频道Chat ID</div>
+            <div class="hint muted small">留空使用全局默认 Chat ID；未设置时发送给首个用户账号。请先用该账号启动接收通知的 Bot。</div>
           </div>
         </template>
 
