@@ -372,11 +372,11 @@ class PluginRuntime:
         }
 
     @staticmethod
-    def validate_config(schema: dict[str, object], values: dict[str, object]) -> None:
+    def validate_config(schema: dict[str, object], values: dict[str, object], *, allow_extra: bool = False) -> None:
         expected = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
                     "array": list, "object": dict}
         unknown = set(values) - set(schema)
-        if schema and unknown:
+        if schema and unknown and not allow_extra:
             raise ValueError(f"包含未声明的配置项：{', '.join(sorted(unknown))}")
         for key, raw in schema.items():
             spec = raw if isinstance(raw, dict) else {}

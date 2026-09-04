@@ -1100,10 +1100,10 @@ async function saveRepos() {
 }
 
 function goStore() {
+  const entering = tab.value !== 'store'
   tab.value = 'store'
-  // 页面只读取本地缓存；远程仓库与热度由后台“插件市场轮询”更新，
-  // 用户也可通过“刷新市场”主动触发刷新。
-  if (store.value.length === 0 && !storeBusy.value) loadStore(false)
+  // 每次切入市场刷新一次；停留当前页重复点击不并发请求。
+  if (entering && !storeBusy.value) loadStore(true)
 }
 
 onMounted(() => {

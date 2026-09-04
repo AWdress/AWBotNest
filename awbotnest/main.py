@@ -85,7 +85,6 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
 
     async def poll_plugin_market():
         try:
-            await market.refresh()
             result = await market.poll_updates(runtime)
             if result.get("updated"):
                 logger.info("插件市场自动更新完成：%s", "、".join(result["updated"]))
@@ -99,7 +98,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     async def refresh_market_at_startup():
         logger.info("启动任务开始：刷新插件市场")
         try:
-            await market.refresh()
+            await poll_plugin_market()
             logger.info("启动任务完成：插件市场刷新")
         except Exception:
             logger.exception("启动任务失败：插件市场刷新")

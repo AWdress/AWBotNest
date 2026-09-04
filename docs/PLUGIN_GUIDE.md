@@ -177,6 +177,8 @@ async def setup(ctx):
 
 ## 配置表单
 
+原生 schema 表单拒绝未声明字段。自定义 Vue 配置页允许额外业务字段，平台会保留其值，并继续校验已声明字段；密码等敏感字段仍应在 schema 中声明 `secret: True`，以便读写时脱敏。
+
 ```python
 "config_schema": {
     "enabled": {

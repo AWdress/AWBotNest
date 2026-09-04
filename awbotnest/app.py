@@ -1664,7 +1664,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             if isinstance(spec, dict) and spec.get("secret") and values.get(key) == "********":
                 values[key] = current_values.get(key, "")
         try:
-            runtime.validate_config(plugin.config_schema or {}, values)
+            runtime.validate_config(plugin.config_schema or {}, values,
+                                    allow_extra=plugin.render_mode == "vue")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         settings.plugin_config[plugin_id] = values
