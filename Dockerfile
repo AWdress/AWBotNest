@@ -15,7 +15,8 @@ WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    TZ=Asia/Shanghai
+    TZ=Asia/Shanghai \
+    CLOAKBROWSER_CACHE_DIR=/app/data/cloakbrowser
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tini xvfb xauth ca-certificates fonts-noto-cjk fonts-noto-color-emoji \

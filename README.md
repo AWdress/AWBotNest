@@ -23,6 +23,8 @@
 
 V2 请使用独立的数据目录，仅支持 V2 配置与备份。不要与 V1 共用数据目录。
 
+CloakBrowser 浏览器缓存默认保存在 `data/cloakbrowser`（容器内 `/app/data/cloakbrowser`），随 `data` 映射持久化，同版本完整缓存可在容器重建后复用。切换到此目录后首次使用仍可能需要下载；浏览器版本升级也可能下载新版本。可通过 `CLOAKBROWSER_CACHE_DIR` 覆盖目录，自定义目录需自行挂载。此设置不改变镜像内 Playwright Chromium 的安装位置。
+
 在 Linux 服务器执行下面这一条命令：
 
 ```bash

@@ -13,6 +13,9 @@ SESSIONS_DIR = APP_ROOT / "sessions"
 PLUGINS_DIR = APP_ROOT / "plugins"
 CONFIG_FILE = DATA_DIR / "config.json"
 
+# 在插件导入 CloakBrowser 前配置缓存；尊重管理员显式指定的目录。
+os.environ.setdefault("CLOAKBROWSER_CACHE_DIR", str(DATA_DIR / "cloakbrowser"))
+
 
 def validate_config_format(value: object) -> None:
     if not isinstance(value, dict):
