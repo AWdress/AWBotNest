@@ -2800,8 +2800,8 @@ onBeforeRouteLeave(async () => {
 .route-search { margin-bottom: 8px; }
 .panel { display: flex; flex-direction: column; }
 /* 通知路由优先于渠道卡片，保持与 V1 的菜单顺序一致。 */
-.notify-route-card { order: 1; }
-.notify-channels-card { order: 2; }
+.notify-channels-card { order: 1; }
+.notify-route-card { order: 2; }
 .route-table { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
 .route-row { display: flex; align-items: center; gap: 10px; }
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
