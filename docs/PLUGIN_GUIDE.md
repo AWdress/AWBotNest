@@ -274,6 +274,8 @@ description = await ctx.ai.vision("screenshot.png", "识别图片中的文字")
 generated = await ctx.ai.generate_image("一张蓝绿色的极简海报")
 ```
 
+Cookie 读取与 V1 一致：`get(domain, path="/", names=None)` 返回 Cookie 对象列表，而非键值字典；`header(domain, path="/", names=None)` 返回请求头字符串。按域名、hostOnly、路径边界和有效期筛选，长路径优先；同名请求头使用优先匹配值。`playwright(domain, path="/")` 保留浏览器 Cookie 属性。CookieCloud 同步保留路径及过期等属性。旧 V2 键值缓存只能按根路径读取，需重新同步才能恢复原始路径信息。
+
 `ctx.ai.is_available("text" | "vision" | "image")` 可判断能力是否可用；
 `ctx.ai.available_models(...)` 只返回管理员授权给当前插件的模型别名和能力。插件不得自行保存服务地址或密钥。
 

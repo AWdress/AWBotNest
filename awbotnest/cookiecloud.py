@@ -90,7 +90,7 @@ def decrypt_payload(encrypted: str, uuid: str, password: str, mode: str = "auto"
     raise CookieCloudError("Cookie 数据解密失败，请检查 UUID、密码和加密算法")
 
 
-def normalize_cookie_data(payload: Any) -> dict[str, dict[str, str]]:
+def normalize_cookie_data(payload: Any) -> dict[str, list[dict[str, Any]]]:
     if not isinstance(payload, dict):
         raise CookieCloudError("远程 CookieCloud 数据格式无效")
     source = payload.get("cookie_data", payload)
@@ -98,7 +98,7 @@ def normalize_cookie_data(payload: Any) -> dict[str, dict[str, str]]:
         raise CookieCloudError("远程 CookieCloud 缺少 Cookie 数据")
     if "cookie_data" not in payload and (not source or any(not isinstance(items, list) for items in source.values())):
         raise CookieCloudError("远程 CookieCloud 未返回 Cookie 数据")
-    result: dict[str, dict[str, str]] = {}
+    result: dict[str, list[dict[str, Any]]] = {}
     for source_domain, items in source.items():
         if not isinstance(items, list):
             continue
@@ -108,12 +108,14 @@ def normalize_cookie_data(payload: Any) -> dict[str, dict[str, str]]:
             domain = str(item.get("domain") or source_domain).lstrip(".").lower().strip()
             name = str(item.get("name") or "").strip()
             if domain and name:
-                result.setdefault(domain, {})[name] = str(item.get("value") or "")
+                result.setdefault(domain, []).append({**item, "domain": str(item.get("domain") or source_domain),
+                                                     "name": name, "value": str(item.get("value") or ""),
+                                                     "path": str(item.get("path") or "/")})
     return result
 
 
 async def pull(url: str, uuid: str, password: str, mode: str = "auto",
-               proxy: str | None = None) -> dict[str, dict[str, str]]:
+               proxy: str | None = None) -> dict[str, list[dict[str, Any]]]:
     endpoint = f"{url.rstrip('/')}/get/{uuid.strip()}"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(20, connect=8),
