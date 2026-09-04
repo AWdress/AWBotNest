@@ -42,6 +42,19 @@ function applyAppearance() {
   if (image) {
     const preload = new Image()
     preload.src = image
+    // 随机图接口偶尔返回网关错误或空响应；重试一次，失败后清除无效背景，
+    // 避免保留 broken-image 状态导致后续导航一直没有背景。
+    preload.onerror = () => {
+      if (!localStorage.getItem('awbotnest-bg-image') && image.includes('loliapi.com')) {
+        const retry = `${image.split('?')[0]}?t=${Date.now()}&retry=1`
+        document.documentElement.style.setProperty('--app-bg-image', `url("${retry}")`)
+        const second = new Image()
+        second.onerror = () => document.documentElement.style.setProperty('--app-bg-image', 'none')
+        second.src = retry
+      } else {
+        document.documentElement.style.setProperty('--app-bg-image', 'none')
+      }
+    }
   }
 }
 
