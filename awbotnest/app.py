@@ -1037,6 +1037,13 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         settings.web_host = body.web_host.strip() or "0.0.0.0"
         settings.web_port = body.web_port
         settings.bots = new_bots
+        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token}
+        settings.bot_routing = {
+            plugin_id: ",".join(bot_id for bot_id in str(route).split(",")
+                                 if bot_id.strip() in valid_route_bots)
+            for plugin_id, route in settings.bot_routing.items()
+            if any(bot_id.strip() in valid_route_bots for bot_id in str(route).split(","))
+        }
         settings.ai_base_url = body.ai_base_url.strip() or "https://api.openai.com/v1"
         if body.ai_api_key != "********":
             settings.ai_api_key = body.ai_api_key.strip()
@@ -1079,6 +1086,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             raise HTTPException(status_code=400, detail="通知渠道格式不正确")
         normalized = []
         existing_tokens = {item.id: item.token for item in settings.bot_specs()}
+        existing_bot_settings = {item.id: item for item in settings.bots}
         existing_channels = {str(item.get("id") or ""): dict(item) for item in settings.notification_channels}
         new_bots: list[BotSettings] = []
         default_token = settings.bot_token
@@ -1119,7 +1127,18 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         settings.bot_name = default_name
         settings.default_bot_chat_id = default_chat_id
         settings.default_bot_id = default_id if default_id in {"default", *(bot.id for bot in new_bots)} else "default"
-        settings.bots = new_bots
+        # 通知渠道页只编辑渠道，不能因为某个 Bot 没有绑定通知渠道就把它的
+        # Token 从系统配置中删除。保留未出现在本次渠道提交中的独立 Bot。
+        channel_bot_ids = {bot.id for bot in new_bots}
+        settings.bots = new_bots + [bot for bot_id, bot in existing_bot_settings.items()
+                                    if bot_id not in channel_bot_ids]
+        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token}
+        settings.bot_routing = {
+            plugin_id: ",".join(bot_id for bot_id in str(route).split(",")
+                                 if bot_id.strip() in valid_route_bots)
+            for plugin_id, route in settings.bot_routing.items()
+            if any(bot_id.strip() in valid_route_bots for bot_id in str(route).split(","))
+        }
         save_settings(settings)
         return {"ok": True, "channels": masked_channels(), "restart_required": True}
 
