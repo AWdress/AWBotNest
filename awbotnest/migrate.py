@@ -92,7 +92,9 @@ def migrate(source: Path) -> dict[str, object]:
     settings.web_port = int(old_config.get("WEB_UI_PORT") or settings.web_port)
     if not 1 <= settings.web_port <= 65535:
         raise ValueError("V1 网页端口不合法")
-    settings.bot_token = str(old_config.get("BOT_TOKEN") or settings.bot_token)
+    legacy_default_bot = old_config.get("BOT") if isinstance(old_config.get("BOT"), dict) else {}
+    settings.bot_token = str(old_config.get("BOT_TOKEN") or legacy_default_bot.get("token")
+                             or legacy_default_bot.get("bot_token") or settings.bot_token)
     settings.bot_name = str(old_config.get("BOT_NAME") or settings.bot_name)
     settings.default_bot_id = str(old_config.get("DEFAULT_BOT_ID") or settings.default_bot_id)
     settings.default_bot_chat_id = str(old_config.get("DEFAULT_BOT_CHAT_ID") or "")
@@ -101,9 +103,22 @@ def migrate(source: Path) -> dict[str, object]:
     settings.pip_index_url = str(old_config.get("PIP_INDEX_URL") or settings.pip_index_url)
     if isinstance(old_config.get("LOG_CLEANER"), dict):
         settings.log_cleaner = dict(old_config["LOG_CLEANER"])
+    raw_bots = old_config.get("BOTS") or []
+    # V1 配置曾使用 token、bot_token 或 BOT_TOKEN，不同版本格式均兼容。
+    if isinstance(raw_bots, dict):
+        raw_bots = [{"id": key, **(value if isinstance(value, dict) else {"token": value})}
+                    for key, value in raw_bots.items()]
+    elif isinstance(raw_bots, list):
+        raw_bots = [({"id": item.get("id") or item.get("name"), **item}
+                     if isinstance(item, dict) else {"id": f"bot{index}", "token": item})
+                    for index, item in enumerate(raw_bots, 1)]
     settings.bots = [
-        BotSettings(str(bot.get("id")), str(bot.get("name") or bot.get("id")), str(bot.get("token") or ""))
-        for bot in (old_config.get("BOTS") or [])
+        BotSettings(
+            str(bot.get("id")),
+            str(bot.get("name") or bot.get("bot_name") or bot.get("id")),
+            str(bot.get("token") or bot.get("bot_token") or bot.get("BOT_TOKEN") or ""),
+        )
+        for bot in raw_bots
         if isinstance(bot, dict) and bot.get("id")
     ]
     settings.plugin_config = {
