@@ -1103,7 +1103,11 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             previous_nested = previous.get("config") if isinstance(previous.get("config"), dict) else {}
             for key in ("url", "webhook", "server", "token", "password", "secret", "device_key"):
                 if item.get(key) == "********":
-                    item[key] = previous.get(key, previous_nested.get(key, ""))
+                    if key == "token" and item.get("type") == "telegram":
+                        # Telegram Token 存在 Bot 配置中，渠道中只有掩码。
+                        item[key] = existing_tokens.get(str(item.get("id") or ""), "") or previous.get(key, previous_nested.get(key, ""))
+                    else:
+                        item[key] = previous.get(key, previous_nested.get(key, ""))
             if item.get("type") == "wechat":
                 item["type"] = "wecom"
             if item.get("type") == "telegram":
@@ -1161,6 +1165,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             channel = next((item for item in settings.notification_channels if str(item.get("id")) == item_id), None)
             nested = channel.get("config") if isinstance((channel or {}).get("config"), dict) else {}
             value = str((channel or {}).get(field, nested.get(field, "")) or "")
+            if channel and channel.get("type") == "telegram" and field == "token":
+                value = next((bot.token for bot in settings.bot_specs() if bot.id == item_id), "") or value
         if not value:
             raise HTTPException(status_code=404, detail="密钥不存在")
         return {"value": value}
