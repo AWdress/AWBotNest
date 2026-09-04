@@ -111,7 +111,7 @@ export const api = {
   invokePluginAction: (id, action) => request('POST', `/api/plugins/${id}/actions/${encodeURIComponent(action)}`, { payload: {} }),
   // vue 模式插件：调用其 ctx.on_api 注册的端点（管理员令牌鉴权）
   callPluginApi: (id, path, method = 'GET', body) =>
-    request(method, `/api/plugin/${id}/${String(path).replace(/^\/+/, '')}`, body),
+    request(method, `/api/plugins/${id}/api/${String(path).replace(/^\/+/, '')}`, body),
 
   // GitHub 导入
   githubList: (source) => request('POST', '/api/plugins/github/list', { source }),

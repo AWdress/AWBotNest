@@ -34,6 +34,20 @@ class PluginRoutes:
     def __init__(self) -> None:
         self._webhooks: dict[tuple[str, str], Callable[..., Any]] = {}
         self._actions: dict[tuple[str, str], Callable[..., Any]] = {}
+        self._apis: dict[tuple[str, str], Callable[..., Any]] = {}
+
+    def api(self, plugin_id: str, path: str, callback: Callable[..., Any]) -> None:
+        if not callable(callback):
+            raise ValueError("插件 API 回调必须可调用")
+        self._apis[(plugin_id, self._name(path))] = callback
+
+    async def dispatch_api(self, plugin_id: str, path: str, request: Any) -> Any:
+        key = (plugin_id, self._name(path))
+        callback = self._apis.get(key) or self._webhooks.get(key)
+        if callback is None:
+            raise LookupError(f"插件接口未注册：{path}")
+        value = callback(request)
+        return await asyncio.wait_for(value, timeout=120) if inspect.isawaitable(value) else value
 
     @staticmethod
     def _name(value: str) -> str:
@@ -63,11 +77,13 @@ class PluginRoutes:
         return await asyncio.wait_for(value, timeout=120) if inspect.isawaitable(value) else value
 
     def remove_plugin(self, plugin_id: str) -> None:
+        self._apis = {key: value for key, value in self._apis.items() if key[0] != plugin_id}
         self._webhooks = {key: value for key, value in self._webhooks.items() if key[0] != plugin_id}
         self._actions = {key: value for key, value in self._actions.items() if key[0] != plugin_id}
 
     def describe(self, plugin_id: str) -> dict[str, list[str]]:
         return {
+            "apis": sorted(key[1] for key in self._apis if key[0] == plugin_id),
             "webhooks": sorted(key[1] for key in self._webhooks if key[0] == plugin_id),
             "actions": sorted(key[1] for key in self._actions if key[0] == plugin_id),
         }

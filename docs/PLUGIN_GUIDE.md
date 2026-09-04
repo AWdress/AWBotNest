@@ -283,6 +283,24 @@ await ctx.notify("任务执行完成", category="定时任务", level="info")
 
 不要在日志或通知中包含密码、Token、Cookie 或 Session。
 
+## 配置页内部 API
+
+配置页使用 `host.callApi('/status')` 或 `host.callApi('/run', {method: 'POST', body: {}})`，
+访问管理员鉴权的 `/api/plugins/<id>/api/<path>`。插件在 `setup` 中注册：
+
+```python
+async def setup(ctx):
+    @ctx.on_api("status")
+    async def status(request):
+        return {"ok": True}
+```
+
+也支持 `ctx.on_api("status", status)`。回调接收与下文 Webhook 相同的请求对象，
+通过 `request.method`、`request.query`、`request.json` 读取请求；一个路径的不同 HTTP 方法由回调处理。
+插件必须启用并完成初始化后才能调用，停用时接口自动移除。
+内部 API 无需注册公开 Webhook，也不使用 Webhook 密钥；仅注册 `on_api` 的接口不会通过公开 Webhook 路径暴露。
+管理员 API 兼容调用已有 `on_webhook` 同名接口，但新插件应使用 `on_api`；两者同名时内部 API 优先。
+
 ## Webhook
 
 ```python

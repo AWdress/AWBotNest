@@ -490,10 +490,35 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         return result
 
     @app.api_route("/api/plugins/{plugin_id}/api/{path:path}",
-                   methods=["GET", "POST", "PUT", "PATCH", "DELETE"], include_in_schema=False)
+                   methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+                   dependencies=[Depends(require_admin)], include_in_schema=False)
     async def plugin_api_legacy(plugin_id: str, path: str, request: Request):
-        """V1 Vue 插件 API 路径兼容别名。"""
-        return await plugin_webhook(plugin_id, path, request)
+        """管理员插件接口；兼容以 on_webhook 注册的既有配置接口。"""
+        if plugin_id not in runtime.loaded:
+            if runtime.entry_file(plugin_id) is None:
+                raise HTTPException(status_code=404, detail="插件不存在或尚未安装")
+            detail = ("插件尚未运行：正在启动或启动失败，请查看插件启用日志"
+                      if plugin_id in settings.enabled_plugins else "插件未启用，请先启用插件")
+            raise HTTPException(status_code=409, detail=detail)
+        body = await request.body()
+        if len(body) > 20 * 1024 * 1024:
+            raise HTTPException(status_code=413, detail="插件接口请求体超过 20 MB")
+        wrapped = WebhookRequest(method=request.method, path=path,
+                                 query=dict(request.query_params),
+                                 headers={key.lower(): value for key, value in request.headers.items()},
+                                 body=body)
+        try:
+            result = await routes.dispatch_api(plugin_id, path, wrapped)
+        except HTTPException:
+            raise
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            logger.exception("插件接口执行失败：%s/%s", runtime.display_name(plugin_id), path)
+            raise HTTPException(status_code=502, detail="插件接口执行失败，请查看运行日志") from exc
+        if isinstance(result, (dict, list, str, int, float, bool)) or result is None:
+            return JSONResponse(content=result)
+        return result
 
     @app.post("/api/plugins/{plugin_id}/action/{action}", dependencies=[Depends(require_admin)])
     async def plugin_action_legacy(plugin_id: str, action: str):

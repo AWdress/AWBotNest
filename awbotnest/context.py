@@ -176,6 +176,13 @@ class PluginContext:
     def on_webhook(self, path: str, callback: Callable[..., Any]) -> None:
         self.routes.webhook(self.plugin_id, path, callback)
 
+    def on_api(self, path: str, callback: Callable[..., Any] | None = None):
+        """注册管理员接口；支持直接调用及装饰器，回调接收 WebhookRequest。"""
+        def register(handler):
+            self.routes.api(self.plugin_id, path, handler)
+            return handler
+        return register(callback) if callback is not None else register
+
     def action(self, name: str, callback: Callable[..., Any]) -> None:
         self.routes.action(self.plugin_id, name, callback)
 
