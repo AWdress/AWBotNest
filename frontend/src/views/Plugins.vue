@@ -1798,7 +1798,7 @@ onUnmounted(() => {
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
             <div class="hint muted">仓库名必须是 AWBotNest-Plugins，例如 AWdress/AWBotNest-Plugins。</div>
-            <div class="hint muted">推荐仓库带 manifest.json 并写好 version，系统才能识别「更新」。</div>
+            <div class="hint muted">V2 仓库根目录必须包含 manifest_v2.json；插件条目需填写 version，并与插件元数据一致，系统才能识别更新。</div>
           </div>
         </div>
         <div class="modal-foot">
