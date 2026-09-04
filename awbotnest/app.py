@@ -1736,7 +1736,11 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.post("/api/backups", dependencies=[Depends(require_admin)])
     async def create_backup():
         logger.info("备份导出开始")
-        archive = await asyncio.to_thread(BackupManager.create)
+        try:
+            archive = await asyncio.wait_for(asyncio.to_thread(BackupManager.create), timeout=120)
+        except Exception as exc:
+            logger.exception("备份导出失败：%s", exc)
+            raise HTTPException(status_code=500, detail=f"备份导出失败：{exc}") from exc
         logger.info("备份导出完成：%s", archive.name)
         return {"ok": True, "filename": archive.name}
 
@@ -1756,7 +1760,11 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():
         logger.info("备份下载开始")
-        archive = await asyncio.to_thread(BackupManager.create)
+        try:
+            archive = await asyncio.wait_for(asyncio.to_thread(BackupManager.create), timeout=120)
+        except Exception as exc:
+            logger.exception("备份下载失败：%s", exc)
+            raise HTTPException(status_code=500, detail=f"备份生成失败：{exc}") from exc
         logger.info("备份下载完成：%s", archive.name)
         return FileResponse(archive, filename=archive.name, media_type="application/zip")
 
