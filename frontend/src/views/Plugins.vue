@@ -1113,8 +1113,8 @@ function goStore() {
 onMounted(() => {
   pluginPageMounted = true
   Promise.all([load()]).catch(() => {})
-  // 按 V1 在浏览器空闲时预加载市场，避免阻塞“我的插件”首屏。
-  storeIdleTask = window.setTimeout(() => loadStore(true), 800)
+  // “我的插件”页只读取本地插件与本地热度；市场数据延迟到用户进入
+  // “插件市场”时再刷新，避免首屏无意义地请求远程热度接口。
   document.addEventListener('click', closePageDropdowns)
   window.addEventListener('resize', positionConfigScopeMenu)
   window.addEventListener('scroll', positionConfigScopeMenu, true)
