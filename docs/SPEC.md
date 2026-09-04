@@ -64,9 +64,13 @@
 
 ## V2 扩展能力
 
-### 多实例与依赖
+### Python 依赖管理边界
 
-可选声明 `instance_mode`：`shared`（默认）或 `account`。账号实例通过 `ctx.account_name` 区分，并拥有隔离的 `ctx.kv` 与 `ctx.data_dir`。可声明 `dependencies`（前置插件 ID）和 `provides_capabilities`（能力名）；依赖未满足时禁止启用，能力提供者按优先级选择并支持回退。
+平台读取入口元数据 `requirements`，在导入插件前检查发行包版本并安装缺失或版本不符的 Python 依赖。声明最多 50 项，不接受 URL 和环境条件；安装统一使用平台配置的代理、pip 镜像源，并串行执行，单次 pip 超时为 300 秒。安装结果及错误原因必须写入运行日志。
+
+依赖持久化在共享的 `data/plugin_deps`，并非每插件独立环境。当前不提供跨插件版本冲突求解、升级事务、依赖回滚或系统软件安装；不能保证依赖变更不影响其他插件。具体开发约束与排查步骤见 [插件开发指南](PLUGIN_GUIDE.md#python-依赖声明与安装)。
+
+当前加载器未实现 `instance_mode`、`dependencies` 或 `provides_capabilities` 元数据协议，不承诺按这些字段创建隔离账号实例、解析前置插件、自动启用依赖或选择/回退能力提供者。不得将尚未实现的协议描述为当前平台能力。
 
 ### 统一治理
 
