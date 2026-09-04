@@ -162,6 +162,19 @@ class PluginRuntime:
                     return value
         raise ValueError("缺少可静态读取的 __plugin__ 元数据")
 
+    def display_name(self, plugin_id: str) -> str:
+        loaded = self.loaded.get(plugin_id)
+        if loaded and loaded.meta.name:
+            return loaded.meta.name
+        try:
+            entry = self.entry_file(plugin_id)
+            if entry:
+                return str(self._metadata(entry).get("name") or plugin_id)
+        except Exception:
+            # 日志名称读取失败不应影响原本的操作或错误处理。
+            pass
+        return plugin_id
+
     def scan(self) -> list[PluginMeta]:
         result: list[PluginMeta] = []
         for entry in self._entries():
@@ -255,7 +268,7 @@ class PluginRuntime:
             meta.error = "未配置 Telegram API_ID/API_HASH"
             return meta
         try:
-            await self.deps.ensure(meta.requirements or [])
+            await self.deps.ensure(meta.requirements or [], plugin_name=meta.name)
             module = self._import(entry, plugin_id)
         except Exception as exc:
             meta.error = f"{type(exc).__name__}: {exc}"
@@ -301,9 +314,9 @@ class PluginRuntime:
                     if inspect.isawaitable(value):
                         await asyncio.wait_for(value, timeout=15)
             except TimeoutError:
-                logger.error("插件停用超时：%s", plugin_id)
+                logger.error("插件停用超时：%s", loaded.meta.name)
             except Exception:
-                logger.exception("插件停用钩子失败：%s", plugin_id)
+                logger.exception("插件停用钩子失败：%s", loaded.meta.name)
             finally:
                 await loaded.context.close()
                 sys.modules.pop(self._module_name(plugin_id), None)
@@ -321,7 +334,7 @@ class PluginRuntime:
                         if plugin_id in self.settings.enabled_plugins:
                             await self._enable(plugin_id)
                 except Exception:
-                    logger.exception("恢复插件失败，平台继续启动：%s", plugin_id)
+                    logger.exception("恢复插件失败，平台继续启动：%s", self.display_name(plugin_id))
 
     async def stop(self) -> None:
         for plugin_id in reversed(list(self.loaded)):
@@ -336,7 +349,7 @@ class PluginRuntime:
                     await self.disable(plugin_id, persist=False)
                 await self.enable(plugin_id)
             except Exception:
-                logger.exception("刷新 Telegram 插件失败：%s", plugin_id)
+                logger.exception("刷新 Telegram 插件失败：%s", self.display_name(plugin_id))
 
     def self_check(self) -> dict[str, object]:
         scanned = self.scan()

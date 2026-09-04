@@ -139,11 +139,6 @@ async function load() {
   try {
     const data = await api.listPlugins()
     plugins.value = data.plugins
-    const marketById = new Map(store.value.map((plugin) => [plugin.id, plugin]))
-    plugins.value.forEach((plugin) => {
-      const marketPlugin = marketById.get(plugin.id)
-      if (marketPlugin) plugin.install_count = installCount(marketPlugin)
-    })
     if (Array.isArray(data.official_ids) && data.official_ids.length) {
       officialIds.value = Array.from(new Set([...officialIds.value, ...data.official_ids]))
     }
@@ -156,13 +151,18 @@ async function load() {
 }
 
 async function toggle(p) {
-  if (p.error) return
+  if (p.error || busy.value[p.id]) return
+  const wasEnabled = p.enabled
   busy.value[p.id] = true
+  p.enabled = !wasEnabled
   try {
-    const data = p.enabled ? await api.disablePlugin(p.id) : await api.enablePlugin(p.id)
+    const data = wasEnabled ? await api.disablePlugin(p.id) : await api.enablePlugin(p.id)
     Object.assign(p, data.plugin)
   } catch (e) {
-    error.value = `${p.name}: ${e.message}`
+    p.enabled = wasEnabled
+    const message = `${wasEnabled ? '停用' : '启用'}失败：${p.name}（${e.message}）`
+    error.value = message
+    toast.error(message)
   } finally {
     busy.value[p.id] = false
   }
@@ -677,8 +677,8 @@ const filteredPlugins = computed(() => {
   if (pluginFilter.value === 'enabled') filtered = filtered.filter((p) => p.enabled && !p.error)
   if (pluginFilter.value === 'disabled') filtered = filtered.filter((p) => !p.enabled && !p.error)
   if (pluginFilter.value === 'error') filtered = filtered.filter((p) => p.error)
-  // 热度数据加载完成前保持后端顺序，避免初始 0 值参与排序导致卡片跳动。
-  return customPluginOrder.value || !storeLoaded.value ? [...filtered] : [...filtered].sort(sortByHeat)
+  // 插件接口已携带本地热度，首屏即可排序；手动排序始终优先。
+  return customPluginOrder.value ? [...filtered] : [...filtered].sort(sortByHeat)
 })
 
 // ── 插件市场（多仓库聚合） ──
@@ -693,7 +693,6 @@ function showStoreNotice(message) {
   storeErrTimer = setTimeout(() => { storeErr.value = '' }, 6000)
 }
 const storeLastSync = ref(null)
-const storeLoaded = ref(false)
 const dlBusy = ref({})
 let storeIdleTask = null
 
@@ -974,16 +973,12 @@ async function loadStore(refresh = false) {
     store.value = d.plugins || []
     officialIds.value = d.official_ids || []
     storeLastSync.value = d.last_sync
-    // 只有成功拿到市场热度数据后才允许“我的插件”按热度排序；失败时
-    // 保持后端原顺序，避免先按 0 排序、随后又跳变造成闪烁。
-    storeLoaded.value = true
     const marketById = new Map(store.value.map((plugin) => [plugin.id, plugin]))
     plugins.value.forEach((plugin) => {
       const marketPlugin = marketById.get(plugin.id)
       if (!marketPlugin) return
       plugin.icon = plugin.icon || marketPlugin.icon || ''
       plugin.official = !!(plugin.official || marketPlugin.official || officialIds.value.includes(plugin.id))
-      plugin.install_count = installCount(marketPlugin)
     })
     if (d.errors && d.errors.length) showStoreNotice(d.errors.join('；'))
   } catch (e) {
@@ -1242,7 +1237,7 @@ onUnmounted(() => {
                   <span v-if="p.render_mode === 'vue'" class="badge-vue">Vue</span>
                 </span>
                 <span class="badge" :class="p.error ? 'badge-err' : (p.enabled ? 'badge-on' : 'badge-off')">
-                  {{ p.error ? '异常' : (p.enabled ? '已启用' : '未启用') }}
+                  {{ p.error ? '异常' : busy[p.id] ? (p.enabled ? '启用中' : '处理中') : (p.enabled ? '已启用' : '未启用') }}
                 </span>
               </div>
             </div>
@@ -1264,7 +1259,7 @@ onUnmounted(() => {
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
-              <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
+              <span>{{ formatInstallCount(p.install_count) }}</span>
             </span>
             <div class="kebab-wrap">
               <button class="kebab" :class="{ active: menuFor === p.id }" @click.stop="toggleMenu(p, $event)"
@@ -1346,7 +1341,7 @@ onUnmounted(() => {
                 <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                       :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
                   <Flame aria-hidden="true" />
-                  <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
+                  <span>{{ formatInstallCount(p.install_count) }}</span>
                 </span>
               </div>
 
@@ -1397,7 +1392,7 @@ onUnmounted(() => {
             <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                   :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
               <Flame aria-hidden="true" />
-              <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
+              <span>{{ formatInstallCount(p.install_count) }}</span>
             </span>
           </div>
 
@@ -1493,7 +1488,7 @@ onUnmounted(() => {
                 <span class="heat-count" :title="`插件热度 ${formatInstallCount(p.install_count)}`"
                       :aria-label="`插件热度 ${formatInstallCount(p.install_count)}`">
                   <Flame aria-hidden="true" />
-                  <span>{{ storeLoaded ? formatInstallCount(p.install_count) : '…' }}</span>
+                  <span>{{ formatInstallCount(p.install_count) }}</span>
                 </span>
                 <span class="mono">{{ p.id }}</span>
                 <span v-if="p.author">{{ p.author }}</span>
@@ -1628,6 +1623,7 @@ onUnmounted(() => {
     </div>
 
     <!-- 配置弹窗 -->
+    <Teleport to="#app">
     <div v-if="configOpen" class="modal-mask" @click.self="configOpen=false">
       <div class="modal card modal-wide">
         <div class="modal-head">
@@ -1755,6 +1751,8 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    </Teleport>
 
     <!-- 插件日志弹窗（只看当前插件） -->
     <div v-if="logsOpen" class="modal-mask" @click.self="closeLogs">

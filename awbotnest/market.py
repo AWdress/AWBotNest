@@ -61,8 +61,14 @@ class PluginMarket:
             pass
 
     def clear_cache(self) -> None:
-        self._cache = None
         self._cache_until = 0.0
+
+    def cached(self) -> dict[str, Any]:
+        """页面仅读取最近成功缓存，不因过期或缺失而访问远程。"""
+        return self._cache if self._cache is not None else {
+            "plugins": [], "errors": [], "install_counts": {},
+            "official_ids": [], "last_sync": None, "manifest": MANIFEST_NAME,
+        }
 
     async def refresh(self) -> dict[str, Any]:
         """强制刷新插件市场缓存，供启动流程和定时任务调用。"""
@@ -83,8 +89,17 @@ class PluginMarket:
     def local_install_counts(self) -> dict[str, int]:
         """Return persisted local heat immediately, without contacting the center."""
         state = self._heat_state()
-        return {str(key): max(0, int(value or 0))
+        counts = {str(key): max(0, int(value or 0))
                 for key, value in (state.get("installs") or {}).items()}
+        snapshot = self.cached()
+        for plugin in snapshot.get("plugins", []):
+            value = plugin.get("install_count")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                counts[str(plugin.get("id"))] = value
+        for key, value in (snapshot.get("install_counts") or {}).items():
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                counts[str(key)] = value
+        return counts
 
     def _save_heat_state(self, state: dict[str, Any]) -> None:
         path = PLUGINS_DIR.parent / "data" / "plugin_heat_state.json"
@@ -279,10 +294,10 @@ class PluginMarket:
                 response = await client.get(f"{PLUGIN_HEAT_SERVER_URL}/api/plugin-heat/counts")
             response.raise_for_status()
             if int(response.headers.get("content-length") or 0) > 1024 * 1024:
-                return {}
+                return self.local_install_counts()
             raw = (response.json() or {}).get("counts")
             if not isinstance(raw, dict) or len(raw) > 10_000:
-                return {}
+                return self.local_install_counts()
             counts = {
                 str(plugin_id): count for plugin_id, count in raw.items()
                 if isinstance(count, int) and not isinstance(count, bool)
@@ -297,7 +312,7 @@ class PluginMarket:
                 counts.setdefault(str(plugin_id), int(count or 0))
             return counts
         except Exception:
-            return {str(plugin_id): int(count or 0) for plugin_id, count in local.items()}
+            return self.local_install_counts()
 
     @staticmethod
     def _installed_version(plugin_id: str) -> str | None:

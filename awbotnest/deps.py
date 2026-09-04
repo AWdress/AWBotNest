@@ -5,10 +5,13 @@ import importlib.metadata
 import subprocess
 import sys
 import re
+import logging
 from pathlib import Path
 
 from .config import DATA_DIR, Settings
 from packaging.requirements import InvalidRequirement, Requirement
+
+logger = logging.getLogger("awbotnest.deps")
 
 
 class DependencyManager:
@@ -48,11 +51,12 @@ class DependencyManager:
             if parsed.url or parsed.marker:
                 raise ValueError(f"插件依赖声明不合法：{requirement}")
 
-    async def ensure(self, requirements: list[str]) -> None:
+    async def ensure(self, requirements: list[str], *, plugin_name: str = "插件") -> None:
         self.validate(requirements)
         missing = self.missing(requirements)
         if not missing:
             return
+        logger.info("%s 需要安装依赖：%s", plugin_name, ", ".join(missing))
         async with self._lock:
             missing = self.missing(requirements)
             if not missing:
@@ -71,6 +75,7 @@ class DependencyManager:
             if self.settings.pip_index_url:
                 command.extend(["--index-url", self.settings.pip_index_url])
             command.extend(missing)
+            logger.info("%s 正在安装依赖：%s", plugin_name, ", ".join(missing))
             process = await asyncio.create_subprocess_exec(
                 *command,
                 stdout=subprocess.PIPE,
@@ -81,8 +86,16 @@ class DependencyManager:
             except TimeoutError as exc:
                 process.kill()
                 await process.communicate()
+                logger.error("%s 依赖安装失败：超过 5 分钟", plugin_name)
                 raise RuntimeError("插件依赖安装超过 5 分钟，已停止") from exc
+            except asyncio.CancelledError:
+                if process.returncode is None:
+                    process.kill()
+                await process.communicate()
+                raise
             if process.returncode:
                 tail = output.decode(errors="replace")[-2000:]
                 tail = re.sub(r"(://)[^/@\s:]+:[^/@\s]+@", r"\1***:***@", tail)
+                logger.error("%s 依赖安装失败：%s", plugin_name, tail)
                 raise RuntimeError(f"插件依赖安装失败：{tail}")
+            logger.info("%s 依赖已安装：%s", plugin_name, ", ".join(missing))

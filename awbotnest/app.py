@@ -1364,7 +1364,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/plugins/{plugin_id}/enable", dependencies=[Depends(require_admin)])
     async def enable_plugin(plugin_id: str):
-        logger.info("插件启用开始：%s", plugin_id)
+        logger.info("插件启用开始：%s", runtime.display_name(plugin_id))
         try:
             meta = await runtime.enable(plugin_id)
         except FileNotFoundError as exc:
@@ -1372,21 +1372,22 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if meta.error:
-            logger.error("插件启用失败：%s（%s）", plugin_id, meta.error)
+            logger.error("插件启用失败：%s（%s）", meta.name, meta.error)
             raise HTTPException(status_code=409, detail=meta.error)
-        logger.info("插件启用成功：%s", plugin_id)
+        logger.info("插件启用成功：%s", meta.name)
         value = meta.to_dict()
         return {**value, "plugin": value}
 
     @app.post("/api/plugins/{plugin_id}/disable", dependencies=[Depends(require_admin)])
     async def disable_plugin(plugin_id: str):
-        logger.info("插件停用开始：%s", plugin_id)
+        plugin_name = runtime.display_name(plugin_id)
+        logger.info("插件停用开始：%s", plugin_name)
         await runtime.disable(plugin_id)
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
         value = meta.to_dict() if meta else {"id": plugin_id, "enabled": False, "loaded": False}
         value["enabled"] = False
         value["loaded"] = False
-        logger.info("插件停用成功：%s", plugin_id)
+        logger.info("插件停用成功：%s", plugin_name)
         return {"ok": True, "plugin": value}
 
     @app.post("/api/plugins/{plugin_id}/reload", dependencies=[Depends(require_admin)])
@@ -1522,7 +1523,6 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.post("/api/plugins/upload", dependencies=[Depends(require_admin)])
     async def upload_plugin(file: UploadFile = File(...)):
         filename = file.filename or ""
-        logger.info("插件上传安装开始：%s", filename or "<空文件名>")
         if not filename.endswith(".py") or not filename[:-3].replace("_", "").isalnum():
             raise HTTPException(status_code=400, detail="仅支持名称安全的 .py 插件文件")
         content = await file.read(2 * 1024 * 1024 + 1)
@@ -1539,14 +1539,14 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             if meta is None or meta.error:
                 raise ValueError(meta.error if meta else "插件元数据无法识别")
         except Exception as exc:
-            logger.error("插件上传安装失败：%s（%s）", filename or "<空文件名>", exc)
+            logger.error("安装失败：%s（%s）", runtime.display_name(target.stem), exc)
             target.unlink(missing_ok=True)
             if backup is not None:
                 target.write_bytes(backup)
             raise HTTPException(status_code=400, detail=f"插件校验失败：{exc}") from exc
         finally:
             temporary.unlink(missing_ok=True)
-        logger.info("插件上传安装完成：%s", target.stem)
+        logger.info("已安装：%s", runtime.display_name(target.stem))
         return {"ok": True, "plugin": meta.to_dict()}
 
     @app.delete("/api/plugins/{plugin_id}", dependencies=[Depends(require_admin)])
@@ -1827,8 +1827,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.get("/api/plugins/store", dependencies=[Depends(require_admin)])
     async def plugin_store(refresh: bool = False):
-        # 前端“刷新市场”显式绕过五分钟缓存；普通加载继续使用缓存。
-        return await (market.refresh() if refresh else market.list_all())
+        # 普通页面加载不触发联网；仅显式刷新和后台任务更新缓存。
+        return await market.refresh() if refresh else market.cached()
 
     @app.post("/api/plugins/store/install", dependencies=[Depends(require_admin)])
     async def install_market_plugin(body: MarketInstallBody):
@@ -1838,26 +1838,26 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     async def _install_market_plugin(body: MarketInstallBody):
         plugin_id = str(body.plugin.get("id") or "")
         was_loaded = plugin_id in runtime.loaded
-        action = "更新" if was_loaded else "安装"
-        logger.info("插件%s开始：%s", action, plugin_id)
+        action = "更新" if runtime.entry_file(plugin_id) is not None else "安装"
+        plugin_name = str(body.plugin.get("name") or runtime.display_name(plugin_id))
         try:
             if was_loaded:
                 await runtime.disable(plugin_id, persist=False)
             destination = await market.install(body.plugin)
         except ValueError as exc:
-            logger.warning("插件%s失败：%s（%s）", action, plugin_id, exc)
+            logger.error("%s失败：%s（%s）", action, plugin_name, exc)
             if was_loaded:
                 await runtime.enable(plugin_id)
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("插件%s下载失败：%s", action, plugin_id)
+            logger.exception("%s失败：%s（下载失败：%s）", action, plugin_name, exc)
             if was_loaded:
                 await runtime.enable(plugin_id)
             raise HTTPException(status_code=502, detail=f"插件下载失败：{exc}") from exc
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
         if meta is None or meta.error:
             error_detail = meta.error if meta else "插件安装后未被识别"
-            logger.error("插件%s失败：%s（安装后校验失败：%s）", action, plugin_id, error_detail)
+            logger.error("%s失败：%s（安装后校验失败：%s）", action, plugin_name, error_detail)
             market.finish(plugin_id, False)
             if was_loaded:
                 await runtime.enable(plugin_id)
@@ -1867,12 +1867,12 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             if meta.error:
                 market.finish(plugin_id, False)
                 await runtime.enable(plugin_id)
-                logger.error("插件%s失败：%s（重新加载失败：%s，已回滚）", action, plugin_id, meta.error)
+                logger.error("%s失败：%s（重新加载失败：%s，已回滚）", action, plugin_name, meta.error)
                 raise HTTPException(status_code=409, detail=f"更新加载失败，已回滚：{meta.error}")
         market.finish(plugin_id, True)
         await market.record_install(body.plugin, "update" if was_loaded else "install")
         market.clear_cache()
-        logger.info("插件%s完成：%s", action, plugin_id)
+        logger.info("已%s：%s", action, meta.name)
         return {"ok": True, "path": str(destination), "plugin": meta.to_dict()}
 
     @app.post("/api/plugins/store/download", dependencies=[Depends(require_admin)])
