@@ -14,6 +14,13 @@ PLUGINS_DIR = APP_ROOT / "plugins"
 CONFIG_FILE = DATA_DIR / "config.json"
 
 
+def validate_config_format(value: object) -> None:
+    if not isinstance(value, dict):
+        raise ValueError("配置文件必须是 JSON 对象")
+    if any(key in value for key in ("API_ID", "API_HASH", "BOTS", "AI_SERVICES")):
+        raise ValueError("配置文件格式不受支持，请为 V2 使用独立的数据目录")
+
+
 @dataclass(slots=True)
 class BotSettings:
     id: str
@@ -54,6 +61,7 @@ class Settings:
     webhook_secret: str = ""
     api_key: str = ""
     pip_index_url: str = ""
+    github_token: str = ""
     log_cleaner: dict[str, object] = field(default_factory=lambda: {
         "enabled": True, "keep_lines": 1000, "hour": 3, "minute": 0,
     })
@@ -81,8 +89,7 @@ def load_settings(*, persist_defaults: bool = True) -> Settings:
     if CONFIG_FILE.exists():
         try:
             value = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            if not isinstance(value, dict):
-                raise ValueError("配置文件必须是 JSON 对象")
+            validate_config_format(value)
             raw = value
         except (OSError, json.JSONDecodeError) as exc:
             raise ValueError("配置文件无法读取，已保留原文件，请从备份恢复") from exc
@@ -150,6 +157,7 @@ def load_settings(*, persist_defaults: bool = True) -> Settings:
         webhook_secret=str(_env("webhook_secret", raw.get("webhook_secret", "")) or "").strip(),
         api_key=str(_env("api_key", raw.get("api_key", "")) or "").strip(),
         pip_index_url=str(_env("pip_index_url", raw.get("pip_index_url", "")) or "").strip(),
+        github_token=str(_env("github_token", raw.get("github_token", "")) or "").strip(),
         log_cleaner=dict(raw.get("log_cleaner") or {
             "enabled": True, "keep_lines": 1000, "hour": 3, "minute": 0,
         }) if isinstance(raw.get("log_cleaner") or {}, dict) else {

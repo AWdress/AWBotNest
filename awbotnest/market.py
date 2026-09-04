@@ -161,7 +161,7 @@ class PluginMarket:
             try:
                 async with httpx.AsyncClient(
                     timeout=30, follow_redirects=True, proxy=self.settings.proxy_url or None,
-                    headers={"Accept": "application/vnd.github+json", "User-Agent": "AWBotNest/2.0"},
+                    headers=self._github_headers(url),
                 ) as client:
                     response = await client.get(url, params=params)
                 response.raise_for_status()
@@ -195,13 +195,18 @@ class PluginMarket:
         return {"ok": not errors, "found": len(candidates), "added": added,
                 "skipped_existing": skipped_existing, "errors": errors}
 
+    def _github_headers(self, url: str) -> dict[str, str]:
+        from urllib.parse import urlsplit
+        headers = {"Accept": "application/vnd.github+json", "User-Agent": "AWBotNest/2.0"}
+        target = urlsplit(url)
+        if target.scheme == "https" and target.netloc.lower() == "api.github.com" and self.settings.github_token:
+            headers["Authorization"] = f"Bearer {self.settings.github_token}"
+        return headers
+
     async def _github(self, url: str) -> httpx.Response:
         async with httpx.AsyncClient(timeout=30, follow_redirects=True,
                                      proxy=self.settings.proxy_url or None) as client:
-            response = await client.get(url, headers={
-                "Accept": "application/vnd.github+json",
-                "User-Agent": "AWBotNest/2.0",
-            })
+            response = await client.get(url, headers=self._github_headers(url))
         return response
 
     async def list_repo(self, repo_value: str) -> dict[str, Any]:
@@ -283,8 +288,7 @@ class PluginMarket:
                 if isinstance(count, int) and not isinstance(count, bool)
                 and 0 <= count <= 9_007_199_254_740_991
             }
-            # 首次迁移时把当前已安装插件纳入本地热度缓存（与 V1 一致），
-            # 避免热度接口不可用或升级后全部显示为 0。
+            # 把当前已安装插件纳入本地热度缓存。
             for entry in PLUGINS_DIR.iterdir() if PLUGINS_DIR.exists() else ():
                 plugin_id = entry.stem if entry.is_file() and entry.suffix == ".py" else (entry.name if entry.is_dir() and (entry / "__init__.py").exists() else "")
                 if plugin_id and plugin_id not in local:
@@ -331,7 +335,7 @@ class PluginMarket:
         errors: list[str] = []
         seen: set[str] = set()
         # 官方仓库是内置来源，不依赖旧配置是否曾经保存过它；否则从
-        # V1/旧版本迁移且只配置第三方仓库时，市场会完全没有官方插件。
+        # 只配置第三方仓库时也应显示官方插件。
         repos = [OFFICIAL_REPO, *self.settings.plugin_repos]
         seen_repos: set[str] = set()
         for repo in repos:

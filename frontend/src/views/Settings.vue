@@ -674,6 +674,7 @@ async function load(silent = false) {
     s.value.proxy_set = s.value.proxy_set || { proxy_enable: false, proxy: {}, PROXY_URL: '' }
     s.value.proxy_set.proxy = s.value.proxy_set.proxy || {}
     if (s.value.PIP_INDEX_URL === undefined) s.value.PIP_INDEX_URL = ''
+    if (s.value.GITHUB_TOKEN === undefined) s.value.GITHUB_TOKEN = ''
     s.value.DB_INFO = s.value.DB_INFO || {}
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
@@ -684,46 +685,6 @@ async function load(silent = false) {
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
     // 初始化通知渠道配置（数组格式）
     s.value.NOTIFICATION_CHANNELS = Array.isArray(s.value.NOTIFICATION_CHANNELS) ? s.value.NOTIFICATION_CHANNELS : []
-
-    // 自动迁移旧Bot配置到通知渠道
-    if (s.value.NOTIFICATION_CHANNELS.length === 0 && (s.value.BOT_TOKEN || s.value.BOTS?.length > 0)) {
-      // 迁移主Bot
-      if (s.value.BOT_TOKEN) {
-        s.value.NOTIFICATION_CHANNELS.push({
-          id: 'default',
-          name: s.value.BOT_NAME || '主要通知渠道',
-          type: 'telegram',
-          enabled: true,
-          is_default: s.value.DEFAULT_BOT_ID === 'default',
-          config: {
-            token: s.value.BOT_TOKEN,
-            chat_id: s.value.DEFAULT_BOT_CHAT_ID || ''
-          },
-          plugins: []  // 新增：初始化插件列表
-        })
-      }
-
-      // 迁移额外的Bot
-      if (Array.isArray(s.value.BOTS)) {
-        s.value.BOTS.forEach((b) => {
-          if (b.token) {
-            s.value.NOTIFICATION_CHANNELS.push({
-              id: b.id || `migrated_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-              name: b.name || '未命名Bot',
-              type: 'telegram',
-              enabled: true,
-              is_default: s.value.DEFAULT_BOT_ID === b.id,
-              config: {
-                token: b.token,
-                chat_id: b.chat_id || ''
-              },
-              plugins: []  // 新增：初始化插件列表
-            })
-          }
-        })
-      }
-
-    }
 
     s.value.LOG_CLEANER = s.value.LOG_CLEANER || { enabled: true, keep_lines: 100, hour: 3, minute: 0 }
     // 补齐旧数据里额外 Bot 缺失的 chat_id 字段，保证 v-model 响应
@@ -839,22 +800,6 @@ async function testDb() {
 const backupBusy = ref(false)
 const restoreBusy = ref(false)
 const restoreInput = ref(null)
-const migrateV1Busy = ref(false)
-const migrateV1Input = ref(null)
-function openMigrateV1Picker() { migrateV1Input.value?.click() }
-async function onMigrateV1File(e) {
-  const file = e.target.files?.[0]; e.target.value = ''
-  if (!file) return
-  const ok = await confirm({ title: 'V1 数据迁移', message: '将把 V1 配置、插件配置和数据迁移到当前 V2。建议先备份，继续？', confirmText: '开始迁移' })
-  if (!ok) return
-  migrateV1Busy.value = true
-  try {
-    const result = await api.migrateV1(file)
-    toast.success(`${result.message || 'V1 数据迁移完成'}${result.restart_required ? ' 请重启平台使全部配置生效。' : ''}`)
-  }
-  catch (err) { toast.error('迁移失败：' + err.message) }
-  finally { migrateV1Busy.value = false }
-}
 
 function openRestorePicker() {
   restoreInput.value?.click()
@@ -2281,14 +2226,15 @@ onBeforeRouteLeave(async () => {
                  placeholder="https://pypi.tuna.tsinghua.edu.cn/simple" />
           <div class="hint muted small">墙内建议填国内镜像（清华/阿里），境内直连不经墙。留空则走官方 pypi（此时若启用了上面的代理会自动用代理出墙）。</div>
         </div>
+        <div class="field" style="margin-top:14px">
+          <label>GitHub Token</label>
+          <SecretInput v-model="s.GITHUB_TOKEN" mono
+                       @reveal="revealSystemSecret('GITHUB_TOKEN', (value, secret) => { value.GITHUB_TOKEN = secret })"
+                       placeholder="可选，填写 GitHub Personal Access Token" />
+          <div class="hint muted small">用于插件仓库查询、自动发现和更新，提高 GitHub API 请求配额。保存后立即生效；留空并保存可移除 Token。</div>
+        </div>
       </div>
 
-      <div v-if="tab === 'system'" class="card" style="margin-top:16px">
-        <div class="card-title">V1 数据迁移</div>
-        <div class="hint muted small">上传 V1 数据目录的 zip 压缩包，迁移配置、插件作用域、Bot 路由、KV 和插件私有数据。Telegram 账号需要重新登录。</div>
-        <button class="btn sm" @click="openMigrateV1Picker" :disabled="migrateV1Busy">{{ migrateV1Busy ? '迁移中…' : '选择 V1 数据包' }}</button>
-        <input ref="migrateV1Input" type="file" accept=".zip,application/zip" style="display:none" @change="onMigrateV1File" />
-      </div>
 
       <!-- 数据库 -->
       <div v-if="tab === 'system'" class="card" style="margin-top:16px">

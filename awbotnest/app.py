@@ -35,7 +35,6 @@ from .backup import BackupManager, MAX_BACKUP_SIZE
 from .activity import activity
 from .resources import ResourceSampler
 from .open_api import register_open_api
-from .migrate import stage_migration
 
 logger = logging.getLogger("awbotnest.api")
 
@@ -81,6 +80,7 @@ class SettingsBody(BaseModel):
     webhook_secret: str = Field(default="", max_length=512)
     api_key: str = Field(default="", max_length=512)
     pip_index_url: str = Field(default="", max_length=1024)
+    github_token: str = Field(default="", max_length=512, pattern=r"^[^\s]*$")
     log_cleaner: dict[str, object] = Field(default_factory=dict)
 
 
@@ -623,6 +623,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 "NOTIFICATION_CHANNELS": current["notification_channels"],
                 "proxy_set": {"proxy_enable": bool(settings.proxy_url), "PROXY_URL": current["proxy_url"], "proxy": {}},
                 "PIP_INDEX_URL": settings.pip_index_url,
+                "GITHUB_TOKEN": "********" if settings.github_token else "",
                 "DB_INFO": {"dbset": "SQLite", "db_name": "awbotnest"},
                 "LOG_CLEANER": dict(settings.log_cleaner),
                 "WEBHOOK_SECRET": "********" if settings.webhook_secret else "",
@@ -968,6 +969,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 "webhook_secret": legacy.get("WEBHOOK_SECRET", "********" if settings.webhook_secret else ""),
                 "api_key": legacy.get("API_KEY", "********" if settings.api_key else ""),
                 "pip_index_url": legacy.get("PIP_INDEX_URL", settings.pip_index_url),
+                "github_token": legacy.get("GITHUB_TOKEN", "********" if settings.github_token else ""),
                 "log_cleaner": legacy.get("LOG_CLEANER", settings.log_cleaner),
             }
         try:
@@ -1061,6 +1063,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             if parsed_index.scheme not in {"http", "https"} or not parsed_index.hostname:
                 raise HTTPException(status_code=400, detail="pip 镜像源必须是完整的 http/https URL")
         settings.pip_index_url = pip_index_url
+        if body.github_token != "********":
+            settings.github_token = body.github_token.strip()
         cleaner = dict(body.log_cleaner or settings.log_cleaner)
         try:
             settings.log_cleaner = {
@@ -1153,6 +1157,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         value = ""
         if kind == "system":
             value = {"API_HASH": settings.api_hash, "BOT_TOKEN": settings.bot_token,
+                     "GITHUB_TOKEN": settings.github_token,
                      "API_KEY": settings.api_key,
                      "WEBHOOK_SECRET": settings.webhook_secret}.get(field, "")
         elif kind == "ai":
@@ -1633,16 +1638,6 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         for key, spec in (plugin.config_schema or {}).items():
             if isinstance(spec, dict) and spec.get("secret") and values.get(key) == "********":
                 values[key] = current_values.get(key, "")
-        # V1 插件常把运行时状态（例如积分、登录邮箱和密码）写进配置；
-        # V2 清单未声明这些字段时，不能让旧数据阻塞配置保存。仅保留
-        # V2 清单声明的字段，运行时状态由插件自己的 KV/数据目录管理。
-        if plugin.config_schema:
-            unknown = set(values) - set(plugin.config_schema)
-            if unknown:
-                logger.warning("插件配置已忽略未声明字段：%s（%s）",
-                               plugin_id, ", ".join(sorted(unknown)))
-                values = {key: value for key, value in values.items()
-                          if key in plugin.config_schema}
         try:
             runtime.validate_config(plugin.config_schema or {}, values)
         except ValueError as exc:
@@ -1778,19 +1773,6 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             raise HTTPException(status_code=500, detail=f"备份导出失败：{exc}") from exc
         logger.info("备份导出完成：%s", archive.name)
         return {"ok": True, "filename": archive.name}
-
-    @app.post("/api/system/migrate-v1", dependencies=[Depends(require_admin)])
-    async def system_migrate_v1(file: UploadFile = File(...)):
-        if not (file.filename or '').lower().endswith('.zip'):
-            raise HTTPException(status_code=400, detail='请上传 V1 数据目录的 zip 文件')
-        content = await file.read(MAX_BACKUP_SIZE + 1)
-        if len(content) > MAX_BACKUP_SIZE:
-            raise HTTPException(status_code=400, detail='V1 数据包超过 512 MB')
-
-        try:
-            return await asyncio.to_thread(stage_migration, content)
-        except (zipfile.BadZipFile, OSError, ValueError, json.JSONDecodeError) as exc:
-            raise HTTPException(status_code=400, detail=f'V1 数据包无效：{exc}') from exc
 
     @app.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():

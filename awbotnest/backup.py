@@ -4,10 +4,11 @@ import shutil
 import zipfile
 import sqlite3
 import stat
+import json
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from .config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR
+from .config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, validate_config_format
 
 BACKUP_DIR = DATA_DIR / "backups"
 PENDING_RESTORE = DATA_DIR / ".restore-pending.zip"
@@ -26,7 +27,7 @@ class BackupManager:
             for source, name in ((DATA_DIR, "data"), (PLUGINS_DIR, "plugins"), (SESSIONS_DIR, "sessions")):
                 if source.exists():
                     def ignore(directory, names):
-                        return [name for name in names if name in {"backups", ".restore-pending.zip", ".restore-pending.tmp", ".v1-migration-pending.zip", ".v1-migration-pending.tmp"}
+                        return [name for name in names if name in {"backups", ".restore-pending.zip", ".restore-pending.tmp"}
                                 or (Path(directory) / name).is_symlink()
                                 or name.endswith(("-wal", "-shm", "-journal"))]
 
@@ -74,6 +75,11 @@ class BackupManager:
                     raise ValueError("备份解压内容过大")
             if not roots or not roots.issubset({"data", "plugins", "sessions"}):
                 raise ValueError("不是有效的 AWBotNest 备份")
+            for item in archive.infolist():
+                if PurePosixPath(item.filename) == PurePosixPath("data/config.json"):
+                    if item.file_size > 8 * 1024 * 1024:
+                        raise ValueError("备份中的配置文件过大")
+                    validate_config_format(json.loads(archive.read(item).decode("utf-8")))
 
     @classmethod
     def stage(cls, content: bytes) -> None:

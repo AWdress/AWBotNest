@@ -24,7 +24,6 @@ dependencies = [
 
 [project.scripts]
 awbotnest = "awbotnest.main:main"
-awbotnest-migrate = "awbotnest.migrate:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["awbotnest"]

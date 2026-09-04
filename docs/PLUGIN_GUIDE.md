@@ -2,7 +2,7 @@
 
 AWBotNest 插件是可以独立安装、启用、停用和重载的功能单元。平台提供 Telegram、HTTP、Cookie、浏览器、AI、KV、通知、Webhook 和调度能力。
 
-AWBotNest 2 使用 Telethon。旧版 Pyrogram/Kurigram 插件必须迁移，不能直接复制使用。
+AWBotNest 2 使用 Telethon，仅支持按 V2 规范开发的插件。
 
 ## 快速开始
 
@@ -275,16 +275,6 @@ Webhook 路径必须与注册值完全一致（这里的 `receive` 不能改成 
 条目也可直接放在顶层。清单中的 ID、版本和作用域必须与 `__plugin__` 一致。安装后默认不启用。
 
 ## 发布前检查
-
-### V1 迁移补充
-
-V2 使用 Telethon，不兼容 V1 的 Pyrogram/Kurigram 事件对象和旧版平台配置写法。迁移时：
-
-- 消息处理器改用 `ctx.on_message`、`ctx.on_edited_message`、`ctx.on_callback`。
-- 定时任务改用 `ctx.schedule_interval`、`ctx.schedule_cron`，后台协程改用 `ctx.create_task`。
-- 业务配置迁移到 `__plugin__["config_schema"]`，运行时使用 `ctx.config` 和 `ctx.update_config`。
-- 文件、KV、通知和外部回调分别使用 `ctx.data_dir`、`ctx.kv`、`ctx.notify`、`ctx.on_webhook`。
-- 自定义配置界面使用 `render_mode: "vue"`，模块联邦必须暴露 `./Config`。
 
 发布前验证 Windows/Linux、停用与重载清理、`standalone` 无账号运行，以及依赖失败不影响其他插件。
 
