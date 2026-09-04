@@ -580,7 +580,7 @@ onUnmounted(() => {
         <div v-else class="job-list">
           <div v-for="job in st.scheduler_jobs" :key="job.id" class="job-row" :class="{ changed: changedJobs.includes(job.id) }">
             <span class="job-mark" :class="{ running: job.running }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>
-            <div class="job-main"><strong>{{ jobName(job) }}</strong><small>{{ jobOwnerLabel(job, st.plugin_names) }} · {{ prettyTrigger(job.trigger) }}</small><div v-if="job.running && job.progress?.status === 'running'" class="job-progress"><i :style="{ transform: `scaleX(${(job.progress.progress || 0) / 100})` }"></i></div></div>
+            <div class="job-main"><strong>{{ jobName(job) }}</strong><small>{{ jobOwnerLabel(job, st.plugin_names) }} · {{ prettyTrigger(job.trigger) }}</small><small v-if="job.progress?.status">{{ job.progress.step }} · {{ job.progress.duration_seconds || 0 }} 秒</small></div>
             <time :title="job.next || ''">{{ nextRunLabel(job) }}</time>
           </div>
         </div>

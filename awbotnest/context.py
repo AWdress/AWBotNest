@@ -201,6 +201,7 @@ class PluginContext:
                     await asyncio.wait_for(value, timeout=self.timeout)
             except Exception:
                 self.log.exception("定时任务执行失败：%s", name)
+                raise
         return self.scheduler.add_interval(
             self.plugin_id, name, guarded_schedule, seconds=seconds,
         )
@@ -213,6 +214,7 @@ class PluginContext:
                     await asyncio.wait_for(value, timeout=self.timeout)
             except Exception:
                 self.log.exception("定时任务执行失败：%s", name)
+                raise
         return self.scheduler.add_cron(self.plugin_id, name, guarded_schedule, **fields)
 
     async def close(self) -> None:

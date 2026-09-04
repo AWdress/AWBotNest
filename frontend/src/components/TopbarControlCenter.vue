@@ -588,7 +588,7 @@ onUnmounted(() => {
         <div v-else-if="modal === 'services'" class="modal-body jobs-list">
           <div v-if="!jobs.length" class="empty">暂无定时任务</div>
           <div v-for="job in jobs" :key="job.id" class="job-row">
-            <span><small>{{ jobOwnerLabel(job) }}</small><strong>{{ jobDisplayName(job) }}</strong><em v-if="job.running">{{ job.progress?.status === 'running' ? `${job.progress.step || '运行中'} · ${job.progress.progress || 0}%` : '正在运行' }}</em></span>
+            <span><small>{{ jobOwnerLabel(job) }}</small><strong>{{ jobDisplayName(job) }}</strong><em v-if="job.progress?.status">{{ job.progress.step || '正在运行' }}{{ job.progress.duration_seconds != null ? ` · ${job.progress.duration_seconds} 秒` : '' }}</em></span>
             <code>{{ job.running && job.progress?.status === 'running' ? `已运行 ${job.progress.duration_seconds || 0} 秒` : (job.running ? '正在执行' : jobNextRun(job)) }}</code>
             <button class="btn" :disabled="job.running" @click="runJob(job)">{{ job.running ? '运行中' : '执行' }}</button>
           </div>

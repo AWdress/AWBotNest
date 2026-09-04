@@ -180,7 +180,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 "plugin_id": None if owner == "__platform__" else owner,
                 "plugin": "平台服务" if owner == "__platform__" else plugin_names.get(owner, owner),
                 "next_run_at": job.get("next_run"),
-                "running": False,
+                "running": job.get("running", False),
             })
         account_rows = [
             {
@@ -390,19 +390,12 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/ui/scheduler/{job_id:path}/run", dependencies=[Depends(require_admin)])
     async def run_scheduler_job(job_id: str):
-        job = scheduler.scheduler.get_job(job_id)
-        if job is None:
-            raise HTTPException(status_code=404, detail="定时任务不存在")
-
-        async def execute_job():
-            try:
-                result = job.func(*job.args, **job.kwargs)
-                if inspect.isawaitable(result):
-                    await result
-            except Exception:
-                logger.exception("手动运行定时任务失败：%s", job_id)
-
-        asyncio.create_task(execute_job())
+        try:
+            scheduler.run_now(job_id)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "job_id": job_id}
 
     network_targets = {
