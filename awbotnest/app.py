@@ -1627,6 +1627,16 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         for key, spec in (plugin.config_schema or {}).items():
             if isinstance(spec, dict) and spec.get("secret") and values.get(key) == "********":
                 values[key] = current_values.get(key, "")
+        # V1 插件常把运行时状态（例如积分、登录邮箱和密码）写进配置；
+        # V2 清单未声明这些字段时，不能让旧数据阻塞配置保存。仅保留
+        # V2 清单声明的字段，运行时状态由插件自己的 KV/数据目录管理。
+        if plugin.config_schema:
+            unknown = set(values) - set(plugin.config_schema)
+            if unknown:
+                logger.warning("插件配置已忽略未声明字段：%s（%s）",
+                               plugin_id, ", ".join(sorted(unknown)))
+                values = {key: value for key, value in values.items()
+                          if key in plugin.config_schema}
         try:
             runtime.validate_config(plugin.config_schema or {}, values)
         except ValueError as exc:
