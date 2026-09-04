@@ -80,6 +80,12 @@ class PluginMarket:
         value.setdefault("installs", {})
         return value
 
+    def local_install_counts(self) -> dict[str, int]:
+        """Return persisted local heat immediately, without contacting the center."""
+        state = self._heat_state()
+        return {str(key): max(0, int(value or 0))
+                for key, value in (state.get("installs") or {}).items()}
+
     def _save_heat_state(self, state: dict[str, Any]) -> None:
         path = PLUGINS_DIR.parent / "data" / "plugin_heat_state.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -320,6 +326,7 @@ class PluginMarket:
     async def list_all(self) -> dict[str, Any]:
         if self._cache is not None and time.monotonic() < self._cache_until:
             return self._cache
+        stale_cache = self._cache
         plugins: list[dict[str, Any]] = []
         errors: list[str] = []
         seen: set[str] = set()
@@ -354,6 +361,14 @@ class PluginMarket:
                     seen.add(plugin["id"])
                     plugins.append(plugin)
         install_counts = await self._install_counts()
+        # 与 V1 一致：刷新失败时继续使用上次成功缓存，避免 GitHub 限流
+        # 或单个仓库异常把整个插件市场显示成空白。
+        if not plugins and errors and stale_cache and stale_cache.get("plugins"):
+            plugins = list(stale_cache["plugins"])
+            official_ids = list(stale_cache.get("official_ids") or [])
+            for plugin in plugins:
+                plugin["install_count"] = install_counts.get(plugin.get("id"), 0)
+            logger.warning("插件市场刷新失败，已回退到上次缓存（%d 个插件）", len(plugins))
         official_ids = [p["id"] for p in plugins if p.get("official")]
         for plugin in plugins:
             plugin["install_count"] = install_counts.get(plugin["id"], 0)

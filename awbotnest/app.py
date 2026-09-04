@@ -441,8 +441,10 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.get("/api/plugins", dependencies=[Depends(require_admin)])
     async def plugins():
         values = []
+        local_heat = market.local_install_counts()
         for meta in runtime.scan():
             item = meta.to_dict()
+            item["install_count"] = local_heat.get(meta.id, 0)
             item.update(routes.describe(meta.id))
             values.append(item)
         order = [item for item in settings.plugin_order if any(meta["id"] == item for meta in values)]

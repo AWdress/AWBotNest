@@ -2800,8 +2800,8 @@ onBeforeRouteLeave(async () => {
 .route-search { margin-bottom: 8px; }
 .panel { display: flex; flex-direction: column; }
 /* 通知路由优先于渠道卡片，保持与 V1 的菜单顺序一致。 */
-.notify-channels-card { order: 1; }
-.notify-route-card { order: 2; }
+.notify-channels-card { order: 1; position: relative; z-index: 3; }
+.notify-route-card { order: 2; position: relative; z-index: 1; }
 .route-table { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
 .route-row { display: flex; align-items: center; gap: 10px; }
 .route-name { flex: 1; font-size: 13px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -3053,7 +3053,7 @@ onBeforeRouteLeave(async () => {
 
 .add-menu-dropdown {
   position: absolute;
-  top: calc(100% + 8px); /* 显示在按钮下方 */
+  top: calc(100% + 8px); /* 按需求向下展开 */
   left: 0; /* 左对齐按钮，这样菜单在按钮正下方或偏左 */
   min-width: 180px;
   background: var(--bg-card);
@@ -3061,7 +3061,7 @@ onBeforeRouteLeave(async () => {
   border-radius: var(--radius-sm);
   box-shadow: 0 4px 12px rgba(0,0,0,0.3);
   padding: 6px;
-  z-index: 1000; /* 提升层级 */
+  z-index: 100;
 }
 
 .add-menu-dropdown button {
