@@ -1106,8 +1106,9 @@ async function saveRepos() {
 
 function goStore() {
   tab.value = 'store'
-  // 首次进入按 V1 约定主动刷新；已有结果则直接使用缓存。
-  if (store.value.length === 0 && !storeBusy.value) loadStore(true)
+  // 页面只读取本地缓存；远程仓库与热度由后台“插件市场轮询”更新，
+  // 用户也可通过“刷新市场”主动触发刷新。
+  if (store.value.length === 0 && !storeBusy.value) loadStore(false)
 }
 
 onMounted(() => {
