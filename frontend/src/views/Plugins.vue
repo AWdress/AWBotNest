@@ -1102,8 +1102,8 @@ async function saveRepos() {
 function goStore() {
   const entering = tab.value !== 'store'
   tab.value = 'store'
-  // 每次切入市场刷新一次；停留当前页重复点击不并发请求。
-  if (entering && !storeBusy.value) loadStore(true)
+  // 切入只取服务端本地缓存；联网刷新由后台轮询或手动按钮触发。
+  if (entering && !storeBusy.value) loadStore(false)
 }
 
 onMounted(() => {

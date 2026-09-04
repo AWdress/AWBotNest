@@ -144,6 +144,7 @@ class PluginMarket:
             if not plugin.get("installed") or not plugin.get("update_available"):
                 continue
             plugin_id = str(plugin.get("id") or "")
+            plugin_name = str(plugin.get("name") or runtime.display_name(plugin_id))
             was_loaded = plugin_id in runtime.loaded
             try:
                 if was_loaded: await runtime.disable(plugin_id, persist=False)
@@ -153,13 +154,20 @@ class PluginMarket:
                     if result.error: raise RuntimeError(result.error)
                 self.finish(plugin_id, True)
                 await self.record_install(plugin, "update")
-                updated.append(plugin_id)
+                updated.append(plugin_name)
             except Exception as exc:
-                self.finish(plugin_id, False)
-                errors.append(f"{plugin_id}: {exc}")
+                errors.append(f"{plugin_name}：{exc}（已跳过，继续更新其他插件）")
+                try:
+                    self.finish(plugin_id, False)
+                except Exception as rollback_exc:
+                    errors.append(f"{plugin_name} 回滚失败：{rollback_exc}")
                 if was_loaded:
-                    try: await runtime.enable(plugin_id)
-                    except Exception as restore_exc: errors.append(f"{plugin_id} 恢复失败: {restore_exc}")
+                    try:
+                        restored = await runtime.enable(plugin_id)
+                        if restored.error:
+                            errors.append(f"{plugin_name} 恢复失败：{restored.error}")
+                    except Exception as restore_exc:
+                        errors.append(f"{plugin_name} 恢复失败：{restore_exc}")
         if updated: self.clear_cache()
         return {"ok": not errors, "updated": updated, "errors": errors}
 
@@ -420,7 +428,10 @@ class PluginMarket:
                 isinstance(target, ast.Name) and target.id == "__plugin__"
                 for target in node.targets
             ):
-                metadata = ast.literal_eval(node.value)
+                try:
+                    metadata = ast.literal_eval(node.value)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError("插件 __plugin__ 元数据必须为静态字典，不能包含函数调用或动态表达式") from exc
                 break
         if not isinstance(metadata, dict) or str(metadata.get("id") or "") != plugin_id:
             raise ValueError("插件 __plugin__.id 与清单 ID 不一致")
