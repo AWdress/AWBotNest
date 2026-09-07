@@ -6,7 +6,7 @@ import logging
 import sys
 import ast
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -41,6 +41,14 @@ class PluginMeta:
     config_schema: dict[str, object] | None = None
     requirements: list[str] | None = None
     resources: dict[str, object] | None = None
+    instance_mode: str = "shared"
+    requires_plugins: list[str] = field(default_factory=list)
+    requires_capabilities: list[str] = field(default_factory=list)
+    provides_capabilities: list[str] = field(default_factory=list)
+    cookie_domains: list[str] = field(default_factory=list)
+    plugin_api_version: int = 2
+    min_platform_version: str = ""
+    max_platform_version: str = ""
     enabled: bool = False
     loaded: bool = False
     error: str = ""
@@ -54,6 +62,7 @@ class LoadedPlugin:
     meta: PluginMeta
     module: ModuleType
     context: PluginContext
+    contexts: list[PluginContext] = field(default_factory=list)
 
 
 class PluginRuntime:
@@ -69,6 +78,7 @@ class PluginRuntime:
         self.notifier = notifier
         self.plugins_dir = plugins_dir
         self.loaded: dict[str, LoadedPlugin] = {}
+        self._errors: dict[str, str] = {}
         self._lifecycle_locks: dict[str, asyncio.Lock] = {}
         self.deps = DependencyManager(settings)
 
@@ -122,10 +132,34 @@ class PluginRuntime:
         return (dist / "remoteEntry.js").is_file() or (dist / "assets" / "remoteEntry.js").is_file()
 
     @staticmethod
+    def _extensions(raw):
+        mode = str(raw.get("instance_mode") or "shared")
+        if mode not in {"shared", "account"}:
+            raise ValueError("instance_mode 必须为 shared 或 account")
+        result = {"instance_mode": mode}
+        result["plugin_api_version"] = int(raw.get("plugin_api_version") or 2)
+        result["min_platform_version"] = str(raw.get("min_platform_version") or "")
+        result["max_platform_version"] = str(raw.get("max_platform_version") or "")
+        for name in ("requires_plugins", "requires_capabilities", "provides_capabilities", "cookie_domains"):
+            value = raw.get(name) or []
+            if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+                raise ValueError(f"{name} 必须为非空字符串列表")
+            result[name] = list(dict.fromkeys(value))
+        return result
+
+    @staticmethod
     def _module_name(plugin_id: str) -> str:
         return f"awbotnest_plugins.{plugin_id}"
 
     def _import(self, entry: Path, plugin_id: str) -> ModuleType:
+        # Same-second updates can retain the same size and timestamp: timestamp-based
+        # bytecode validation would then execute the previous version.
+        sources = entry.parent.rglob("*.py") if entry.name == "__init__.py" else [entry]
+        for source in sources:
+            cache = Path(importlib.util.cache_from_source(str(source)))
+            if cache.is_file() and cache.resolve().is_relative_to(self.plugins_dir.resolve()):
+                cache.unlink()
+        importlib.invalidate_caches()
         package_name = "awbotnest_plugins"
         if package_name not in sys.modules:
             namespace = ModuleType(package_name)
@@ -215,6 +249,7 @@ class PluginRuntime:
                     config_schema=dict(raw.get("config_schema") or {}),
                     requirements=requirements,
                     resources=dict(raw.get("resources") or {}),
+                    **self._extensions(raw),
                     enabled=plugin_id in self.settings.enabled_plugins,
                     loaded=plugin_id in self.loaded,
                 ))
@@ -227,7 +262,16 @@ class PluginRuntime:
 
     async def enable(self, plugin_id: str) -> PluginMeta:
         async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
-            return await self._enable(plugin_id)
+            try:
+                meta = await self._enable(plugin_id)
+            except Exception as exc:
+                self._errors[plugin_id] = f"{type(exc).__name__}: {exc}"
+                raise
+            if meta.error:
+                self._errors[plugin_id] = meta.error
+            else:
+                self._errors.pop(plugin_id, None)
+            return meta
 
     async def _enable(self, plugin_id: str) -> PluginMeta:
         if plugin_id in self.loaded:
@@ -236,6 +280,8 @@ class PluginRuntime:
         if entry is None:
             raise FileNotFoundError(f"插件不存在：{plugin_id}")
         raw = self._metadata(entry)
+        if str(raw.get("id") or plugin_id) != plugin_id:
+            raise ValueError("__plugin__.id 必须与插件文件或目录名一致")
         scope = str(raw.get("scope") or "user")
         render_mode = str(raw.get("render_mode") or "schema")
         bot_id = str(raw.get("bot") or "")
@@ -262,10 +308,34 @@ class PluginRuntime:
             config_schema=dict(raw.get("config_schema") or {}),
             requirements=[str(item) for item in (raw.get("requirements") or [])],
             resources=dict(raw.get("resources") or {}),
+            **self._extensions(raw),
             enabled=True,
         )
         if scope in {"user", "both"} and not self.settings.telegram_configured:
             meta.error = "未配置 Telegram API_ID/API_HASH"
+            return meta
+        missing = [self.display_name(item) for item in meta.requires_plugins if item not in self.loaded]
+        from packaging.version import Version, InvalidVersion
+        from . import __version__
+        if meta.plugin_api_version > 2:
+            meta.error = f"插件需要接口版本 {meta.plugin_api_version}，当前平台支持 2"
+            return meta
+        try:
+            if meta.min_platform_version and Version(__version__) < Version(meta.min_platform_version.lstrip('vV')):
+                meta.error = f"插件要求平台不低于 {meta.min_platform_version}"
+                return meta
+            if meta.max_platform_version and Version(__version__) > Version(meta.max_platform_version.lstrip('vV')):
+                meta.error = f"插件只兼容到平台 {meta.max_platform_version}"
+                return meta
+        except InvalidVersion:
+            meta.error = "插件声明的平台兼容版本格式不正确"
+            return meta
+        if missing:
+            meta.error = "请先启用依赖插件：" + "、".join(missing)
+            return meta
+        missing = [item for item in meta.requires_capabilities if item not in self.services.governor.capabilities.names()]
+        if missing:
+            meta.error = "缺少平台能力：" + "、".join(missing)
             return meta
         try:
             await self.deps.ensure(meta.requirements or [], plugin_name=meta.name)
@@ -277,26 +347,44 @@ class PluginRuntime:
         if not callable(setup):
             meta.error = "插件缺少 setup(ctx)"
             return meta
-        context = PluginContext(
-            plugin_id, scope, self.accounts, self.scheduler, self.settings,
-            self.services, self.routes, self.notifier, meta.bot, meta.resources or {},
-            plugin_name=meta.name,
-        )
+        contexts = []
+        was_enabled = plugin_id in self.settings.enabled_plugins
         try:
-            value = setup(context)
-            if inspect.isawaitable(value):
-                await asyncio.wait_for(value, timeout=30)
+            names = [None]
+            if meta.instance_mode == "account" and scope in {"user", "both"}:
+                selected = self.settings.plugin_accounts.get(plugin_id, [])
+                names = [name for name, client in self.accounts.users.items()
+                         if client.is_connected() and (not selected or name in selected)]
+                if not names:
+                    raise RuntimeError("按账号运行的插件当前没有可用用户账号")
+            for index, name in enumerate(names):
+                context = PluginContext(
+                    plugin_id, scope, self.accounts, self.scheduler, self.settings,
+                    self.services, self.routes, self.notifier, meta.bot, meta.resources or {},
+                    plugin_name=meta.name, account_name=name, primary_instance=index == 0,
+                    cookie_domains=meta.cookie_domains,
+                )
+                contexts.append(context)
+                await context.execute("setup", lambda: setup(context), timeout=30)
             meta.loaded = True
-            self.loaded[plugin_id] = LoadedPlugin(meta, module, context)
+            self.loaded[plugin_id] = LoadedPlugin(meta, module, contexts[0], contexts)
             if plugin_id not in self.settings.enabled_plugins:
                 self.settings.enabled_plugins.append(plugin_id)
                 save_settings(self.settings)
-            logger.info("插件已启用：%s（1 个运行实例）", meta.name)
+            logger.info("插件已启用：%s（%d 个运行实例）", meta.name, len(contexts))
         except asyncio.CancelledError:
-            await context.close()
+            for context in reversed(contexts):
+                await context.close()
+            await self.services.governor.release(plugin_id)
             raise
         except Exception as exc:
-            await context.close()
+            self.loaded.pop(plugin_id, None)
+            meta.loaded = False
+            if not was_enabled and plugin_id in self.settings.enabled_plugins:
+                self.settings.enabled_plugins.remove(plugin_id)
+            for context in reversed(contexts):
+                await context.close()
+            await self.services.governor.release(plugin_id)
             meta.error = f"{type(exc).__name__}: {exc}"
             logger.exception("插件启用失败：%s", meta.name)
         return meta
@@ -306,36 +394,59 @@ class PluginRuntime:
             await self._disable(plugin_id, persist=persist)
 
     async def _disable(self, plugin_id: str, *, persist: bool = True) -> None:
+        self._errors.pop(plugin_id, None)
         loaded = self.loaded.pop(plugin_id, None)
         if loaded is not None:
-            try:
-                teardown = getattr(loaded.module, "teardown", None)
-                if callable(teardown):
-                    value = teardown(loaded.context)
-                    if inspect.isawaitable(value):
-                        await asyncio.wait_for(value, timeout=15)
-            except TimeoutError:
-                logger.error("插件停用超时：%s", loaded.meta.name)
-            except Exception:
-                logger.exception("插件停用钩子失败：%s", loaded.meta.name)
-            finally:
-                await loaded.context.close()
-                sys.modules.pop(self._module_name(plugin_id), None)
+            for context in reversed(loaded.contexts or [loaded.context]):
+                try:
+                    teardown = getattr(loaded.module, "teardown", None)
+                    if callable(teardown):
+                        value = teardown(context)
+                        if inspect.isawaitable(value):
+                            await asyncio.wait_for(value, timeout=15)
+                except TimeoutError:
+                    logger.error("插件停用超时：%s", loaded.meta.name)
+                except Exception:
+                    logger.exception("插件停用钩子失败：%s", loaded.meta.name)
+                finally:
+                    await context.close()
+            await self.services.governor.release(plugin_id)
+            prefix = self._module_name(plugin_id)
+            for name in list(sys.modules):
+                if name == prefix or name.startswith(prefix + "."):
+                    sys.modules.pop(name, None)
         if persist and plugin_id in self.settings.enabled_plugins:
             self.settings.enabled_plugins.remove(plugin_id)
             save_settings(self.settings)
 
     async def restore(self) -> None:
-        available = {meta.id for meta in self.scan() if not meta.error}
-        for plugin_id in list(self.settings.enabled_plugins):
-            if plugin_id in available:
+        pending = {meta.id: meta for meta in self.scan()
+                   if not meta.error and meta.id in self.settings.enabled_plugins}
+        while pending:
+            progressed = False
+            for plugin_id, meta in list(pending.items()):
+                if any(item in pending for item in meta.requires_plugins):
+                    continue
+                if any(any(capability in other.provides_capabilities for other in pending.values())
+                       for capability in meta.requires_capabilities):
+                    continue
                 try:
                     async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
                         # The web UI can disable a plugin while earlier plugins are restoring.
                         if plugin_id in self.settings.enabled_plugins:
-                            await self._enable(plugin_id)
+                            meta = await self._enable(plugin_id)
+                            if meta.error:
+                                self._errors[plugin_id] = meta.error
+                                logger.error("恢复插件失败：%s（%s）", meta.name, meta.error)
                 except Exception:
                     logger.exception("恢复插件失败，平台继续启动：%s", self.display_name(plugin_id))
+                pending.pop(plugin_id)
+                progressed = True
+            if not progressed:
+                for plugin_id, meta in pending.items():
+                    self._errors[plugin_id] = "插件依赖存在循环，无法恢复"
+                logger.error("插件依赖存在循环，无法恢复：%s", "、".join(item.name for item in pending.values()))
+                break
 
     async def stop(self) -> None:
         for plugin_id in reversed(list(self.loaded)):
@@ -344,13 +455,23 @@ class PluginRuntime:
     async def refresh_telegram_plugins(self) -> None:
         candidates = [item.id for item in self.scan()
                       if item.id in self.settings.enabled_plugins and item.scope in {"user", "both"}]
-        for plugin_id in candidates:
+        # 按加载顺序先逆序卸载，再按依赖顺序恢复。
+        for plugin_id in reversed(list(self.loaded)):
+            if plugin_id in candidates:
+                await self.disable(plugin_id, persist=False)
+        await self.restore()
+
+    async def reload(self, plugin_id):
+        async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
+            await self._disable(plugin_id, persist=False)
             try:
-                if plugin_id in self.loaded:
-                    await self.disable(plugin_id, persist=False)
-                await self.enable(plugin_id)
-            except Exception:
-                logger.exception("刷新 Telegram 插件失败：%s", self.display_name(plugin_id))
+                meta = await self._enable(plugin_id)
+                if meta.error:
+                    self._errors[plugin_id] = meta.error
+                return meta
+            except Exception as exc:
+                self._errors[plugin_id] = f"{type(exc).__name__}: {exc}"
+                raise
 
     def self_check(self) -> dict[str, object]:
         scanned = self.scan()
@@ -370,6 +491,10 @@ class PluginRuntime:
             "missing_dependencies": missing_dependencies,
             "loaded": sorted(self.loaded),
         }
+
+    @staticmethod
+    def secret_field(spec: object) -> bool:
+        return isinstance(spec, dict) and bool(spec.get("secret") or spec.get("type") == "password")
 
     @staticmethod
     def validate_config(schema: dict[str, object], values: dict[str, object], *, allow_extra: bool = False) -> None:

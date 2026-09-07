@@ -35,15 +35,25 @@ class PluginRoutes:
         self._webhooks: dict[tuple[str, str], Callable[..., Any]] = {}
         self._actions: dict[tuple[str, str], Callable[..., Any]] = {}
         self._apis: dict[tuple[str, str], Callable[..., Any]] = {}
+        self._method_apis = {}
 
-    def api(self, plugin_id: str, path: str, callback: Callable[..., Any]) -> None:
+    def api(self, plugin_id: str, path: str, callback: Callable[..., Any], methods=None) -> None:
         if not callable(callback):
             raise ValueError("插件 API 回调必须可调用")
-        self._apis[(plugin_id, self._name(path))] = callback
+        if methods is None:
+            self._apis[(plugin_id, self._name(path))] = callback
+        else:
+            normalized = [str(method).upper() for method in ([methods] if isinstance(methods, str) else methods)]
+            if not normalized or any(method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+                                     for method in normalized):
+                raise ValueError("插件 API HTTP 方法无效")
+            for method in normalized:
+                self._method_apis[(plugin_id, self._name(path), method)] = callback
 
     async def dispatch_api(self, plugin_id: str, path: str, request: Any) -> Any:
         key = (plugin_id, self._name(path))
-        callback = self._apis.get(key) or self._webhooks.get(key)
+        callback = self._method_apis.get((*key, str(getattr(request, 'method', 'GET')).upper()))
+        callback = callback or self._apis.get(key) or self._webhooks.get(key)
         if callback is None:
             raise LookupError(f"插件接口未注册：{path}")
         value = callback(request)
@@ -52,6 +62,8 @@ class PluginRoutes:
     @staticmethod
     def _name(value: str) -> str:
         result = value.strip().strip("/")
+        if not result and value.strip() == "/":
+            return "/"
         if not result or ".." in result:
             raise ValueError("路由名称不合法")
         return result
@@ -77,13 +89,14 @@ class PluginRoutes:
         return await asyncio.wait_for(value, timeout=120) if inspect.isawaitable(value) else value
 
     def remove_plugin(self, plugin_id: str) -> None:
+        self._method_apis = {key: value for key, value in self._method_apis.items() if key[0] != plugin_id}
         self._apis = {key: value for key, value in self._apis.items() if key[0] != plugin_id}
         self._webhooks = {key: value for key, value in self._webhooks.items() if key[0] != plugin_id}
         self._actions = {key: value for key, value in self._actions.items() if key[0] != plugin_id}
 
     def describe(self, plugin_id: str) -> dict[str, list[str]]:
         return {
-            "apis": sorted(key[1] for key in self._apis if key[0] == plugin_id),
+            "apis": sorted({key[1] for key in [*self._apis, *self._method_apis] if key[0] == plugin_id}),
             "webhooks": sorted(key[1] for key in self._webhooks if key[0] == plugin_id),
             "actions": sorted(key[1] for key in self._actions if key[0] == plugin_id),
         }

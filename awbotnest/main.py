@@ -103,7 +103,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
         except Exception:
             logger.exception("启动任务失败：插件市场刷新")
 
-    asyncio.create_task(refresh_market_at_startup(), name="market-startup-refresh")
+    market.startup_task = asyncio.create_task(refresh_market_at_startup(), name="market-startup-refresh")
 
     scheduler.add_interval(
         "__platform__", "插件市场轮询", poll_plugin_market,
@@ -132,7 +132,10 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     cookie_settings = settings.cookie_settings
     if cookie_settings.get("remote_enabled"):
         async def sync_remote_cookiecloud() -> None:
-            from .cookiecloud import pull, record_sync
+            from .cookiecloud import pull, record_sync, filter_domains
+            cookie_settings = settings.cookie_settings
+            if not cookie_settings.get("remote_enabled"):
+                return
             logger.info("定时任务开始：远程 CookieCloud 同步")
             try:
                 values = await pull(
@@ -142,6 +145,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
                     str(cookie_settings.get("remote_crypto_type") or "auto"),
                     settings.proxy_url or None,
                 )
+                values = filter_domains(values, cookie_settings.get("remote_domains"))
                 await services.cookies.replace(values)
                 count = sum(len(item) for item in values.values())
                 record_sync("remote", "success", "远程 CookieCloud 自动同步完成", len(values), count)
@@ -205,6 +209,10 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         restart_watcher.cancel()
         platform_task.cancel()
         await asyncio.gather(restart_watcher, platform_task, return_exceptions=True)
+        startup_refresh = getattr(market, "startup_task", None)
+        if startup_refresh is not None:
+            startup_refresh.cancel()
+            await asyncio.gather(startup_refresh, return_exceptions=True)
         server.should_exit = True
         try:
             if not server_task.done():
@@ -216,6 +224,7 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
                 server_task.cancel()
             await asyncio.gather(server_task, return_exceptions=True)
             try:
+                await scheduler.close()
                 await runtime.stop()
             finally:
                 try:

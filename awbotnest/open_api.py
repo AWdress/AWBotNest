@@ -78,16 +78,19 @@ def register_open_api(
     @router.post("/plugins/{plugin_id}/reload")
     async def reload_plugin(plugin_id: str):
         meta(plugin_id)
-        await runtime.disable(plugin_id, persist=False)
-        value = await runtime.enable(plugin_id)
+        value = await runtime.reload(plugin_id)
         if value.error:
             raise HTTPException(status_code=409, detail=value.error)
         return {"ok": True, "message": "插件已重载"}
 
     @router.get("/plugins/{plugin_id}/config")
     async def get_plugin_config(plugin_id: str):
-        meta(plugin_id)
-        return {"plugin_id": plugin_id, "config": dict(settings.plugin_config.get(plugin_id, {}))}
+        plugin = meta(plugin_id)
+        values = dict(settings.plugin_config.get(plugin_id, {}))
+        for key, spec in (plugin.config_schema or {}).items():
+            if runtime.secret_field(spec) and values.get(key):
+                values[key] = "********"
+        return {"plugin_id": plugin_id, "config": values}
 
     @router.put("/plugins/{plugin_id}/config")
     async def put_plugin_config(plugin_id: str, request: Request):
@@ -96,8 +99,12 @@ def register_open_api(
         values = raw.get("config")
         if not isinstance(values, dict):
             raise HTTPException(status_code=400, detail="config 必须是对象")
+        for key, spec in (plugin.config_schema or {}).items():
+            if runtime.secret_field(spec) and values.get(key) == "********":
+                values[key] = settings.plugin_config.get(plugin_id, {}).get(key, "")
         try:
-            runtime.validate_config(plugin.config_schema or {}, values)
+            runtime.validate_config(plugin.config_schema or {}, values,
+                                    allow_extra=plugin.render_mode == "vue")
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         settings.plugin_config[plugin_id] = dict(values)
@@ -157,8 +164,11 @@ def register_open_api(
             raise HTTPException(status_code=400, detail="chat_id 和 text 为必填项")
         client = sender(str(raw.get("sender") or "bot"), str(raw.get("session") or ""))
         try:
+            target = raw["chat_id"]
+            if isinstance(target, str) and target.lstrip("-").isdigit():
+                target = int(target)
             message = await client.send_message(
-                raw["chat_id"], str(raw["text"]), parse_mode=raw.get("parse_mode") or None,
+                target, str(raw["text"]), parse_mode=raw.get("parse_mode") or None,
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"消息发送失败：{exc}") from exc

@@ -40,6 +40,12 @@ class CookieCloudError(RuntimeError):
     pass
 
 
+def filter_domains(values, domains):
+    allowed = [str(item).lstrip("*. ").lower().strip() for item in (domains or [])]
+    return {domain: cookies for domain, cookies in values.items()
+            if not allowed or any(domain == item or domain.endswith("." + item) for item in allowed)}
+
+
 def _decode(value: str) -> bytes:
     value = "".join(str(value or "").split())
     value += "=" * (-len(value) % 4)

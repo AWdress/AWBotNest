@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import inspect
 import time
 from urllib.parse import urlsplit
 from collections.abc import Awaitable, Callable
@@ -175,23 +176,82 @@ class CookieService:
 class BrowserService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._serial = asyncio.Lock()
+
+    @staticmethod
+    def _proxy(value):
+        if not value:
+            return None
+        if isinstance(value, dict):
+            return value
+        from urllib.parse import unquote
+        parsed = urlsplit(str(value))
+        host = parsed.hostname or ""
+        if ":" in host:
+            host = f"[{host}]"
+        result = {"server": f"{parsed.scheme}://{host}" + (f":{parsed.port}" if parsed.port else "")}
+        if parsed.username:
+            result["username"] = unquote(parsed.username)
+        if parsed.password:
+            result["password"] = unquote(parsed.password)
+        return result
+
+    def _run_sync(self, url, action, *, headless, timeout, cookies, user_agent, proxy):
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as playwright:
+            options = {"headless": headless}
+            if proxy:
+                options["proxy"] = proxy
+            browser = playwright.chromium.launch(**options)
+            try:
+                context = browser.new_context(**({"user_agent": user_agent} if user_agent else {}))
+                try:
+                    if isinstance(cookies, str):
+                        context.set_extra_http_headers({"Cookie": cookies})
+                    elif cookies:
+                        context.add_cookies(cookies)
+                    page = context.new_page()
+                    page.set_default_timeout(timeout * 1000)
+                    page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                    return action(page)
+                finally:
+                    context.close()
+            finally:
+                browser.close()
 
     async def run(self, url: str, action: Callable[[Any], Any], *, headless: bool = True,
                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
-                  user_agent: str = "") -> Any:
+                  user_agent: str = "", ua: str | None = None, proxy=None) -> Any:
+        user_agent = user_agent or ua or ""
+        resolved_proxy = self._proxy(self.settings.proxy_url if proxy is None else proxy)
+        if not (inspect.iscoroutinefunction(action) or inspect.iscoroutinefunction(getattr(action, "__call__", None))):
+            # V1 的同步 action 必须收到同步 Page，否则 click 等调用不会执行。
+            async with self._serial:
+                task = asyncio.create_task(asyncio.to_thread(self._run_sync, url, action,
+                    headless=headless, timeout=timeout, cookies=cookies, user_agent=user_agent,
+                    proxy=resolved_proxy))
+                try:
+                    return await asyncio.shield(task)
+                except asyncio.CancelledError:
+                    # 等待工作线程释放浏览器，避免停用返回后仍在执行浏览器操作。
+                    await asyncio.gather(task, return_exceptions=True)
+                    raise
         try:
             from playwright.async_api import async_playwright
         except ImportError as exc:
             raise RuntimeError("浏览器能力未安装，请安装 playwright") from exc
         async with async_playwright() as playwright:
             launch_args: dict[str, object] = {"headless": headless}
-            if self.settings.proxy_url:
-                launch_args["proxy"] = {"server": self.settings.proxy_url}
+            if resolved_proxy:
+                launch_args["proxy"] = resolved_proxy
             browser = await playwright.chromium.launch(**launch_args)
             context_args = {"user_agent": user_agent} if user_agent else {}
-            context = await browser.new_context(**context_args)
+            context = None
             try:
-                if cookies:
+                context = await browser.new_context(**context_args)
+                if isinstance(cookies, str):
+                    await context.set_extra_http_headers({"Cookie": cookies})
+                elif cookies:
                     await context.add_cookies(cookies)
                 page = await context.new_page()
                 page.set_default_timeout(timeout * 1000)
@@ -199,17 +259,39 @@ class BrowserService:
                 value = action(page)
                 return await asyncio.wait_for(value, timeout=timeout) if isinstance(value, Awaitable) else value
             finally:
-                await context.close()
-                await browser.close()
+                try:
+                    if context is not None:
+                        await context.close()
+                finally:
+                    await browser.close()
 
     async def page_source(self, url: str, **kwargs: Any) -> str:
-        return await self.run(url, lambda page: page.content(), **kwargs)
+        def source(page):
+            try:
+                page.wait_for_load_state("networkidle", timeout=min(int(kwargs.get("timeout", 60)), 15) * 1000)
+            except Exception:
+                pass  # V1 treats network-idle timeout as best effort, not a failed page.
+            return page.content()
+        return await self.run(url, source, **kwargs)
 
 
 class AIService:
     def __init__(self, settings: Settings, http: HttpService) -> None:
         self.settings = settings
         self.http = http
+        self._limit = 0
+        self._semaphore = None
+
+    async def _post(self, *args, **kwargs):
+        try:
+            limit = max(1, min(20, int(self.settings.ai_settings.get("max_concurrency", 3))))
+        except (TypeError, ValueError):
+            limit = 3
+        if self._limit != limit:
+            self._limit = limit
+            self._semaphore = asyncio.Semaphore(limit)
+        async with self._semaphore:
+            return await self.http.post(*args, **kwargs)
 
     def _timeout(self, capability: str) -> int:
         config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
@@ -248,6 +330,8 @@ class AIService:
                 raise RuntimeError("尚未配置 AI 服务密钥")
             return (str(provider.get("base_url") or self.settings.ai_base_url).rstrip("/"), key,
                     str(selected.get("model") or selected.get("alias") or ""))
+        if config.get("models") or config.get("providers"):
+            raise RuntimeError(f"指定的 {capability} 模型不存在或未启用")
         if not self.settings.ai_api_key:
             raise RuntimeError(f"尚未配置 {capability} 模型")
         return self.settings.ai_base_url.rstrip("/"), self.settings.ai_api_key, model or self.settings.ai_model
@@ -255,17 +339,13 @@ class AIService:
     def _fallback(self, capability: str, plugin_id: str = "") -> str:
         config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
         permission = (config.get("plugin_permissions") or {}).get(plugin_id, {}) if plugin_id else {}
-        if permission and str((permission.get("models") or {}).get(capability) or ""):
-            return ""
         return str(((config.get("capabilities") or {}).get(capability) or {}).get("fallback_model") or "")
 
     async def chat(self, messages: list[dict[str, object]], *, model: str = "",
                    temperature: float | None = None, max_tokens: int | None = None,
                    plugin_id: str = "", _allow_fallback: bool = True) -> str:
         requested_model = model
-        base_url, api_key, resolved_model = self._resolve("text", model, plugin_id)
         payload: dict[str, object] = {
-            "model": resolved_model,
             "messages": messages,
         }
         if temperature is not None:
@@ -273,7 +353,9 @@ class AIService:
         if max_tokens is not None:
             payload["max_tokens"] = max(1, int(max_tokens))
         try:
-            response = await self.http.post(
+            base_url, api_key, resolved_model = self._resolve("text", model, plugin_id)
+            payload["model"] = resolved_model
+            response = await self._post(
                 f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}"},
                 json=payload,
@@ -292,13 +374,15 @@ class AIService:
     async def vision(self, prompt: str, image: str, *, model: str = "", plugin_id: str = "",
                      _allow_fallback: bool = True) -> str:
         requested_model = model
-        base_url, api_key, resolved_model = self._resolve("vision", model, plugin_id)
-        payload = {"model": resolved_model, "messages": [{"role": "user", "content": [
+        payload = {"messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": image}},
+            *({"type": "image_url", "image_url": {"url": url}}
+              for url in (image if isinstance(image, list) else [image])),
         ]}]}
         try:
-            response = await self.http.post(f"{base_url}/chat/completions",
+            base_url, api_key, resolved_model = self._resolve("vision", model, plugin_id)
+            payload["model"] = resolved_model
+            response = await self._post(f"{base_url}/chat/completions",
                                             headers={"Authorization": f"Bearer {api_key}"},
                                             json=payload, timeout=self._timeout("vision"))
             response.raise_for_status()
@@ -311,14 +395,16 @@ class AIService:
             raise
 
     async def generate_image(self, prompt: str, *, model: str = "", size: str = "1024x1024",
-                             plugin_id: str = "", _allow_fallback: bool = True) -> dict[str, object]:
+                             plugin_id: str = "", quality: str | None = None,
+                             _allow_fallback: bool = True) -> dict[str, object]:
         requested_model = model
-        base_url, api_key, resolved_model = self._resolve("image", model, plugin_id)
         try:
-            response = await self.http.post(f"{base_url}/images/generations",
+            base_url, api_key, resolved_model = self._resolve("image", model, plugin_id)
+            response = await self._post(f"{base_url}/images/generations",
                                             headers={"Authorization": f"Bearer {api_key}"},
                                             json={"model": resolved_model, "prompt": prompt, "size": size,
-                                                  "n": 1}, timeout=self._timeout("image"))
+                                                  "n": 1, **({"quality": quality} if quality else {})},
+                                            timeout=self._timeout("image"))
             response.raise_for_status()
             data = response.json().get("data", [])
             if not data or not isinstance(data[0], dict):
@@ -328,7 +414,7 @@ class AIService:
             fallback = self._fallback("image", plugin_id) if not requested_model else ""
             if _allow_fallback and fallback:
                 return await self.generate_image(prompt, model=fallback, size=size,
-                                                 plugin_id=plugin_id, _allow_fallback=False)
+                                                 plugin_id=plugin_id, quality=quality, _allow_fallback=False)
             raise
 
     def available_models(self, capability: str, plugin_id: str = "") -> list[dict[str, object]]:
@@ -384,7 +470,7 @@ class PluginAI:
             return await self.service.chat(messages, model=model, temperature=temperature,
                                            max_tokens=max_tokens, plugin_id=self.plugin_id)
         if images:
-            return await self.vision(images[0], prompt, model=model, system=system)
+            return await self.vision(images, prompt, model=model, system=system)
         messages: list[dict[str, object]] = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -392,22 +478,32 @@ class PluginAI:
         return await self.service.chat(messages, model=model, temperature=temperature,
                                        max_tokens=max_tokens, plugin_id=self.plugin_id)
 
-    async def vision(self, image: str | Path | bytes | bytearray,
+    @staticmethod
+    def _image_url(image):
+        if isinstance(image, str) and image.startswith(("http://", "https://", "data:")):
+            return image
+        data = bytes(image) if isinstance(image, (bytes, bytearray)) else Path(image).read_bytes()
+        mime = "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            mime = "image/jpeg"
+        elif data.startswith((b"GIF87a", b"GIF89a")):
+            mime = "image/gif"
+        elif data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            mime = "image/webp"
+        return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
+
+    async def vision(self, image: str | Path | bytes | bytearray | list,
                      prompt: str = "请识别并说明图片内容。", *, model: str = "",
                      system: str | None = None) -> str:
-        if isinstance(image, (bytes, bytearray)):
-            image_url = "data:image/png;base64," + base64.b64encode(bytes(image)).decode("ascii")
-        elif isinstance(image, Path) or (isinstance(image, str) and not image.startswith(("http://", "https://", "data:"))):
-            data = Path(image).read_bytes()
-            image_url = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
-        else:
-            image_url = str(image)
+        image_url = ([self._image_url(item) for item in image] if isinstance(image, list)
+                     else self._image_url(image))
         full_prompt = f"{system}\n\n{prompt}" if system else prompt
         return await self.service.vision(full_prompt, image_url, model=model, plugin_id=self.plugin_id)
 
     async def generate_image(self, prompt: str, *, model: str = "", size: str = "1024x1024",
                              quality: str | None = None) -> Path:
-        item = await self.service.generate_image(prompt, model=model, size=size, plugin_id=self.plugin_id)
+        item = await self.service.generate_image(prompt, model=model, size=size,
+                                                quality=quality, plugin_id=self.plugin_id)
         if item.get("b64_json"):
             data = base64.b64decode(str(item["b64_json"]), validate=True)
         elif item.get("url"):
@@ -426,6 +522,8 @@ class PluginAI:
 
 class PlatformServices:
     def __init__(self, settings: Settings) -> None:
+        from .governance import PluginGovernor
+        self.governor = PluginGovernor(DATA_DIR / "plugin_events.jsonl")
         self.http = HttpService(settings)
         self.cookies = CookieService()
         self.browser = BrowserService(settings)

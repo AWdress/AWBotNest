@@ -145,7 +145,11 @@ async def setup(ctx):
 - 安装后仍提示缺模块：核对发行包名与导入名、extras、共享目录冲突，以及是否必须由管理员重启以加载变更。
 - 发布前在干净环境验证首次启用、再次启用跳过安装、安装失败提示，以及多个插件共享依赖时的兼容性；日志和错误文本不得包含账号密码、Token 或私有源凭据。
 
-`requirements` 不是前置插件 ID 列表。目前平台不实现元数据 `dependencies` / `provides_capabilities` 的前置插件解析、自动启用、能力选择或回退；不要将这些字段当作已支持的扩展接口。
+`requirements` 是 Python 依赖，不是前置插件 ID 列表。前置插件使用 `requires_plugins: ["插件ID"]`；能力依赖使用 `requires_capabilities`，提供能力使用 `provides_capabilities` 并在 setup 中调用 `ctx.provide_capability(name, provider, priority=100)`。通过 `await ctx.call_capability(name, ...)` 调用，优先级高的提供者失败后尝试备用提供者。平台不自动启用缺失的前置插件，`dependencies` 不是受支持的别名。
+
+`instance_mode: "account"` 为每个所选在线用户账号创建独立上下文；默认 `"shared"` 保持全局实例。账号模式使用 `ctx.account_name`、`ctx.instance_id` 和 `ctx.user`，KV 与数据目录分开存放。所有后台任务应通过 `ctx.create_task` 创建，额外资源通过 `ctx.add_cleanup(callback)` 登记清理。
+
+读取平台 Cookie 必须声明 `cookie_domains`，如 `["example.org", "*.example.org"]`。`ctx.cookies.get/header/playwright` 支持 `path`；`get/header` 还支持 `names`。`ctx.cookies.available` 表示服务与快照可用，`await ctx.cookies.request_sync(domain)` 在已有有效 Cookie 时返回 True，否则提醒同步并返回 False。不得直接修改平台 Cookie 存储。
 
 ## Telethon 事件
 

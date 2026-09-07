@@ -807,11 +807,22 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         value = raw.get("settings")
         if not isinstance(value, dict):
             raise HTTPException(status_code=400, detail="Cookie 设置格式不正确")
+        value = {**settings.cookie_settings, **value}
+        try:
+            interval = max(5, int(value.get("remote_interval_minutes") or 60))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="同步间隔必须为整数分钟") from exc
         for key in ("uuid", "password", "token", "remote_password"):
             if value.get(key) == "********":
                 value[key] = settings.cookie_settings.get(key, "")
         settings.cookie_settings = value
         save_settings(settings)
+        job_id = "__platform__::远程 CookieCloud 同步"
+        if value.get("remote_enabled"):
+            scheduler.add_interval("__platform__", "远程 CookieCloud 同步", sync_remote_cookies,
+                                   seconds=interval * 60)
+        elif scheduler.scheduler.get_job(job_id):
+            scheduler.scheduler.remove_job(job_id)
         return await get_cookie_settings()
 
     @app.post("/api/cookies/credentials", dependencies=[Depends(require_admin)])
@@ -833,7 +844,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/cookies/remote-sync", dependencies=[Depends(require_admin)])
     async def sync_remote_cookies():
-        from .cookiecloud import CookieCloudError, pull, record_sync, sync_history
+        from .cookiecloud import CookieCloudError, pull, record_sync, sync_history, filter_domains
         value = settings.cookie_settings
         if not value.get("remote_enabled"):
             raise HTTPException(status_code=409, detail="远程 CookieCloud 同步尚未启用")
@@ -846,10 +857,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             values = await pull(url, uuid_value, password,
                                 str(value.get("remote_crypto_type") or "auto"),
                                 settings.proxy_url or None)
-            domains = [str(item).lstrip("*. ").lower() for item in (value.get("remote_domains") or [])]
-            if domains:
-                values = {domain: cookies for domain, cookies in values.items()
-                          if any(domain == allowed or domain.endswith(f".{allowed}") for allowed in domains)}
+            values = filter_domains(values, value.get("remote_domains"))
             await runtime.services.cookies.replace(values)
             count = sum(len(item) for item in values.values())
             record_sync("remote", "success", "远程 CookieCloud 同步完成", len(values), count)
@@ -965,6 +973,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.put("/api/settings", dependencies=[Depends(require_admin)])
     async def update_settings(request: Request):
         raw = await request.json()
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="设置必须是对象")
         if isinstance(raw.get("settings"), dict):
             legacy = raw["settings"]
             proxy = legacy.get("proxy_set") or {}
@@ -977,7 +987,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 "default_bot_chat_id": legacy.get("DEFAULT_BOT_CHAT_ID", settings.default_bot_chat_id),
                 "web_host": settings.web_host,
                 "web_port": legacy.get("WEB_UI_PORT", settings.web_port),
-                "bots": legacy.get("BOTS", []),
+                "bots": legacy.get("BOTS", [asdict(bot) for bot in settings.bots]),
                 "ai_base_url": settings.ai_base_url,
                 "ai_api_key": "********" if settings.ai_api_key else "",
                 "ai_model": settings.ai_model,
@@ -991,7 +1001,9 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 "log_cleaner": legacy.get("LOG_CLEANER", settings.log_cleaner),
             }
         try:
-            body = SettingsBody.model_validate(raw)
+            existing = asdict(settings)
+            body = SettingsBody.model_validate({**{key: existing[key] for key in SettingsBody.model_fields
+                                                   if key in existing}, **raw})
         except Exception as exc:
             raise HTTPException(status_code=422, detail=f"设置格式不正确：{exc}") from exc
         previous = (settings.api_id, settings.api_hash, settings.bot_token, settings.proxy_url,
@@ -1046,6 +1058,21 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             parsed_proxy = urlparse(proxy_url)
             if parsed_proxy.scheme not in {"http", "socks4", "socks5"} or not parsed_proxy.hostname or not parsed_proxy.port:
                 raise HTTPException(status_code=400, detail="代理地址必须是完整的 http/socks4/socks5 URL")
+        pip_index_url = body.pip_index_url.strip()
+        if pip_index_url:
+            parsed_index = urlparse(pip_index_url)
+            if parsed_index.scheme not in {"http", "https"} or not parsed_index.hostname:
+                raise HTTPException(status_code=400, detail="pip 镜像源必须是完整的 http/https URL")
+        cleaner = dict(body.log_cleaner or settings.log_cleaner)
+        try:
+            normalized_cleaner = {
+                "enabled": bool(cleaner.get("enabled", True)),
+                "keep_lines": max(1, min(int(cleaner.get("keep_lines", 1000)), 1000)),
+                "hour": max(0, min(int(cleaner.get("hour", 3)), 23)),
+                "minute": max(0, min(int(cleaner.get("minute", 0)), 59)),
+            }
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="日志清理设置格式不正确") from exc
         settings.api_id = body.api_id
         if body.api_hash != "********":
             settings.api_hash = body.api_hash.strip()
@@ -1057,7 +1084,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         settings.web_host = body.web_host.strip() or "0.0.0.0"
         settings.web_port = body.web_port
         settings.bots = new_bots
-        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token}
+        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token} | set(channel_ids)
         settings.bot_routing = {
             plugin_id: ",".join(bot_id for bot_id in str(route).split(",")
                                  if bot_id.strip() in valid_route_bots)
@@ -1075,24 +1102,10 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             settings.webhook_secret = body.webhook_secret.strip()
         if body.api_key != "********":
             settings.api_key = body.api_key.strip()
-        pip_index_url = body.pip_index_url.strip()
-        if pip_index_url:
-            parsed_index = urlparse(pip_index_url)
-            if parsed_index.scheme not in {"http", "https"} or not parsed_index.hostname:
-                raise HTTPException(status_code=400, detail="pip 镜像源必须是完整的 http/https URL")
         settings.pip_index_url = pip_index_url
         if body.github_token != "********":
             settings.github_token = body.github_token.strip()
-        cleaner = dict(body.log_cleaner or settings.log_cleaner)
-        try:
-            settings.log_cleaner = {
-                "enabled": bool(cleaner.get("enabled", True)),
-                "keep_lines": max(1, min(int(cleaner.get("keep_lines", 1000)), 1000)),
-                "hour": max(0, min(int(cleaner.get("hour", 3)), 23)),
-                "minute": max(0, min(int(cleaner.get("minute", 0)), 59)),
-            }
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="日志清理设置格式不正确") from exc
+        settings.log_cleaner = normalized_cleaner
         save_settings(settings)
         market.clear_cache()
         current = (settings.api_id, settings.api_hash, settings.bot_token, settings.proxy_url,
@@ -1134,7 +1147,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 item["type"] = "wecom"
             if item.get("type") == "telegram":
                 channel_id = str(item.get("id") or "")
-                token = str(item.get("token") or "")
+                token = str(item.get("token", existing_tokens.get(channel_id, "")) or "")
                 if token == "********":
                     token = existing_tokens.get(channel_id, "")
                 item.pop("token", None)
@@ -1158,7 +1171,8 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         channel_bot_ids = {bot.id for bot in new_bots}
         settings.bots = new_bots + [bot for bot_id, bot in existing_bot_settings.items()
                                     if bot_id not in channel_bot_ids]
-        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token}
+        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token} | {
+            str(item.get("id") or "") for item in normalized}
         settings.bot_routing = {
             plugin_id: ",".join(bot_id for bot_id in str(route).split(",")
                                  if bot_id.strip() in valid_route_bots)
@@ -1410,8 +1424,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
 
     @app.post("/api/plugins/{plugin_id}/reload", dependencies=[Depends(require_admin)])
     async def reload_plugin(plugin_id: str):
-        await runtime.disable(plugin_id)
-        meta = await runtime.enable(plugin_id)
+        meta = await runtime.reload(plugin_id)
         if meta.error:
             raise HTTPException(status_code=409, detail=meta.error)
         return {"ok": True, "plugin": meta.to_dict()}
@@ -1434,10 +1447,16 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.get("/api/plugins/dependencies", dependencies=[Depends(require_admin)])
     async def plugin_dependencies():
         nodes = []
+        edges = []
         for meta in runtime.scan():
             nodes.append({"id": meta.id, "name": meta.name, "scope": meta.scope,
-                          "requirements": meta.requirements or [], "enabled": meta.enabled})
-        return {"nodes": nodes, "edges": []}
+                          "requirements": meta.requirements or [], "enabled": meta.enabled,
+                          "requires_plugins": meta.requires_plugins,
+                          "requires_capabilities": meta.requires_capabilities,
+                          "provides_capabilities": meta.provides_capabilities})
+            edges.extend({"source": meta.id, "target": required, "type": "plugin"}
+                         for required in meta.requires_plugins)
+        return {"nodes": nodes, "edges": edges}
 
     @app.get("/api/plugins/{plugin_id}/accounts", dependencies=[Depends(require_admin)])
     async def get_plugin_accounts(plugin_id: str):
@@ -1483,19 +1502,26 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             raise HTTPException(status_code=404, detail="插件不存在")
         loaded = runtime.loaded.get(plugin_id)
         context = loaded.context if loaded else None
-        return {"id": plugin_id, "enabled": meta.enabled, "loaded": bool(loaded), "error": meta.error,
-                "handlers": len(context._handlers) if context else 0,
-                "background_tasks": len(context._tasks) if context else 0,
-                "instances": ([{"id": plugin_id, "account": "全局实例"}] if context else []),
-                "circuits": [],
-                "policy": {"max_concurrency": context.max_concurrency if context else 0},
-                "events": []}
+        return {"id": plugin_id, "enabled": meta.enabled, "loaded": bool(loaded),
+                "error": meta.error or runtime._errors.get(plugin_id, ""),
+                "handlers": sum(len(item._handlers) for item in loaded.contexts) if loaded else 0,
+                "background_tasks": sum(len(item._tasks) for item in loaded.contexts) if loaded else 0,
+                "instances": ([{"id": item.instance_id, "account": item.account_name or "全局实例"}
+                               for item in loaded.contexts] if loaded else []),
+                "circuits": runtime.services.governor.status(plugin_id)["circuits"],
+                "policy": runtime.services.governor.status(plugin_id)["policy"],
+                "events": runtime.services.governor.events.query(plugin_id)}
 
     @app.post("/api/plugins/{plugin_id}/events/{event_id}/replay", dependencies=[Depends(require_admin)])
     async def replay_plugin_event(plugin_id: str, event_id: str):
         if not any(item.id == plugin_id for item in runtime.scan()):
             raise HTTPException(status_code=404, detail="插件不存在")
-        raise HTTPException(status_code=404, detail="该事件不存在或未声明为可回放")
+        if plugin_id not in runtime.loaded:
+            raise HTTPException(status_code=409, detail="插件未启用")
+        try:
+            return {"ok": True, "result": await runtime.services.governor.replay(plugin_id, event_id)}
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     @app.get("/api/plugins/{plugin_id}/dialogs", dependencies=[Depends(require_admin)])
     async def list_plugin_dialogs(plugin_id: str, session: str = ""):
@@ -1604,7 +1630,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         schema = meta.config_schema or {}
         values = dict(settings.plugin_config.get(plugin_id, {}))
         for key, spec in schema.items():
-            if isinstance(spec, dict) and spec.get("secret") and values.get(key):
+            if runtime.secret_field(spec) and values.get(key):
                 values[key] = "********"
         return {
             "values": values,
@@ -1654,7 +1680,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
             raise HTTPException(status_code=413, detail="插件配置超过 1 MB")
         current_values = settings.plugin_config.get(plugin_id, {})
         for key, spec in (plugin.config_schema or {}).items():
-            if isinstance(spec, dict) and spec.get("secret") and values.get(key) == "********":
+            if runtime.secret_field(spec) and values.get(key) == "********":
                 values[key] = current_values.get(key, "")
         try:
             runtime.validate_config(plugin.config_schema or {}, values,
@@ -1674,7 +1700,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
                 raise HTTPException(status_code=409, detail=meta.error)
         safe_values = dict(settings.plugin_config[plugin_id])
         for key, spec in (plugin.config_schema or {}).items():
-            if isinstance(spec, dict) and spec.get("secret") and safe_values.get(key):
+            if runtime.secret_field(spec) and safe_values.get(key):
                 safe_values[key] = "********"
         return {"ok": True, "values": safe_values}
 
@@ -1715,7 +1741,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
         value = dict(item)
         value["msg"] = value.get("message", "")
         try:
-            stamp = datetime.fromisoformat(value.get("timestamp", ""))
+            stamp = datetime.fromisoformat(value.get("timestamp", "")).astimezone()
             value["date"] = stamp.strftime("%Y-%m-%d")
             value["time"] = stamp.strftime("%H:%M:%S")
         except ValueError:
@@ -1820,7 +1846,7 @@ def create_app(settings: Settings, accounts: TelegramAccounts,
     @app.post("/api/system/restore", dependencies=[Depends(require_admin)])
     async def system_restore(file: UploadFile = File(...)):
         try:
-            BackupManager.stage(await file.read(256 * 1024 * 1024 + 1))
+            BackupManager.stage(await file.read(MAX_BACKUP_SIZE + 1))
         except (ValueError, OSError, zipfile.BadZipFile) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True, "restart_required": True}

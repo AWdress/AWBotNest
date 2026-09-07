@@ -45,6 +45,7 @@ class PluginMarket:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.install_lock = asyncio.Lock()
+        self._refresh_lock = asyncio.Lock()
         self._pending_installs: dict[str, tuple[Path, Path]] = {}
         self._cache: dict[str, Any] | None = None
         self._cache_until = 0.0
@@ -65,10 +66,19 @@ class PluginMarket:
 
     def cached(self) -> dict[str, Any]:
         """页面仅读取最近成功缓存，不因过期或缺失而访问远程。"""
-        return self._cache if self._cache is not None else {
+        snapshot = self._cache if self._cache is not None else {
             "plugins": [], "errors": [], "install_counts": {},
             "official_ids": [], "last_sync": None, "manifest": MANIFEST_NAME,
         }
+        result = {**snapshot, "plugins": []}
+        for source in snapshot.get("plugins", []):
+            plugin = dict(source)
+            installed = self._installed_version(str(plugin.get("id") or ""))
+            plugin.update(installed=installed is not None, installed_version=installed,
+                          local_version=installed,
+                          update_available=self._newer(str(plugin.get("version") or "0"), installed))
+            result["plugins"].append(plugin)
+        return result
 
     async def refresh(self) -> dict[str, Any]:
         """强制刷新插件市场缓存，供启动流程和定时任务调用。"""
@@ -155,6 +165,9 @@ class PluginMarket:
                 self.finish(plugin_id, True)
                 await self.record_install(plugin, "update")
                 updated.append(plugin_name)
+            except asyncio.CancelledError:
+                self.finish(plugin_id, False)
+                raise
             except Exception as exc:
                 errors.append(f"{plugin_name}：{exc}（已跳过，继续更新其他插件）")
                 try:
@@ -351,8 +364,12 @@ class PluginMarket:
             return remote != installed
 
     async def list_all(self) -> dict[str, Any]:
+        async with self._refresh_lock:
+            return await self._list_all()
+
+    async def _list_all(self) -> dict[str, Any]:
         if self._cache is not None and time.monotonic() < self._cache_until:
-            return self._cache
+            return self.cached()
         stale_cache = self._cache
         plugins: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -382,6 +399,11 @@ class PluginMarket:
                         self._skipped_manifest_logged.add(repo.casefold())
                     continue
                 errors.append(f"{repo}: {exc}")
+                # 单仓库暂时失败也保留它的缓存，而不只在全部仓库失败时保留。
+                for source in (stale_cache or {}).get("plugins", []):
+                    if str(source.get("repo") or "").casefold() == repo.casefold() and source["id"] not in seen:
+                        seen.add(source["id"])
+                        plugins.append(dict(source))
                 continue
             for plugin in listing["plugins"]:
                 if plugin["id"] not in seen:
@@ -407,9 +429,11 @@ class PluginMarket:
         }
         self._last_sync = self._cache["last_sync"]
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._state_path.write_text(json.dumps({"store": self._cache, "last_sync": self._last_sync}, ensure_ascii=False), encoding="utf-8")
+        temporary = self._state_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"store": self._cache, "last_sync": self._last_sync}, ensure_ascii=False), encoding="utf-8")
+        temporary.replace(self._state_path)
         self._cache_until = time.monotonic() + 300
-        return self._cache
+        return self.cached()
 
     async def _download_file(self, repo: str, branch: str, path: PurePosixPath) -> bytes:
         url = f"https://raw.githubusercontent.com/{repo}/{branch}/{path.as_posix()}"

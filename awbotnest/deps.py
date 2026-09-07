@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.metadata
+import importlib
 import subprocess
 import sys
 import re
@@ -21,7 +22,7 @@ class DependencyManager:
         self.target.mkdir(parents=True, exist_ok=True)
         target_text = str(self.target)
         if target_text not in sys.path:
-            sys.path.insert(0, target_text)
+            sys.path.append(target_text)
         self._lock = asyncio.Lock()
 
     def missing(self, requirements: list[str]) -> list[str]:
@@ -69,6 +70,7 @@ class DependencyManager:
                 "--disable-pip-version-check",
                 "--target",
                 str(self.target),
+                "--upgrade",
             ]
             if self.settings.proxy_url:
                 command.extend(["--proxy", self.settings.proxy_url])
@@ -98,4 +100,8 @@ class DependencyManager:
                 tail = re.sub(r"(://)[^/@\s:]+:[^/@\s]+@", r"\1***:***@", tail)
                 logger.error("%s 依赖安装失败：%s", plugin_name, tail)
                 raise RuntimeError(f"插件依赖安装失败：{tail}")
+            importlib.invalidate_caches()
+            remaining = self.missing(requirements)
+            if remaining:
+                raise RuntimeError("依赖安装后版本仍不满足（可能与平台依赖冲突）：" + ", ".join(remaining))
             logger.info("%s 依赖已安装：%s", plugin_name, ", ".join(missing))

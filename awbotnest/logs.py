@@ -52,7 +52,8 @@ memory_logs = MemoryLogHandler()
 
 # V1 also persisted the application stream to a rotating file.  Keep that
 # durability in V2 while retaining the clean Docker stdout format.
-LOG_DIR = Path("logs")
+from .config import DATA_DIR
+LOG_DIR = DATA_DIR / "logs"
 LOG_FILE = LOG_DIR / "app.log"
 
 

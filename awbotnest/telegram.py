@@ -114,50 +114,62 @@ class TelegramAccounts:
                 if not re.fullmatch(r"[A-Za-z0-9_-]+", bot_spec.id):
                     logger.error("Bot ID 不合法，已跳过：%s", bot_spec.id)
                     continue
-                bot = self._client(str(self.sessions_dir / f"bot_{bot_spec.id}"))
+                bot = None
                 try:
-                    await bot.start(bot_token=bot_spec.token)
+                    bot = self._client(str(self.sessions_dir / f"bot_{bot_spec.id}"))
+                    await asyncio.wait_for(bot.start(bot_token=bot_spec.token), timeout=60)
                     self.bots[bot_spec.id] = bot
                     try:
-                        await self._cache_profile(f"bot_{bot_spec.id}", bot)
+                        await asyncio.wait_for(self._cache_profile(f"bot_{bot_spec.id}", bot), timeout=15)
                     except Exception:
                         logger.warning("Bot [%s] 资料缓存失败", bot_spec.name, exc_info=True)
                     logger.info("Bot [%s] 启动成功", bot_spec.name)
                 except asyncio.CancelledError:
-                    await bot.disconnect()
+                    if bot is not None:
+                        await bot.disconnect()
                     raise
                 except Exception:
-                    await bot.disconnect()
+                    if bot is not None:
+                        await bot.disconnect()
                     logger.exception("Telethon Bot [%s] 连接失败，平台继续启动", bot_spec.name)
 
             for session_name in self.settings.user_sessions:
                 await self._start_user(session_name)
 
     async def _start_user(self, session_name: str) -> None:
-        if not re.fullmatch(r"[A-Za-z0-9_]+", session_name or "") or session_name in self.users:
+        if not re.fullmatch(r"[A-Za-z0-9_]+", session_name or ""):
             return
+        existing = self.users.get(session_name)
+        if existing is not None:
+            if existing.is_connected():
+                return
+            await existing.disconnect()
+            self.users.pop(session_name, None)
         session_path = self.sessions_dir / session_name
         if not session_path.with_suffix(".session").exists():
             logger.info("用户会话 %s 尚未登录，已跳过", session_name)
             return
-        client = self._client(str(session_path))
+        client = None
         try:
-            await client.connect()
-            if not await client.is_user_authorized():
+            client = self._client(str(session_path))
+            await asyncio.wait_for(client.connect(), timeout=60)
+            if not await asyncio.wait_for(client.is_user_authorized(), timeout=30):
                 await client.disconnect()
                 logger.warning("用户会话 %s 已失效，已跳过", session_name)
                 return
             self.users[session_name] = client
             try:
-                await self._cache_profile(session_name, client)
+                await asyncio.wait_for(self._cache_profile(session_name, client), timeout=15)
             except Exception:
                 logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
             logger.info("用户账号 [%s] 启动成功", session_name)
         except asyncio.CancelledError:
-            await client.disconnect()
+            if client is not None:
+                await client.disconnect()
             raise
         except Exception:
-            await client.disconnect()
+            if client is not None:
+                await client.disconnect()
             logger.exception("用户账号 %s 连接失败", session_name)
 
     async def begin_user_login(self, session_name: str, phone: str) -> dict[str, object]:
@@ -177,10 +189,10 @@ class TelegramAccounts:
                 await self.cancel_user_login(name)
         await self.cancel_user_login(session_name)
         client = self._client(str(self.sessions_dir / session_name))
-        await client.connect()
         try:
-            sent = await client.send_code_request(phone)
-        except Exception:
+            await asyncio.wait_for(client.connect(), timeout=60)
+            sent = await asyncio.wait_for(client.send_code_request(phone), timeout=60)
+        except BaseException:
             await client.disconnect()
             raise
         self._pending_logins[session_name] = (client, phone, sent.phone_code_hash, time.monotonic())

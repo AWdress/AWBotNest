@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import time
+import logging
 from typing import Any
 
 from .config import Settings
 from .services import HttpService
 from .telegram import TelegramAccounts
+from .notification_text import content, notification
+from .rich_delivery import send_rich, DeliveryUncertain
 
 
 class NotificationService:
@@ -23,17 +26,28 @@ class NotificationService:
             values = json.loads(self.history_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return []
+        if not isinstance(values, list):
+            return []
         cutoff = time.time() - 30 * 24 * 3600
-        return [item for item in reversed(values[-100:]) if isinstance(item, dict)
-                and float(item.get("t") or 0) >= cutoff]
+        result = []
+        for item in reversed(values[-100:]):
+            try:
+                if isinstance(item, dict) and float(item.get("t") or 0) >= cutoff:
+                    result.append(item)
+            except (ValueError, TypeError):
+                continue
+        return result
 
     def _append_history(self, item: dict[str, object]) -> None:
         values = list(reversed(self.history()))
         values.append(item)
-        self.history_path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.history_path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(values[-100:], ensure_ascii=False), encoding="utf-8")
-        temporary.replace(self.history_path)
+        try:
+            self.history_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.history_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(values[-100:], ensure_ascii=False), encoding="utf-8")
+            temporary.replace(self.history_path)
+        except OSError:
+            logging.getLogger("awbotnest.notifier").exception("通知历史保存失败，继续投递通知")
 
     def read_at(self) -> float:
         try:
@@ -54,36 +68,61 @@ class NotificationService:
 
     async def send(self, text: str, *, channel: str = "", entity: object = None,
                    bot_id: str = "", plugin_id: str = "", plugin_name: str = "",
-                   level: str = "info", category: str = "", _record: bool = True) -> Any:
-        plain_text = str(text or "").strip()
+                   level: str = "info", category: str = "", _record: bool = True,
+                   format: str = "text", account: Any = None) -> Any:
+        plain_text, rich_text = content(text, format)
         if not plain_text:
             raise ValueError("通知内容不能为空")
         if level not in {"info", "success", "warning", "error"}:
             level = "info"
-        account = ""
-        if isinstance(entity, str):
-            account = entity
-        elif entity is not None:
-            account = str(getattr(entity, "name", "") or getattr(entity, "id", "") or "")
+        account = str(account if isinstance(account, str) else
+                      getattr(account, "name", "") or getattr(getattr(account, "me", None), "first_name", "") or "")
         if _record:
             self._append_history({
                 "id": str(time.time_ns()), "t": time.time(), "plugin_id": str(plugin_id or ""),
                 "plugin_name": str(plugin_name or plugin_id or "系统"), "level": level,
                 "category": str(category or ""), "account": account, "text": plain_text,
             })
-        if not channel and plugin_id:
-            routed = [item.strip() for item in str(self.settings.bot_routing.get(plugin_id, "")).split(",") if item.strip()]
+        if _record:
+            routed = [channel] if channel else list(dict.fromkeys(
+                item.strip() for item in str(self.settings.bot_routing.get(plugin_id, "")).split(",") if item.strip()))
+            routed = routed or [""]
             if routed:
                 results = []
+                failures = []
+                uncertain = None
                 for channel_id in routed:
-                    results.append(await self.send(
-                        plain_text, channel=channel_id, entity=entity, bot_id=bot_id,
-                        plugin_id=plugin_id, plugin_name=plugin_name, level=level,
-                        category=category, _record=False,
-                    ))
-                return results
+                    try:
+                        results.append(await self.send(
+                            text, channel=channel_id, entity=entity, bot_id=bot_id,
+                            plugin_id=plugin_id, plugin_name=plugin_name, level=level,
+                            category=category, _record=False, format=format, account=account,
+                        ))
+                    except Exception as exc:
+                        if isinstance(exc, DeliveryUncertain):
+                            uncertain = exc
+                        failures.append(channel_id)
+                        logging.getLogger("awbotnest.notifier").warning(
+                            "[%s] 通知渠道 %s 投递失败（%s），继续其他渠道",
+                            plugin_name or plugin_id, channel_id, type(exc).__name__)
+                if results:
+                    return results
+                if uncertain is not None:
+                    raise uncertain
+                sessions = self.settings.user_sessions
+                user = self.accounts.users.get(sessions[0]) if sessions else None
+                if user is not None and user.is_connected():
+                    plain_text, rich_text = notification(plugin_name or plugin_id, plain_text, rich_text, level, category, account)
+                    return await send_rich(user, "me", rich_text, plain_text)
+                raise RuntimeError("无可用通知渠道，且没有在线主账号用于保底投递")
+        plain_text, rich_text = notification(plugin_name or plugin_id, plain_text, rich_text, level, category, account)
+        if not channel:
+            channel = next((str(item.get("id") or "") for item in self.settings.notification_channels
+                            if item.get("is_default") and item.get("enabled", True)), "")
         spec = next((item for item in self.settings.notification_channels
                      if str(item.get("id")) == channel), None) if channel else None
+        if channel and spec is None and channel not in {item.id for item in self.settings.bot_specs()}:
+            raise LookupError("通知渠道不存在")
         raw = spec or {}
         nested = raw.get("config") if isinstance(raw.get("config"), dict) else {}
         config = {**nested, **raw}
@@ -92,9 +131,10 @@ class NotificationService:
         kind = str(config.get("type") or "telegram")
         if kind == "telegram":
             target = entity if entity is not None else (config.get("chat_id") or self.settings.default_bot_chat_id)
-            bot = self.accounts.choose_bot(bot_id or str(config.get("bot_id") or config.get("id") or ""))
+            selected_id = str(config.get("bot_id") or config.get("id") or channel or bot_id or "")
+            bot = self.accounts.choose_bot(selected_id)
             if bot is None or not bot.is_connected():
-                raise RuntimeError("Telegram 通知 Bot 不可用，请检查所选 Bot 是否在线")
+                raise RuntimeError("Telegram 通知 Bot 不可用")
             if isinstance(target, str):
                 target = target.strip()
             if target in (None, "", 0):
@@ -103,7 +143,9 @@ class NotificationService:
                 raise RuntimeError("Telegram 通知未找到接收人：请登录首个用户账号或填写 Chat ID")
             if isinstance(target, str) and target.lstrip("-").isdigit():
                 target = int(target)
-            return await bot.send_message(target, plain_text)
+            resolved_id = next((key for key, value in self.accounts.bots.items() if value is bot), selected_id)
+            token = next((spec.token for spec in self.settings.bot_specs() if spec.id == resolved_id), '')
+            return await send_rich(bot, target, rich_text, plain_text, token=token, proxy=self.settings.proxy_url)
         if kind == "bark":
             url = str(config.get("url") or config.get("server") or "").rstrip("/")
             device_key = str(config.get("device_key") or "")
