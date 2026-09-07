@@ -73,18 +73,11 @@ jobs:
         run: |
           VER="${{ github.ref_name }}"
           publish() {
+            # V2 保持预发行，只有维护者明确批准后才能更改发布策略。
             if gh release view "$VER" >/dev/null 2>&1; then
-              if [[ "$VER" == *"_dev" || "$VER" == *"-dev" ]]; then
-                gh release edit "$VER" --title "$VER" --notes-file release_notes.md --prerelease
-              else
-                gh release edit "$VER" --title "$VER" --notes-file release_notes.md --prerelease=false --latest
-              fi
+              gh release edit "$VER" --title "$VER" --notes-file release_notes.md --prerelease --latest=false
             else
-              if [[ "$VER" == *"_dev" || "$VER" == *"-dev" ]]; then
-                gh release create "$VER" --title "$VER" --notes-file release_notes.md --prerelease
-              else
-                gh release create "$VER" --title "$VER" --notes-file release_notes.md --latest
-              fi
+              gh release create "$VER" --title "$VER" --notes-file release_notes.md --prerelease --latest=false
             fi
           }
           for i in 1 2 3 4 5; do

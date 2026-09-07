@@ -14,7 +14,10 @@ const tab = ref('mine')   // mine | store
 
 const plugins = ref([])
 const customPluginOrder = ref(false)
+const draggedPluginId = ref('')
+const orderSaving = ref(false)
 const loading = ref(true)
+let loadRequestId = 0
 const error = ref('')
 const busy = ref({})
 const selfCheckOpen = ref(false)
@@ -134,19 +137,22 @@ let acctRequestId = 0
 const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号', standalone: '独立运行' }
 
 async function load() {
+  const requestId = ++loadRequestId
   loading.value = true
   error.value = ''
   try {
     const data = await api.listPlugins()
+    if (requestId !== loadRequestId) return
     plugins.value = data.plugins
     if (Array.isArray(data.official_ids) && data.official_ids.length) {
       officialIds.value = Array.from(new Set([...officialIds.value, ...data.official_ids]))
     }
     customPluginOrder.value = !!data.custom_order
   } catch (e) {
+    if (requestId !== loadRequestId) return
     error.value = e.message
   } finally {
-    loading.value = false
+    if (requestId === loadRequestId) loading.value = false
   }
 }
 
@@ -154,7 +160,6 @@ async function toggle(p) {
   if (p.error || busy.value[p.id]) return
   const wasEnabled = p.enabled
   busy.value[p.id] = true
-  p.enabled = !wasEnabled
   try {
     const data = wasEnabled ? await api.disablePlugin(p.id) : await api.enablePlugin(p.id)
     Object.assign(p, data.plugin)
@@ -682,9 +687,61 @@ const filteredPlugins = computed(() => {
 })
 
 // ── 插件市场（多仓库聚合） ──
+function startPluginDrag(plugin, event) {
+  if (pluginFilter.value !== 'all' || orderSaving.value || event.target.closest('button, input, a')) {
+    event.preventDefault()
+    return
+  }
+  draggedPluginId.value = plugin.id
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', plugin.id)
+}
+
+function allowPluginDrop(event) {
+  if (!draggedPluginId.value) {
+    dragging.value = Array.from(event.dataTransfer.types || []).includes('Files')
+    if (dragging.value) event.preventDefault()
+    return
+  }
+  event.preventDefault()
+  event.dataTransfer.dropEffect = 'move'
+}
+
+async function dropPluginBefore(target, event) {
+  event.preventDefault()
+  if (!draggedPluginId.value) return onDrop(event)
+  const sourceId = draggedPluginId.value
+  draggedPluginId.value = ''
+  if (sourceId === target.id || pluginFilter.value !== 'all' || orderSaving.value) return
+  const next = [...plugins.value]
+  const from = next.findIndex(plugin => plugin.id === sourceId)
+  if (from < 0) return
+  const [moved] = next.splice(from, 1)
+  const index = next.findIndex(plugin => plugin.id === target.id)
+  if (index < 0) return
+  const rect = event.currentTarget.getBoundingClientRect()
+  const y = (event.clientY - rect.top) / Math.max(rect.height, 1)
+  const after = y > .65 || (y >= .35 && event.clientX > rect.left + rect.width / 2)
+  next.splice(index + (after ? 1 : 0), 0, moved)
+  plugins.value = next
+  customPluginOrder.value = true
+  orderSaving.value = true
+  try {
+    await api.savePluginOrder(next.map(plugin => plugin.id))
+    toast.success('插件位置已保存')
+  } catch (e) {
+    error.value = `保存插件位置失败：${e.message}`
+    await load()
+  } finally {
+    orderSaving.value = false
+  }
+}
+
 const store = ref([])
 const officialIds = ref([])
 const storeBusy = ref(false)
+let storeLoaded = false
+let storeRequest = null
 const storeErr = ref('')
 let storeErrTimer = null
 function showStoreNotice(message) {
@@ -877,7 +934,7 @@ function openPluginSearch() {
   searchSort.value = 'hot'
   searchActiveIndex.value = 0
   searchOpen.value = true
-  if (store.value.length === 0 && !storeBusy.value) loadStore(false)
+  if (!storeLoaded) loadStore(false)
   nextTick(() => searchInput.value?.focus())
 }
 
@@ -965,14 +1022,24 @@ function openPluginHomepage(p) {
   if (opened) opened.opener = null
 }
 
-async function loadStore(refresh = false) {
-  if (storeBusy.value) return
+function loadStore(refresh = false) {
+  if (storeRequest) {
+    // A manual refresh must still run after a local-cache preload has finished.
+    return refresh ? storeRequest.then(() => loadStore(true)) : storeRequest
+  }
+  storeRequest = fetchStore(refresh).finally(() => { storeRequest = null })
+  return storeRequest
+}
+
+async function fetchStore(refresh) {
   storeBusy.value = true; storeErr.value = ''
   try {
     const d = await api.pluginStore(refresh)
+    if (!pluginPageMounted) return
     store.value = d.plugins || []
     officialIds.value = d.official_ids || []
     storeLastSync.value = d.last_sync
+    storeLoaded = true
     const marketById = new Map(store.value.map((plugin) => [plugin.id, plugin]))
     plugins.value.forEach((plugin) => {
       const marketPlugin = marketById.get(plugin.id)
@@ -1100,17 +1167,32 @@ async function saveRepos() {
 }
 
 function goStore() {
-  const entering = tab.value !== 'store'
   tab.value = 'store'
-  // 切入只取服务端本地缓存；联网刷新由后台轮询或手动按钮触发。
-  if (entering && !storeBusy.value) loadStore(false)
+  cancelStoreLoad()
+  if (!storeLoaded) loadStore(false)
+}
+
+function scheduleStoreLoad() {
+  if (storeLoaded || storeRequest || storeIdleTask !== null) return
+  const preload = () => {
+    storeIdleTask = null
+    if (pluginPageMounted && !storeLoaded) loadStore(false)
+  }
+  storeIdleTask = 'requestIdleCallback' in window
+    ? window.requestIdleCallback(preload, { timeout: 2000 })
+    : window.setTimeout(preload, 800)
+}
+
+function cancelStoreLoad() {
+  if (storeIdleTask === null) return
+  if ('requestIdleCallback' in window) window.cancelIdleCallback(storeIdleTask)
+  else window.clearTimeout(storeIdleTask)
+  storeIdleTask = null
 }
 
 onMounted(() => {
   pluginPageMounted = true
-  Promise.all([load()]).catch(() => {})
-  // “我的插件”页只读取本地插件与本地热度；市场数据延迟到用户进入
-  // “插件市场”时再刷新，避免首屏无意义地请求远程热度接口。
+  load().finally(() => { if (pluginPageMounted) scheduleStoreLoad() })
   document.addEventListener('click', closePageDropdowns)
   window.addEventListener('resize', positionConfigScopeMenu)
   window.addEventListener('scroll', positionConfigScopeMenu, true)
@@ -1122,8 +1204,10 @@ onMounted(() => {
 })
 onUnmounted(() => {
   pluginPageMounted = false
+  loadRequestId += 1
   logsDisconnect()
-  if (storeIdleTask !== null) window.clearTimeout(storeIdleTask)
+  cancelStoreLoad()
+  if (storeErrTimer) clearTimeout(storeErrTimer)
   stopNotificationSync?.()
   document.removeEventListener('click', closePageDropdowns)
   window.removeEventListener('resize', positionConfigScopeMenu)
@@ -1135,7 +1219,7 @@ onUnmounted(() => {
 <template>
   <div
     class="plugins"
-    @dragover.prevent="dragging = true"
+    @dragover.prevent="dragging = Array.from($event.dataTransfer.types || []).includes('Files')"
     @dragleave.prevent="dragging = false"
     @drop.prevent="onDrop"
   >
@@ -1224,6 +1308,9 @@ onUnmounted(() => {
       <div v-else class="grid">
         <div v-for="p in filteredPlugins" :key="p.id" class="card plugin-card clickable"
              :class="{ err: p.error, 'menu-open': menuFor === p.id }"
+             :draggable="pluginFilter === 'all' && !orderSaving"
+             @dragstart="startPluginDrag(p, $event)" @dragend="draggedPluginId = ''"
+             @dragover.stop="allowPluginDrop" @drop.stop="dropPluginBefore(p, $event)"
              @click="openConfig(p)">
           <div class="card-head">
             <div class="store-title">

@@ -121,16 +121,21 @@ export const api = {
   pluginStore: (refresh = true) => request('GET', `/api/plugins/store?refresh=${refresh}`),
   storeDownload: async (plugins) => {
     const installed = []
+    const reloaded = []
+    const install_counts = {}
     const errors = []
     for (const plugin of plugins) {
       try {
-        await request('POST', '/api/plugins/store/install', { plugin })
+        const result = await request('POST', '/api/plugins/store/install', { plugin })
+        if (result.ok === false || result.plugin?.error) throw new Error(result.plugin?.error || result.detail || '安装失败')
         installed.push(plugin.id)
+        if (result.plugin?.loaded) reloaded.push(plugin.id)
+        if (result.plugin?.install_count != null) install_counts[plugin.id] = result.plugin.install_count
       } catch (error) {
-        errors.push(`${plugin.id}: ${error.message}`)
+        errors.push(`${plugin.name || plugin.id}: ${error.message}`)
       }
     }
-    return { result: { installed, reloaded: [], restored: [], reload_errors: [], errors, install_counts: {} } }
+    return { result: { installed, reloaded, restored: [], reload_errors: [], errors, install_counts } }
   },
   repoStatus: () => request('GET', '/api/plugins/repo/status'),
 

@@ -67,12 +67,12 @@ let appearanceRotationTimer = null
 
 async function onAuthed() {
   restoringSession.value = true
-  api.ensureResourceToken().catch(() => {})   // 确保资源 Cookie 就绪（加载 vue 模式插件前端用）
   try {
     const [st, , status] = await Promise.all([
       api.authStatus(),
       loadUiProfile(true),
       refreshPlatformStatus(true),
+      api.ensureResourceToken().catch(() => {}),
     ])
     if (st.needs_setup || st.must_change_password) {
       logout()
@@ -86,10 +86,7 @@ async function onAuthed() {
     authed.value = true
     cancelDeferredRoutePreload?.()
     cancelDeferredRoutePreload = scheduleDeferredRoutePreload()
-    // 状态轮询会持续运行，不会自然 resolve；更新检查必须立即独立触发，
-    // 否则底部和“关于”里的新版本提示永远等不到第一次检查。
-    startPlatformStatusPolling().catch(() => {})
-    checkUpdate().catch(() => {})
+    startPlatformStatusPolling().then(() => checkUpdate()).catch(() => {})
   } catch (error) {
     authed.value = false
     if (getToken()) toast.error(`读取管理员资料失败：${error.message}`)

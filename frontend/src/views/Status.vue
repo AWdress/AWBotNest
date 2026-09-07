@@ -202,7 +202,7 @@ function nextRunLabel(job) {
   if (job.running) {
     const progress = job.progress || {}
     return progress.status === 'running' && progress.step
-      ? `${progress.step}${progress.progress != null ? ` · ${progress.progress}%` : ''}`
+      ? `${progress.step}${(progress.percent ?? progress.progress) != null ? ` · ${progress.percent ?? progress.progress}%` : ''}`
       : '运行中'
   }
   if (!job.next_run_at) return '等待安排'

@@ -380,10 +380,17 @@ async function testNetwork(item, fromSequence = false) {
   }
 }
 
+let jobsRequest = null
 async function loadJobs(silent = false) {
+  if (jobsRequest) return jobsRequest
+  jobsRequest = fetchJobs(silent).finally(() => { jobsRequest = null })
+  return jobsRequest
+}
+
+async function fetchJobs(silent) {
   try {
     const result = await api.status(true)
-    jobs.value = result.scheduler_jobs || []
+    if (modal.value === 'services') jobs.value = result.scheduler_jobs || []
   } catch (error) {
     if (!silent) toast.error(`定时任务加载失败：${error.message}`)
   }

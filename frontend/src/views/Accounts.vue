@@ -4,13 +4,14 @@ import { api } from '../api'
 import { confirm } from '../composables/confirm'
 import AccountAvatar from '../components/AccountAvatar.vue'
 import AccountPremiumBadge from '../components/AccountPremiumBadge.vue'
-import { platformStatus } from '../composables/platformStatus'
+import { platformStatus, refreshPlatformStatus } from '../composables/platformStatus'
 
 const accounts = ref([])
 const loading = ref(true)
 const error = ref('')
 const busy = ref({})
-const telegramConfigured = computed(() => Boolean(platformStatus.value?.telegram_configured))
+const telegramConfigured = computed(() => platformStatus.value?.telegram_configured !== false)
+let loadRequestId = 0
 const accountOverview = computed(() => ({
   total: accounts.value.length,
   online: accounts.value.filter(account => account.online).length,
@@ -27,15 +28,18 @@ const wizardErr = ref('')
 const doneInfo = ref(null)
 
 async function load() {
+  const requestId = ++loadRequestId
   loading.value = true
   error.value = ''
   try {
-    const d = await api.listAccounts()
+    const [d] = await Promise.all([api.listAccounts(), refreshPlatformStatus(true).catch(() => null)])
+    if (requestId !== loadRequestId) return
     accounts.value = d.accounts
   } catch (e) {
+    if (requestId !== loadRequestId) return
     error.value = e.message
   } finally {
-    loading.value = false
+    if (requestId === loadRequestId) loading.value = false
   }
 }
 
@@ -102,6 +106,8 @@ async function submitCode() {
     const r = await api.loginSubmitCode(form.value.session.trim(), form.value.code.trim())
     if (r.need === 'password' || r.needs_password) step.value = 'password'
     else if (r.ok || r.authorized) { doneInfo.value = r; step.value = 'done'; await load() }
+    if (r.error) wizardErr.value = r.error
+    else if (!(r.need === 'password' || r.needs_password || r.ok || r.authorized)) wizardErr.value = '登录未完成，请检查验证码后重试'
   } catch (e) {
     wizardErr.value = e.message
   } finally {
@@ -115,6 +121,7 @@ async function submitPassword() {
   try {
     const r = await api.loginSubmitPassword(form.value.session.trim(), form.value.password)
     if (r.ok || r.authorized) { doneInfo.value = r; step.value = 'done'; await load() }
+    else wizardErr.value = r.error || '登录未完成，请检查两步验证密码后重试'
   } catch (e) {
     wizardErr.value = e.message
   } finally {
