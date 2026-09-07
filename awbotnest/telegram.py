@@ -13,6 +13,7 @@ from telethon import TelegramClient
 from telethon.errors import PasswordHashInvalidError, PhoneCodeInvalidError, SessionPasswordNeededError
 
 from .config import DATA_DIR, SESSIONS_DIR, Settings
+from .activity import install_client_hooks
 
 logger = logging.getLogger("awbotnest.telegram")
 
@@ -89,7 +90,7 @@ class TelegramAccounts:
                 raise ValueError("代理地址必须是 http/socks4/socks5 URL")
             kwargs["proxy"] = (value.scheme, value.hostname, value.port, True,
                                value.username, value.password)
-        return TelegramClient(session, self.settings.api_id, self.settings.api_hash, **kwargs)
+        return install_client_hooks(TelegramClient(session, self.settings.api_id, self.settings.api_hash, **kwargs))
 
     @property
     def connected_users(self) -> list[TelegramClient]:

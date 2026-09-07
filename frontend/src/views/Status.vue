@@ -56,7 +56,7 @@ function animateNumber(key, target, duration = 650) {
 }
 
 function activityTotal(data) {
-  return Object.values(data?.activity?.totals || {}).reduce((sum, count) => sum + count, 0)
+  return Object.values(data?.totals || {}).reduce((sum, count) => sum + count, 0)
 }
 
 function markChangedRows(previous, next) {
@@ -94,7 +94,7 @@ async function applyStatus(next) {
   animateNumber('user', next.user_count)
   animateNumber('plugin', next.plugins?.enabled)
   animateNumber('uptime', next.uptime_seconds, 500)
-  animateNumber('activity', activityTotal(next))
+  animateNumber('activity', activityTotal(activityRange.value === '7d' ? next.activity_7d : next.activity))
 
   if (!previous) {
     await nextTick()

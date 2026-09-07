@@ -10,6 +10,16 @@ const deferred = () => {
 }
 const flush = () => new Promise(resolve => setImmediate(resolve))
 
+test('activity summary reads the selected timeline, including empty data', () => {
+  const source = readFileSync(new URL('../src/views/Status.vue', import.meta.url), 'utf8')
+  const fn = source.match(/function activityTotal\(data\) \{[\s\S]*?\n\}/)[0]
+  const total = runInNewContext(`(${fn})`)
+  assert.equal(total({ totals: { ai: 3, checkin: 2 } }), 5)
+  assert.equal(total({ totals: { ai: 10 } }), 10)
+  assert.equal(total(undefined), 0)
+  assert.match(source, /activityTotal\(activityRange.value === '7d' \? next.activity_7d : next.activity\)/)
+})
+
 function page(file, api, expose, extra = {}) {
   const source = readFileSync(new URL(`../src/views/${file}.vue`, import.meta.url), 'utf8')
     .match(/<script setup>([\s\S]*?)<\/script>/)[1]

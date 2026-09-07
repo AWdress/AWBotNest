@@ -4,6 +4,10 @@ import json
 import time
 import threading
 import contextvars
+import functools
+import inspect
+import logging
+from uuid import uuid4
 from collections import Counter
 from pathlib import Path
 
@@ -109,3 +113,54 @@ def record_current(success: bool = False) -> None:
     if current:
         plugin_id, event_id = current
         activity.record(plugin_id, success, event_id or None)
+
+
+_running = contextvars.ContextVar('activity_running', default=None)
+
+
+async def track_call(plugin_id, callback):
+    """One actual operation, including nested sends, counts once; never break work for telemetry."""
+    parent = _running.get()
+    if parent and parent['plugin_id'] == plugin_id and parent['active']:
+        value = callback()
+        return await value if inspect.isawaitable(value) else value
+    event_id = uuid4().hex
+    scope = {'plugin_id': plugin_id, 'active': True}
+    token = _running.set(scope)
+    def record(success):
+        try:
+            activity.record(plugin_id, success, event_id)
+            activity.flush()
+        except (OSError, ValueError, TypeError):
+            logging.getLogger(__name__).warning('插件活动统计保存失败', exc_info=True)
+    record(False)
+    try:
+        value = callback()
+        result = await value if inspect.isawaitable(value) else value
+        if result is not False and not (isinstance(result, dict) and result.get('ok') is False):
+            record(True)
+        return result
+    finally:
+        scope['active'] = False
+        _running.reset(token)
+
+
+def install_client_hooks(client):
+    """V1 outbound activity attribution, using Telethon's public send/edit methods."""
+    if getattr(client, '_aw_activity_hooked', False):
+        return client
+    for name in ('send_message', 'send_file', 'edit_message', 'forward_messages'):
+        original = getattr(client, name, None)
+        if not callable(original):
+            continue
+        def wrap(fn):
+            @functools.wraps(fn)
+            async def wrapped(*args, **kwargs):
+                current = _current_plugin.get()
+                if current:
+                    return await track_call(current[0], lambda: fn(*args, **kwargs))
+                return await fn(*args, **kwargs)
+            return wrapped
+        setattr(client, name, wrap(original))
+    client._aw_activity_hooked = True
+    return client

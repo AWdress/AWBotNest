@@ -16,7 +16,7 @@ from .services import PlatformServices, PluginAI
 from .plugin_cookies import PluginCookies
 from .routing import PluginRoutes
 from .notifier import NotificationService
-from .activity import activity, set_current, reset_current, record_current
+from .activity import set_current, reset_current, track_call
 
 EventCallback = Callable[[Any], Awaitable[Any]]
 
@@ -86,7 +86,16 @@ class PluginContext:
     async def execute(self, operation, callback, *, timeout=None, fallback=None, event_data=None):
         if self._closed:
             raise RuntimeError("插件已停用")
-        return await self.governor.execute(self.plugin_id, f"{self.instance_id}:{operation}", callback,
+        async def invoke():
+            token = set_current(self.plugin_id)
+            try:
+                if str(operation).startswith(("schedule:", "job:", "action:")):
+                    return await track_call(self.plugin_id, callback)
+                value = callback()
+                return await value if inspect.isawaitable(value) else value
+            finally:
+                reset_current(token)
+        return await self.governor.execute(self.plugin_id, f"{self.instance_id}:{operation}", invoke,
             timeout=timeout, fallback=fallback, event_data=event_data)
 
     def provide_capability(self, name, provider, *, priority=100):
@@ -256,11 +265,11 @@ class PluginContext:
     async def notify(self, text: str, entity: object = None, *, channel: str = "",
                      level: str = "info", category: str = "", format: str = "text", account: Any = None) -> object:
         try:
-            result = await self.notifier.send(
+            result = await track_call(self.plugin_id, lambda: self.notifier.send(
                 text, channel=channel, entity=entity, bot_id=self.bot_id,
                 plugin_id=self.plugin_id, plugin_name=self.plugin_name, level=level, category=category,
                 format=format, account=account,
-            )
+            ))
             return result
         except Exception:
             raise
@@ -290,9 +299,9 @@ class PluginContext:
                 async def no_args(payload):
                     value = callback()
                     return await value if inspect.isawaitable(value) else value
-                self.routes.action(self.plugin_id, name, self._managed(no_args))
+                self.routes.action(self.plugin_id, name, self._managed(no_args, operation=f"action:{name}"))
             else:
-                self.routes.action(self.plugin_id, name, self._managed(callback))
+                self.routes.action(self.plugin_id, name, self._managed(callback, operation=f"action:{name}"))
         return callback
 
     def schedule(self, callback, trigger="interval", **fields):

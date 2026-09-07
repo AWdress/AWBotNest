@@ -19,6 +19,11 @@ class BackendRegressions(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
+        from awbotnest.activity import ActivityTracker
+        self.activity = ActivityTracker(self.root / 'activity.json')
+        self.activity_patch = patch('awbotnest.activity.activity', self.activity)
+        self.activity_patch.start()
+        self.addCleanup(self.activity_patch.stop)
         self.scheduler = PluginScheduler()
 
     async def asyncTearDown(self):
@@ -33,6 +38,23 @@ class BackendRegressions(unittest.IsolatedAsyncioTestCase):
         with patch('awbotnest.context.DATA_DIR', self.root), patch('awbotnest.storage.DATA_DIR', self.root):
             return PluginContext('example', 'standalone', SimpleNamespace(), self.scheduler,
                                  settings, services, PluginRoutes(), SimpleNamespace())
+
+    async def test_scheduled_manual_and_action_activity(self):
+        ctx = self.context()
+        callback = AsyncMock(return_value={'ok': True})
+        job = ctx.schedule_interval('run', callback, seconds=3600)
+        for _ in range(2):
+            self.scheduler.run_now(job)
+            await self.scheduler._manual[job]
+        callback.return_value = {'ok': False}
+        self.scheduler.run_now(job)
+        await self.scheduler._manual[job]
+        await ctx.execute('action:run', AsyncMock(return_value=True))
+        await ctx.execute('setup', AsyncMock())
+        await ctx.execute('callback:config', AsyncMock(return_value={}))
+        self.assertEqual(self.activity.timeline()['totals'], {'example': 4})
+        self.assertEqual(self.activity.timeline()['successes'], {'example': 3})
+        await ctx.close()
 
     async def test_cookie_permissions_paths_and_sync_reminder(self):
         from awbotnest.plugin_cookies import PluginCookies
