@@ -21,23 +21,6 @@ export function preloadRoute(path) {
   return loader ? loader().catch(() => null) : Promise.resolve(null)
 }
 
-export function scheduleDeferredRoutePreload() {
-  const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection
-  if (connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || '')) return () => {}
-
-  let cancelled = false
-  const preload = async () => {
-    for (const path of ['/accounts', '/plugins', '/logs', '/settings']) {
-      if (cancelled) return
-      await preloadRoute(path)
-    }
-  }
-
-  if ('requestIdleCallback' in window) {
-    const id = window.requestIdleCallback(preload, { timeout: 2500 })
-    return () => { cancelled = true; window.cancelIdleCallback(id) }
-  }
-
-  const id = window.setTimeout(preload, 800)
-  return () => { cancelled = true; window.clearTimeout(id) }
+export function preloadAllRoutes() {
+  return Promise.all(Object.values(asyncViews).map(loader => loader().catch(() => null)))
 }

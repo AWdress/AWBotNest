@@ -11,7 +11,7 @@ import { confirm } from './composables/confirm'
 import { toast } from './composables/toast'
 import { clearUiProfile, loadUiProfile } from './composables/uiProfile'
 import { clearAccountAvatarCache, preloadAccountAvatars } from './composables/accountAvatars'
-import { preloadRoute, scheduleDeferredRoutePreload } from './routePreload'
+import { preloadAllRoutes, preloadRoute } from './routePreload'
 import {
   platformStatus,
   platformStatusError,
@@ -37,7 +37,6 @@ import { applyAppearance, disposeAppearance } from './composables/appearance'
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
 const restoringSession = ref(!!getToken())
-let cancelDeferredRoutePreload = null
 let restartTimer = null
 let appearanceRotationTimer = null
 
@@ -54,14 +53,12 @@ async function onAuthed() {
       logout()
       return
     }
-    // 启动页期间并行准备当前路由与账号头像，避免进入界面后再出现二次加载。
+    // 启动遮罩期间并行准备全部管理页面与账号头像，进入主界面后切页无需再下载路由组件。
     await Promise.all([
-      preloadRoute(route.path),
+      preloadAllRoutes(),
       preloadAccountAvatars(status?.accounts || []),
     ])
     authed.value = true
-    cancelDeferredRoutePreload?.()
-    cancelDeferredRoutePreload = scheduleDeferredRoutePreload()
     startPlatformStatusPolling().then(() => checkUpdate()).catch(() => {})
   } catch (error) {
     authed.value = false
@@ -72,8 +69,6 @@ async function onAuthed() {
 }
 function logout() {
   stopPlatformStatusPolling()
-  cancelDeferredRoutePreload?.()
-  cancelDeferredRoutePreload = null
   setToken('')
   clearUiProfile()
   clearAccountAvatarCache()
@@ -253,7 +248,6 @@ onUnmounted(() => {
   window.removeEventListener('awbotnest-appearance', applyAppearance)
   if (appearanceRotationTimer) window.clearInterval(appearanceRotationTimer)
   stopPlatformStatusPolling()
-  cancelDeferredRoutePreload?.()
   clearInterval(updateTimer)
   if (restartTimer) clearInterval(restartTimer)
 })
