@@ -1,6 +1,6 @@
 # AWBotNest 2 插件开发指南
 
-AWBotNest 插件是可以独立安装、启用、停用和重载的功能单元。平台提供 Telegram、HTTP、Cookie、浏览器、AI、KV、通知、Webhook 和调度能力。
+AWBotNest 插件是可以独立安装、启用、停用和重载的功能单元。平台提供 Telegram、HTTP、Cookie、浏览器、AI、异步存储、Session、Telegram Delivery、通知、Webhook 和调度能力。
 
 AWBotNest 2 使用 Telethon，仅支持按 V2 规范开发的插件。
 
@@ -53,6 +53,12 @@ __plugin__ = {
     "render_mode": "schema",
     "scope": "standalone",
     "bot": "",
+    "instance_mode": "shared",
+    "plugin_api_version": 2,
+    "cookie_domains": ["example.org", "*.example.org"],
+    "requires_plugins": [],
+    "requires_capabilities": [],
+    "provides_capabilities": [],
     "requirements": ["httpx>=0.28,<1"],
     "config_schema": {},
     "resources": {
@@ -60,6 +66,7 @@ __plugin__ = {
         "max_concurrency": 8,
         "max_background_tasks": 32,
         "failure_threshold": 5,
+        "recovery_seconds": 60,
     },
 }
 ```
@@ -78,6 +85,14 @@ __plugin__ = {
 | `config_schema` | 否 | 自动配置表单 |
 | `render_mode` | 否 | `schema`（默认）或 `vue`；Vue 模式通过模块联邦加载插件配置组件 |
 | `resources` | 否 | 超时、并发、任务数和熔断限制 |
+| `instance_mode` | 否 | `shared`（默认）或 `account`；账号模式为每个所选在线用户创建独立实例 |
+| `cookie_domains` | 否 | Cookie 只读权限范围，支持精确域名及 `*.example.org` |
+| `requires_plugins` | 否 | 必需的前置插件 ID；平台不会自动下载或启用 |
+| `requires_capabilities` | 否 | 必需的平台扩展能力名称 |
+| `provides_capabilities` | 否 | 本插件声明提供的平台扩展能力名称 |
+| `plugin_api_version` | 否 | 插件 API 版本，当前正式版本为 `2` |
+| `min_platform_version` | 否 | 支持的最低平台版本 |
+| `max_platform_version` | 否 | 支持的最高平台版本 |
 
 作用域：`standalone` 不监听 Telegram；`bot` 监听 Bot；`user` 监听用户账号；`both` 同时挂载两者。
 
@@ -147,7 +162,7 @@ async def setup(ctx):
 
 `requirements` 是 Python 依赖，不是前置插件 ID 列表。前置插件使用 `requires_plugins: ["插件ID"]`；能力依赖使用 `requires_capabilities`，提供能力使用 `provides_capabilities` 并在 setup 中调用 `ctx.provide_capability(name, provider, priority=100)`。通过 `await ctx.call_capability(name, ...)` 调用，优先级高的提供者失败后尝试备用提供者。平台不自动启用缺失的前置插件，`dependencies` 不是受支持的别名。
 
-`instance_mode: "account"` 为每个所选在线用户账号创建独立上下文；默认 `"shared"` 保持全局实例。账号模式使用 `ctx.account_name`、`ctx.instance_id` 和 `ctx.user`，KV 与数据目录分开存放。所有后台任务应通过 `ctx.create_task` 创建，额外资源通过 `ctx.add_cleanup(callback)` 登记清理。
+`instance_mode: "account"` 为每个所选在线用户账号创建独立上下文；默认 `"shared"` 保持全局实例。账号模式使用 `ctx.account_name`、`ctx.instance_id` 和 `ctx.user`。每个账号实例拥有独立的 storage、Session namespace、scheduler jobs、Delivery lifecycle 和 `data_dir`。不要把账号实例的 SQLite 隐式改成共享存储；确实需要共享数据时，应等待平台提供明确的 shared storage 能力。所有后台任务应通过 `ctx.create_task` 创建，额外资源通过 `ctx.add_cleanup(callback)` 登记清理。
 
 读取平台 Cookie 必须声明 `cookie_domains`，如 `["example.org", "*.example.org"]`。`ctx.cookies.get/header/playwright` 支持 `path`；`get/header` 还支持 `names`。`ctx.cookies.available` 表示服务与快照可用，`await ctx.cookies.request_sync(domain)` 在已有有效 Cookie 时返回 True，否则提醒同步并返回 False。不得直接修改平台 Cookie 存储。
 
@@ -239,7 +254,7 @@ async def setup(ctx):
 
 注意：`schedule_cron` 的时间字段使用 APScheduler 的字段名（如
 `hour=8, minute=0`），不要传入 V1 的 `schedulers` 模块或自行导入调度器。
-回调必须是 `async def`；没有有效时间字段的平台会拒绝注册并写入错误日志。
+推荐使用 `async def` 回调。平台也支持普通同步函数，并将其放入工作线程运行，避免阻塞 Telethon 事件循环。同步函数返回 awaitable 时平台仍会等待其完成。没有有效时间字段的平台会拒绝注册并写入错误日志。
 
 停用时平台会移除事件、调度、Webhook 和动作，并取消通过 `ctx.create_task()` 创建的后台任务。不要直接创建平台无法追踪的永久任务。
 
@@ -258,27 +273,63 @@ data = response.json()
 ### KV 与文件
 
 ```python
-count = ctx.kv.get("count", 0)
-ctx.kv.set("count", count + 1)
-ctx.kv.delete("old_key")
-all_values = ctx.kv.items()
+count = await ctx.storage.get("count", 0)
+await ctx.storage.set("count", count + 1)
+await ctx.storage.delete("old_key")
+all_values = await ctx.storage.items()
 cache_file = ctx.data_dir / "cache.json"
 ```
 
-单个 KV 值最大 10 MB，数据库最大 256 MB。
+`ctx.storage` 是 V2 正式的异步持久存储接口。`ctx.kv` 是指向同一对象的命名兼容别名，同样必须 `await`；不要使用同步形式调用。单个 KV 值最大 10 MB，数据库最大 256 MB。账号实例默认使用独立数据库。
+
+### Session Runtime
+
+Session 用于牌局、回合状态、临时交互和其他运行期内存状态；长期统计、配置和历史数据仍应写入 `ctx.storage`。
+
+```python
+session = await ctx.sessions.get(
+    str(event.chat_id),
+    ttl=1800,
+    initial={"round": 1, "players": []},
+)
+
+async with session.lock:
+    session.data["round"] += 1
+    session.touch()
+
+await ctx.sessions.reset(str(event.chat_id))
+```
+
+- `get()` 与 `open()` 获取或创建当前插件实例命名空间中的 Session。
+- 同一 key 返回同一个有效 Session；不同插件、不同账号实例和不同 key 彼此隔离。
+- 修改 `session.data` 时使用 `async with session.lock`，避免同一会话的并发更新互相覆盖。
+- `ttl` 到期后由平台清理；访问或调用 `session.touch()` 会刷新活动时间。
+- Session 只保存在内存中，插件停用或平台重启后不会保留。
+
+### Telegram Delivery（可选）
+
+简单消息仍可直接使用 Telethon 的 `event.reply()`、`client.send_message()` 和 `message.edit()`。高频发送、连续编辑或需要顺序治理时使用 `ctx.delivery`：
+
+```python
+await ctx.delivery.send(ctx.user, event.chat_id, "处理中")
+await ctx.delivery.edit(message, "进度 80%", coalesce=True)
+```
+
+Delivery 按“账号 + chat”保持发送顺序，不同 chat 可以并发；重复编辑会跳过，短时间连续编辑可以合并为最终内容，FloodWait 只进行有限重试。插件停用或重载时，属于该实例的等待操作会被取消。不要在插件中增加全局 Telegram 发送锁。
 
 ### Cookie、浏览器与 AI
 
 ```python
 cookies = await ctx.cookies.get("example.com")
-await ctx.cookies.set("example.com", {"sid": "..."})
+cookie_header = await ctx.cookies.header("example.com", path="/account")
+browser_cookies = await ctx.cookies.playwright("example.com", path="/")
 html = await ctx.browser.page_source("https://example.com")
 reply = await ctx.ai.chat("你好", system="回答要简洁")
 description = await ctx.ai.vision("screenshot.png", "识别图片中的文字")
 generated = await ctx.ai.generate_image("一张蓝绿色的极简海报")
 ```
 
-Cookie 读取与 V1 一致：`get(domain, path="/", names=None)` 返回 Cookie 对象列表，而非键值字典；`header(domain, path="/", names=None)` 返回请求头字符串。按域名、hostOnly、路径边界和有效期筛选，长路径优先；同名请求头使用优先匹配值。`playwright(domain, path="/")` 保留浏览器 Cookie 属性。CookieCloud 同步保留路径及过期等属性。旧 V2 键值缓存只能按根路径读取，需重新同步才能恢复原始路径信息。
+Cookie 接口是插件作用域内的只读能力，不提供 `ctx.cookies.set()`。`get(domain, path="/", names=None)` 返回 Cookie 对象列表，而非键值字典；`header(domain, path="/", names=None)` 返回请求头字符串。按域名、hostOnly、路径边界和有效期筛选，长路径优先；同名请求头使用优先匹配值。`playwright(domain, path="/")` 保留浏览器 Cookie 属性。CookieCloud 同步保留路径及过期等属性。旧 V2 键值缓存只能按根路径读取，需重新同步才能恢复原始路径信息。
 
 `ctx.ai.is_available("text" | "vision" | "image")` 可判断能力是否可用；
 `ctx.ai.available_models(...)` 只返回管理员授权给当前插件的模型别名和能力。插件不得自行保存服务地址或密钥。
@@ -358,6 +409,8 @@ Webhook 路径必须与注册值完全一致（这里的 `receive` 不能改成 
 
 平台按 `resources` 限制回调时间、并发和后台任务数，连续失败达到阈值后熔断。插件仍应为外部请求设置超时并捕获可预期异常。
 
+`asyncio.CancelledError` 表示插件停用、重载或平台关闭，必须继续抛出，不得作为业务异常吞掉。Telethon 的 `StopPropagation` 是正常的 handler 控制流程，不属于插件失败；需要终止后续 handler 时可抛出 `ctx.StopPropagation`。
+
 ## 发布到插件市场
 
 兼容仓库根目录必须有 `manifest_v2.json`：
@@ -385,6 +438,8 @@ Webhook 路径必须与注册值完全一致（这里的 `receive` 不能改成 
 4. 外部请求有超时，网络失败不会拖垮平台。
 5. 密钥不进入源码、日志、通知或公开响应。
 6. Windows、Linux 路径使用 `pathlib`，不要写死盘符或 `/home`。
-7. 只写 `ctx.data_dir` 和 `ctx.kv`。
+7. 只写 `ctx.data_dir` 和异步 `ctx.storage`（`ctx.kv` 是同一接口的兼容别名）。
+8. 临时交互状态使用 `ctx.sessions`，高频 Telegram 输出按需使用 `ctx.delivery`。
+9. 不吞掉 `CancelledError`，不创建平台无法追踪的永久后台任务。
 
 硬性规则见 [SPEC.md](SPEC.md)。

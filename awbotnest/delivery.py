@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -20,6 +21,12 @@ class _PendingEdit:
     task: asyncio.Task[None] | None = None
 
 
+@dataclass(slots=True)
+class _ChatLock:
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class TelegramDelivery:
     """Optional governed Telegram delivery scoped to one plugin instance."""
 
@@ -36,7 +43,7 @@ class TelegramDelivery:
         self.retries = int(retries)
         self.flood_wait_limit = float(flood_wait_limit)
         self.coalesce_window = float(coalesce_window)
-        self._chat_locks: dict[tuple[int, str], asyncio.Lock] = {}
+        self._chat_locks: dict[tuple[int, str], _ChatLock] = {}
         self._pending_edits: dict[tuple[int, str, int], _PendingEdit] = {}
         self._last_edits: dict[tuple[int, str, int], str] = {}
         self._registry_lock = asyncio.Lock()
@@ -109,6 +116,25 @@ class TelegramDelivery:
             self._active.add(task)
         return task
 
+    @asynccontextmanager
+    async def _ordered_chat(self, client: Any, chat: Any):
+        """Retain a per-chat lock only while an operation owns or awaits it."""
+        key = self._chat_key(client, chat)
+        async with self._registry_lock:
+            state = self._chat_locks.get(key)
+            if state is None:
+                state = _ChatLock(asyncio.Lock())
+                self._chat_locks[key] = state
+            state.users += 1
+        try:
+            async with state.lock:
+                yield
+        finally:
+            async with self._registry_lock:
+                state.users -= 1
+                if state.users == 0 and self._chat_locks.get(key) is state:
+                    self._chat_locks.pop(key, None)
+
     async def _wait_pending_edits(self, client: Any, chat: Any) -> None:
         """Keep a later send behind edits already queued for the same account/chat."""
         chat_key = self._chat_key(client, chat)
@@ -126,8 +152,7 @@ class TelegramDelivery:
         task = self._track_current()
         try:
             await self._wait_pending_edits(client, chat)
-            lock = self._chat_locks.setdefault(self._chat_key(client, chat), asyncio.Lock())
-            async with lock:
+            async with self._ordered_chat(client, chat):
                 return await self._retry(
                     lambda: client.send_message(chat, text, **kwargs),
                     retries=retries, flood_wait_limit=flood_wait_limit,
@@ -147,9 +172,7 @@ class TelegramDelivery:
         if self._message_text(message) == text or self._last_edits.get(key) == text:
             return message
         client = self._message_client(message)
-        chat_key = self._chat_key(client, getattr(message, "chat_id", None))
-        lock = self._chat_locks.setdefault(chat_key, asyncio.Lock())
-        async with lock:
+        async with self._ordered_chat(client, getattr(message, "chat_id", None)):
             if self._message_text(message) == text or self._last_edits.get(key) == text:
                 return message
             result = await self._retry(
