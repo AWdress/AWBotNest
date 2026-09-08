@@ -32,8 +32,6 @@ const backgroundUrl = ref(localStorage.getItem('awbotnest-bg-image') || '')
 function saveAppearance() {
   localStorage.setItem('awbotnest-theme', themeMode.value)
   localStorage.setItem('awbotnest-bg-image', backgroundUrl.value.trim())
-  document.documentElement.dataset.theme = themeMode.value
-  document.documentElement.style.setProperty('--app-bg-image', backgroundUrl.value.trim() ? `url("${backgroundUrl.value.trim().replace(/"/g, '')}")` : 'none')
   window.dispatchEvent(new Event('awbotnest-appearance'))
   toast.success('外观设置已保存')
 }

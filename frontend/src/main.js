@@ -3,6 +3,9 @@ import { createRouter, createWebHashHistory } from 'vue-router'
 import App from './App.vue'
 import './styles/tokens.css'
 import { appRoutes } from './routePreload'
+import { applyAppearance } from './composables/appearance'
+
+applyAppearance()
 
 const router = createRouter({
   // 用 hash 模式，避免后端路由配置；FastAPI 只需托管 index.html

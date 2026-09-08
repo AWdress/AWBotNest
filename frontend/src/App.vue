@@ -32,31 +32,7 @@ const connectionLabel = computed(() => online.value
   ? '连接正常'
   : (platformStatusError.value ? '连接异常' : '正在连接'))
 
-function applyAppearance() {
-  document.documentElement.dataset.theme = localStorage.getItem('awbotnest-theme') || 'dark'
-  // 透明主题提供电影质感默认背景；用户填写的图片/API 地址优先。
-  const image = localStorage.getItem('awbotnest-bg-image') || (document.documentElement.dataset.theme === 'transparent'
-    ? `https://www.loliapi.com/acg/?t=${Date.now()}`
-    : '')
-  document.documentElement.style.setProperty('--app-bg-image', image ? `url("${image.replace(/"/g, '')}")` : 'none')
-  if (image) {
-    const preload = new Image()
-    preload.src = image
-    // 随机图接口偶尔返回网关错误或空响应；重试一次，失败后清除无效背景，
-    // 避免保留 broken-image 状态导致后续导航一直没有背景。
-    preload.onerror = () => {
-      if (!localStorage.getItem('awbotnest-bg-image') && image.includes('loliapi.com')) {
-        const retry = `${image.split('?')[0]}?t=${Date.now()}&retry=1`
-        document.documentElement.style.setProperty('--app-bg-image', `url("${retry}")`)
-        const second = new Image()
-        second.onerror = () => document.documentElement.style.setProperty('--app-bg-image', 'none')
-        second.src = retry
-      } else {
-        document.documentElement.style.setProperty('--app-bg-image', 'none')
-      }
-    }
-  }
-}
+import { applyAppearance, disposeAppearance } from './composables/appearance'
 
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
@@ -258,11 +234,10 @@ const icons = {
 let updateTimer = null
 
 onMounted(async () => {
-  applyAppearance()
   window.addEventListener('awbotnest-appearance', applyAppearance)
   appearanceRotationTimer = window.setInterval(() => {
     const theme = localStorage.getItem('awbotnest-theme') || 'dark'
-    if (theme === 'transparent' && !localStorage.getItem('awbotnest-bg-image')) applyAppearance()
+    if (theme === 'transparent' && !localStorage.getItem('awbotnest-bg-image')) applyAppearance({ rotate: true })
   }, 30 * 60 * 1000)
   // 恢复登录态后补种资源 Cookie，并确认账号已经完成首次设置。
   if (getToken()) {
@@ -274,6 +249,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  disposeAppearance()
   window.removeEventListener('awbotnest-appearance', applyAppearance)
   if (appearanceRotationTimer) window.clearInterval(appearanceRotationTimer)
   stopPlatformStatusPolling()
