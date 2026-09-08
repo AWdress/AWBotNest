@@ -34,9 +34,9 @@ async def send_rich(client, target, rich, plain, *, token='', proxy=''):
     else:
         me = await client.get_me()
         if getattr(me, 'bot', False) or getattr(me, 'premium', False):
-            # 新版 Telethon 若提供原生 TL 类型，则使用同一用户会话发送。
+            # HTML 和 blocks 是不同的 TL 构造器，不能用 InputRichMessage 检查 html。
             from telethon import functions, types
-            rich_type = getattr(types, 'InputRichMessage', None)
+            rich_type = getattr(types, 'InputRichMessageHTML', None)
             sender = functions.messages.SendMessageRequest
             if rich_type and 'rich_message' in inspect.signature(sender).parameters and 'html' in inspect.signature(rich_type).parameters:
                 try:
