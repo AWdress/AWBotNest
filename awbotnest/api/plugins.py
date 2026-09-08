@@ -96,17 +96,40 @@ def create_router(deps) -> APIRouter:
 
     @router.get("/api/plugins/dependencies", dependencies=[Depends(require_admin)])
     async def plugin_dependencies():
+        metas = runtime.scan()
+        names = {meta.id: meta.name for meta in metas}
+        known = set(names)
+        capabilities = set(runtime.services.governor.capabilities.names())
         nodes = []
         edges = []
-        for meta in runtime.scan():
-            nodes.append({"id": meta.id, "name": meta.name, "scope": meta.scope,
+        for meta in metas:
+            nodes.append({"id": meta.id, "name": meta.name, "version": meta.version, "scope": meta.scope,
                           "requirements": meta.requirements or [], "enabled": meta.enabled,
                           "requires_plugins": meta.requires_plugins,
                           "requires_capabilities": meta.requires_capabilities,
                           "provides_capabilities": meta.provides_capabilities})
-            edges.extend({"source": meta.id, "target": required, "type": "plugin"}
-                         for required in meta.requires_plugins)
-        return {"nodes": nodes, "edges": edges}
+            missing_packages = set(runtime.deps.missing(meta.requirements or []))
+            edges.extend({
+                "from": meta.id, "to": required, "label": names.get(required, "未安装的插件"),
+                "source": meta.id, "target": required,
+                "type": "plugin", "missing": required not in known,
+            } for required in meta.requires_plugins)
+            edges.extend({
+                "from": meta.id, "to": requirement, "label": requirement,
+                "source": meta.id, "target": requirement,
+                "type": "python", "missing": requirement in missing_packages,
+            } for requirement in (meta.requirements or []))
+            edges.extend({
+                "from": meta.id, "to": capability, "label": capability,
+                "source": meta.id, "target": capability,
+                "type": "capability", "missing": capability not in capabilities,
+            } for capability in meta.requires_capabilities)
+            edges.extend({
+                "from": meta.id, "to": capability, "label": capability,
+                "source": meta.id, "target": capability,
+                "type": "provides", "missing": False,
+            } for capability in meta.provides_capabilities)
+        return {"nodes": nodes, "edges": edges, "capabilities": sorted(capabilities)}
 
     @router.get("/api/plugins/{plugin_id}/accounts", dependencies=[Depends(require_admin)])
     async def get_plugin_accounts(plugin_id: str):

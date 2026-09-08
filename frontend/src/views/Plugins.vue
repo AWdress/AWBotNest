@@ -1637,14 +1637,14 @@ onUnmounted(() => {
         <div class="modal-body governance-body">
           <div v-if="dependencyBusy" class="muted center">正在整理依赖关系…</div>
           <template v-else>
-            <div v-if="!dependencyData.edges.length" class="empty-inline">当前插件没有声明插件、平台能力或 Python 包依赖。</div>
+            <div v-if="!dependencyData.edges.length" class="empty-inline">所有插件均未通过元数据声明依赖。</div>
             <div v-for="node in dependencyData.nodes" :key="node.id" class="dependency-node">
-              <div><strong>{{ node.name }}</strong><small>{{ node.id }} · v{{ node.version }}</small></div>
+              <div><strong>{{ node.name }}</strong><small v-if="node.version">版本 {{ node.version }}</small></div>
               <div class="dependency-links">
                 <span v-for="edge in dependencyData.edges.filter(item => item.from === node.id)" :key="`${edge.type}-${edge.to}`" :class="{ missing: edge.missing }">
-                  {{ edge.type === 'provides' ? '提供 → ' : edge.type === 'python' ? 'Python 包 → ' : '依赖 → ' }}{{ edge.to.replace('capability:', '能力：') }}<template v-if="edge.missing">（缺失）</template>
+                  {{ edge.type === 'provides' ? '提供能力 → ' : edge.type === 'capability' ? '需要能力 → ' : edge.type === 'python' ? 'Python 包 → ' : '依赖插件 → ' }}{{ edge.label || edge.to }}<template v-if="edge.missing">（缺失）</template>
                 </span>
-                <span v-if="!dependencyData.edges.some(item => item.from === node.id)" class="muted">无依赖</span>
+                <span v-if="!dependencyData.edges.some(item => item.from === node.id)" class="muted">未声明依赖</span>
               </div>
             </div>
           </template>
