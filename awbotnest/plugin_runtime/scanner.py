@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import copy
+import threading
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -20,6 +22,10 @@ class PluginScanner:
         self.plugins_dir = plugins_dir
         self.loaded = loaded
         self.resolver = resolver
+        self._lock = threading.RLock()
+        self._scan_cache_signature: tuple[tuple[str, int, int], ...] | None = None
+        self._scan_cache: list[PluginMeta] = []
+        self._ai_usage_cache: dict[str, tuple[tuple[tuple[str, int, int], ...], bool]] = {}
 
     def entries(self) -> list[Path]:
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
@@ -28,6 +34,36 @@ class PluginScanner:
                      if path.is_dir() and not path.name.startswith("_")
                      and (path / "__init__.py").exists())
         return sorted(files)
+
+    def _entry_signature(self) -> tuple[tuple[str, int, int], ...]:
+        signature: list[tuple[str, int, int]] = []
+        for entry in self.entries():
+            try:
+                stat = entry.stat()
+                signature.append((str(entry), stat.st_mtime_ns, stat.st_size))
+            except OSError:
+                continue
+        return tuple(signature)
+
+    def _cached_metas(self) -> list[PluginMeta]:
+        metas = copy.deepcopy(self._scan_cache)
+        for meta in metas:
+            meta.enabled = meta.id in self.settings.enabled_plugins
+            meta.loaded = meta.id in self.loaded
+        bot_ids = {item.id for item in self.settings.bot_specs()}
+        visible: list[PluginMeta] = []
+        for meta in metas:
+            if meta.bot and meta.bot not in bot_ids and not meta.error:
+                meta.error = f"ValueError: 指定的 Bot 不存在：{meta.bot}"
+            if self.settings.telegram_configured or meta.scope not in {"user", "both"}:
+                visible.append(meta)
+        return visible
+
+    def invalidate_scan_cache(self) -> None:
+        with self._lock:
+            self._scan_cache_signature = None
+            self._scan_cache = []
+            self._ai_usage_cache = {}
 
     def entry_file(self, plugin_id: str) -> Path | None:
         return next((entry for entry in self.entries()
@@ -67,35 +103,48 @@ class PluginScanner:
         return False
 
     def uses_platform_ai(self, plugin_id: str) -> bool:
-        entry = self.entry_file(plugin_id)
-        if entry is None:
-            return False
-        sources = ([entry] if entry.name != "__init__.py" else [
-            path for path in entry.parent.rglob("*.py") if "__pycache__" not in path.parts
-        ])
-        return any(self.source_uses_platform_ai(path) for path in sources)
+        with self._lock:
+            entry = self.entry_file(plugin_id)
+            if entry is None:
+                self._ai_usage_cache.pop(plugin_id, None)
+                return False
+            sources = ([entry] if entry.name != "__init__.py" else [
+                path for path in entry.parent.rglob("*.py") if "__pycache__" not in path.parts
+            ])
+            signature: list[tuple[str, int, int]] = []
+            for path in sources:
+                try:
+                    stat = path.stat()
+                    signature.append((str(path), stat.st_mtime_ns, stat.st_size))
+                except OSError:
+                    continue
+            cache_key = tuple(signature)
+            cached = self._ai_usage_cache.get(plugin_id)
+            if cached is not None and cached[0] == cache_key:
+                return cached[1]
+            result = any(self.source_uses_platform_ai(path) for path in sources)
+            self._ai_usage_cache[plugin_id] = (cache_key, result)
+            return result
 
     def scan(self) -> list[PluginMeta]:
-        result: list[PluginMeta] = []
-        bot_ids = {item.id for item in self.settings.bot_specs()}
-        for entry in self.entries():
-            fallback_id = entry.parent.name if entry.name == "__init__.py" else entry.stem
-            try:
-                raw = self.metadata(entry)
-                meta = self.resolver.descriptor(
-                    entry, raw, fallback_id,
-                    enabled=fallback_id in self.settings.enabled_plugins,
-                    loaded=fallback_id in self.loaded,
-                )
-                self.dependencies.validate(meta.requirements or [])
-                if meta.bot and meta.bot not in bot_ids:
-                    raise ValueError(f"指定的 Bot 不存在：{meta.bot}")
-                if not self.settings.telegram_configured and meta.scope in {"user", "both"}:
-                    continue
-                result.append(meta)
-            except Exception as exc:
-                result.append(PluginMeta(
-                    id=fallback_id, name=fallback_id, version="0.0.0", scope="standalone",
-                    error=f"{type(exc).__name__}: {exc}",
-                ))
-        return result
+        with self._lock:
+            signature = self._entry_signature()
+            if signature == self._scan_cache_signature:
+                return self._cached_metas()
+
+            result: list[PluginMeta] = []
+            for entry in self.entries():
+                fallback_id = entry.parent.name if entry.name == "__init__.py" else entry.stem
+                try:
+                    raw = self.metadata(entry)
+                    meta = self.resolver.descriptor(entry, raw, fallback_id)
+                    self.dependencies.validate(meta.requirements or [])
+                    result.append(meta)
+                except Exception as exc:
+                    result.append(PluginMeta(
+                        id=fallback_id, name=fallback_id, version="0.0.0", scope="standalone",
+                        error=f"{type(exc).__name__}: {exc}",
+                    ))
+            self._scan_cache = sorted(result, key=lambda item: item.id)
+            self._scan_cache_signature = signature
+            return self._cached_metas()

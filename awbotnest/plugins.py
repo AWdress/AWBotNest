@@ -91,6 +91,9 @@ class PluginRuntime:
     def scan(self) -> list[PluginMeta]:
         return self.scanner.scan()
 
+    def invalidate_scan_cache(self) -> None:
+        self.scanner.invalidate_scan_cache()
+
 
     async def enable(self, plugin_id: str) -> PluginMeta:
         async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):

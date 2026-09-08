@@ -229,6 +229,7 @@ def create_router(deps) -> APIRouter:
             content.decode("utf-8")
             temporary.write_bytes(content)
             temporary.replace(target)
+            runtime.invalidate_scan_cache()
             meta = next((item for item in runtime.scan() if item.id == target.stem), None)
             if meta is None or meta.error:
                 raise ValueError(meta.error if meta else "插件元数据无法识别")
@@ -237,6 +238,7 @@ def create_router(deps) -> APIRouter:
             target.unlink(missing_ok=True)
             if backup is not None:
                 target.write_bytes(backup)
+            runtime.invalidate_scan_cache()
             raise HTTPException(status_code=400, detail=f"插件校验失败：{exc}") from exc
         finally:
             temporary.unlink(missing_ok=True)
@@ -263,6 +265,7 @@ def create_router(deps) -> APIRouter:
             removed = True
         if not removed:
             raise HTTPException(status_code=404, detail="插件不存在")
+        runtime.invalidate_scan_cache()
         settings.plugin_config.pop(plugin_id, None)
         settings.plugin_accounts.pop(plugin_id, None)
         settings.bot_routing.pop(plugin_id, None)

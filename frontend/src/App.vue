@@ -43,12 +43,12 @@ let appearanceRotationTimer = null
 
 async function onAuthed() {
   restoringSession.value = true
+  api.ensureResourceToken().catch(() => {})
   try {
     const [st, , status] = await Promise.all([
       api.authStatus(),
       loadUiProfile(true),
       refreshPlatformStatus(true),
-      api.ensureResourceToken().catch(() => {}),
     ])
     if (st.needs_setup || st.must_change_password) {
       logout()

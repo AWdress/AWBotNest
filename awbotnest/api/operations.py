@@ -229,6 +229,7 @@ def create_router(deps, list_plugins) -> APIRouter:
             if was_loaded:
                 await runtime.disable(plugin_id, persist=False)
             destination = await market.install(body.plugin)
+            runtime.invalidate_scan_cache()
         except ValueError as exc:
             logger.error("%s失败：%s（%s）", action, plugin_name, exc)
             if was_loaded:
@@ -244,6 +245,7 @@ def create_router(deps, list_plugins) -> APIRouter:
             error_detail = meta.error if meta else "插件安装后未被识别"
             logger.error("%s失败：%s（安装后校验失败：%s）", action, plugin_name, error_detail)
             market.finish(plugin_id, False)
+            runtime.invalidate_scan_cache()
             if was_loaded:
                 await runtime.enable(plugin_id)
             raise HTTPException(status_code=409, detail=error_detail)
@@ -251,6 +253,7 @@ def create_router(deps, list_plugins) -> APIRouter:
             meta = await runtime.enable(plugin_id)
             if meta.error:
                 market.finish(plugin_id, False)
+                runtime.invalidate_scan_cache()
                 await runtime.enable(plugin_id)
                 logger.error("%s失败：%s（重新加载失败：%s，已回滚）", action, plugin_name, meta.error)
                 raise HTTPException(status_code=409, detail=f"更新加载失败，已回滚：{meta.error}")

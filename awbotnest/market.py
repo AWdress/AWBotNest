@@ -159,6 +159,7 @@ class PluginMarket:
             try:
                 if was_loaded: await runtime.disable(plugin_id, persist=False)
                 await self.install(plugin)
+                runtime.invalidate_scan_cache()
                 if was_loaded:
                     result = await runtime.enable(plugin_id)
                     if result.error: raise RuntimeError(result.error)
@@ -167,11 +168,13 @@ class PluginMarket:
                 updated.append(plugin_name)
             except asyncio.CancelledError:
                 self.finish(plugin_id, False)
+                runtime.invalidate_scan_cache()
                 raise
             except Exception as exc:
                 errors.append(f"{plugin_name}：{exc}（已跳过，继续更新其他插件）")
                 try:
                     self.finish(plugin_id, False)
+                    runtime.invalidate_scan_cache()
                 except Exception as rollback_exc:
                     errors.append(f"{plugin_name} 回滚失败：{rollback_exc}")
                 if was_loaded:

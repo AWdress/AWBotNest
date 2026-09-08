@@ -63,13 +63,14 @@ def create_router(deps) -> APIRouter:
     @router.get("/api/status", dependencies=[Depends(require_admin)])
     async def status():
         states = [asdict(item) for item in await accounts.states()]
+        metas = runtime.scan()
         activity_24h = activity.timeline(24)
         activity_7d = activity.timeline(168)
         for timeline in (activity_24h, activity_7d):
             timeline["success_totals"] = timeline.pop("successes", {})
             for bucket in timeline.get("buckets", []):
                 bucket.setdefault("success_counts", {})
-        plugin_names = {meta.id: meta.name for meta in runtime.scan()}
+        plugin_names = {meta.id: meta.name for meta in metas}
         system_job_names = {"log-cleaner": "日志自动清理", "log_cleaner": "日志自动清理"}
         jobs = []
         for job in scheduler.jobs():
@@ -112,10 +113,10 @@ def create_router(deps) -> APIRouter:
             "activity_7d": activity_7d,
             "plugin_names": plugin_names,
             "plugins": {
-                "total": len(runtime.scan()),
+                "total": len(metas),
                 "loaded": len(runtime.loaded),
                 "enabled": len(runtime.loaded),
-                "error": sum(1 for meta in runtime.scan() if meta.error),
+                "error": sum(1 for meta in metas if meta.error),
             },
         }
 
