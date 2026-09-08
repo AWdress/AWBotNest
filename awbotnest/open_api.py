@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,25 @@ def register_open_api(
         if value is None:
             raise HTTPException(status_code=404, detail="插件不存在")
         return value
+
+    def storage_namespace(plugin_id: str, instance: str = "") -> str:
+        plugin = meta(plugin_id)
+        account = instance.strip()
+        if plugin.instance_mode != "account":
+            if account:
+                raise HTTPException(status_code=400, detail="shared 插件不接受 instance 参数")
+            return plugin_id
+        if not account:
+            raise HTTPException(
+                status_code=400,
+                detail="账号实例插件必须通过 instance 参数指定用户账号",
+            )
+        if re.fullmatch(r"[A-Za-z0-9_]+", account) is None:
+            raise HTTPException(status_code=400, detail="instance 参数不合法")
+        selected = settings.plugin_accounts.get(plugin_id, [])
+        if account not in settings.user_sessions or (selected and account not in selected):
+            raise HTTPException(status_code=404, detail="插件账号实例不存在")
+        return f"{plugin_id}@{account}"
 
     @router.get("/plugins")
     async def plugins():
@@ -118,31 +138,31 @@ def register_open_api(
         return {"ok": True, "message": "配置已更新", "reloaded": reloaded}
 
     @router.get("/plugins/{plugin_id}/kv")
-    async def list_kv(plugin_id: str):
-        meta(plugin_id)
-        return {"plugin_id": plugin_id, "keys": list(await PluginKV(plugin_id).items())}
+    async def list_kv(plugin_id: str, instance: str = ""):
+        namespace = storage_namespace(plugin_id, instance)
+        return {"plugin_id": plugin_id, "keys": list(await PluginKV(namespace).items())}
 
     @router.get("/plugins/{plugin_id}/kv/{key}")
-    async def get_kv(plugin_id: str, key: str):
-        meta(plugin_id)
-        values = await PluginKV(plugin_id).items()
+    async def get_kv(plugin_id: str, key: str, instance: str = ""):
+        namespace = storage_namespace(plugin_id, instance)
+        values = await PluginKV(namespace).items()
         if key not in values:
             raise HTTPException(status_code=404, detail="键不存在")
         return {"plugin_id": plugin_id, "key": key, "value": values[key]}
 
     @router.put("/plugins/{plugin_id}/kv/{key}")
-    async def put_kv(plugin_id: str, key: str, request: Request):
-        meta(plugin_id)
+    async def put_kv(plugin_id: str, key: str, request: Request, instance: str = ""):
+        namespace = storage_namespace(plugin_id, instance)
         raw = await request.json()
         if "value" not in raw:
             raise HTTPException(status_code=400, detail="缺少 value")
-        await PluginKV(plugin_id).set(key, raw["value"])
+        await PluginKV(namespace).set(key, raw["value"])
         return {"ok": True, "message": "键值已设置"}
 
     @router.delete("/plugins/{plugin_id}/kv/{key}")
-    async def delete_kv(plugin_id: str, key: str):
-        meta(plugin_id)
-        if not await PluginKV(plugin_id).delete(key):
+    async def delete_kv(plugin_id: str, key: str, instance: str = ""):
+        namespace = storage_namespace(plugin_id, instance)
+        if not await PluginKV(namespace).delete(key):
             raise HTTPException(status_code=404, detail="键不存在")
         return {"ok": True, "message": "键已删除"}
 

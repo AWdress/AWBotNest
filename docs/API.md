@@ -30,10 +30,14 @@ GET /api/v1/plugins
 {
   "plugins": [{
     "id": "hello", "name": "启动检查", "version": "1.0.0",
-    "scope": "standalone", "enabled": true, "loaded": true, "error": ""
+    "scope": "standalone", "instance_mode": "shared",
+    "plugin_api_version": 2,
+    "enabled": true, "loaded": true, "error": ""
   }]
 }
 ```
+
+响应还可能包含 `requirements`、`resources`、`cookie_domains`、`requires_plugins`、`requires_capabilities`、`provides_capabilities`、平台版本范围及展示字段。调用方应忽略不认识的新增字段。
 
 ### 插件详情与源码
 
@@ -79,7 +83,7 @@ PUT /api/v1/plugins/{plugin_id}/config
 {"config": {"keyword": "hi"}}
 ```
 
-平台按插件 `config_schema` 校验。已加载插件保存后会自动重载。
+平台按插件 `config_schema` 校验。已加载插件保存后会自动重载；重载失败返回 `409`，不得把该响应当作配置已经正常生效。
 
 ## 插件 KV 数据
 
@@ -97,6 +101,21 @@ DELETE /api/v1/plugins/{plugin_id}/kv/{key}
 ```
 
 单值最大 10 MB，单插件 KV 数据库最大 256 MB。
+
+这些 HTTP 接口内部使用 V2 async Storage，但对 HTTP 调用方仍是普通请求/响应。
+
+`instance_mode="shared"` 插件继续使用以上原路径，不得传 `instance`。`instance_mode="account"` 插件必须通过 query 参数明确指定账号实例：
+
+```http
+GET    /api/v1/plugins/{plugin_id}/kv?instance=user_account
+GET    /api/v1/plugins/{plugin_id}/kv/{key}?instance=user_account
+PUT    /api/v1/plugins/{plugin_id}/kv/{key}?instance=user_account
+DELETE /api/v1/plugins/{plugin_id}/kv/{key}?instance=user_account
+```
+
+`instance` 是平台中已有且允许该插件使用的用户 Session 名。缺少参数返回 `400`，账号或插件实例不存在返回 `404`。平台不会把多个账号实例的 Storage 隐式合并。
+
+开放 API 当前不直接管理插件的内存 Session Runtime 或 Telegram Delivery 队列；它们随插件实例生命周期创建和清理。
 
 ## 发送 Telegram 消息
 
@@ -131,7 +150,7 @@ Content-Type: application/json
 GET /api/v1/chats/{chat_id}?session=user_account
 ```
 
-此接口使用已连接的用户账号查询。返回 `id`、`title`、`username` 和 `type`。
+此接口使用已连接的用户账号查询。返回 `id`、`title`、`username` 和 `type`。省略 `session` 时使用第一个在线用户账号；没有可用账号时返回 `503`。
 
 ## 账号列表
 
@@ -176,6 +195,8 @@ GET /api/v1/status
 }
 ```
 
+`user_accounts_count` 只统计当前已连接的用户账号，不是平台保存的 Session 文件总数。
+
 ## Webhook
 
 平台通知入站 Webhook 使用独立的 Webhook Secret，不使用开放 API Key：
@@ -202,6 +223,8 @@ Content-Type: application/json
 - `409`：插件加载或状态冲突。
 - `502`：Telegram 或外部服务调用失败。
 - `503`：API Key 未配置、账号离线或服务不可用。
+
+账号实例插件访问 KV 时，缺少 `instance` 属于 `400`；指定未配置、未授权或不存在的账号实例属于 `404`。
 
 ## Python 示例
 
@@ -235,5 +258,5 @@ curl -X POST \
 1. 不要把 API Key 写进源码、聊天记录、URL 或公开日志，优先使用环境变量。
 2. 公网访问必须配置 HTTPS 和访问控制；不需要公网时只允许可信网络访问。
 3. 第三方工具不再使用时立即轮换 API Key。
-4. 开放 API 可以启停插件、修改配置和发送消息，应视为管理员级自动化权限。
-5. 不要向不可信程序提供读取插件源码或日志的权限。
+4. 开放 API 可以启停插件、修改配置、读写插件数据和发送消息，应视为管理员级自动化权限。
+5. 插件源码、运行日志和 KV 数据都可能包含敏感业务信息，不要向不可信程序提供 API Key。
