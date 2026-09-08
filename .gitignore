@@ -24,6 +24,7 @@ __pycache__/
 .venv/
 env/
 venv/
+tests/
 
 # 前端构建产物与依赖
 frontend/node_modules/
@@ -36,4 +37,3 @@ Thumbs.db
 .codex/
 .vscode/
 .idea/
-
