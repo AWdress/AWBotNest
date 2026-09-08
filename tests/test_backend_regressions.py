@@ -39,6 +39,16 @@ class BackendRegressions(unittest.IsolatedAsyncioTestCase):
             return PluginContext('example', 'standalone', SimpleNamespace(), self.scheduler,
                                  settings, services, PluginRoutes(), SimpleNamespace())
 
+    async def test_notify_table_routes_through_platform(self):
+        ctx = self.context()
+        ctx.notify = AsyncMock(return_value='sent')
+        result = await ctx.notify_table(['账号', '结果'], [['A', '成功']], caption='签到', level='success')
+        self.assertEqual(result, 'sent')
+        self.assertIn('<table', ctx.notify.call_args.args[0])
+        self.assertEqual(ctx.notify.call_args.kwargs['format'], 'rich')
+        self.assertEqual(ctx.notify.call_args.kwargs['level'], 'success')
+        await ctx.close()
+
     async def test_scheduled_manual_and_action_activity(self):
         ctx = self.context()
         callback = AsyncMock(return_value={'ok': True})

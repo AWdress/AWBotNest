@@ -149,7 +149,7 @@ def install_client_hooks(client):
     """V1 outbound activity attribution, using Telethon's public send/edit methods."""
     if getattr(client, '_aw_activity_hooked', False):
         return client
-    for name in ('send_message', 'send_file', 'edit_message', 'forward_messages'):
+    for name in ('send_message', 'send_file', 'edit_message', 'forward_messages', 'send_rich'):
         original = getattr(client, name, None)
         if not callable(original):
             continue

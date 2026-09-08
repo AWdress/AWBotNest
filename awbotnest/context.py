@@ -262,6 +262,15 @@ class PluginContext:
         task.add_done_callback(finished)
         return task
 
+    async def notify_table(self, headers, rows, *, caption=None, level="info", category="",
+                           account=None, bordered=True, striped=True, align="left", valign="middle", **kwargs):
+        """V1-compatible structured notifications; the platform handles rendering and fallback."""
+        from .rich_text import build_rich_table
+        text = build_rich_table(headers, rows, caption=caption, bordered=bordered,
+                                striped=striped, align=align, valign=valign)
+        return await self.notify(text, level=level, category=category, account=account,
+                                 format="rich", **kwargs)
+
     async def notify(self, text: str, entity: object = None, *, channel: str = "",
                      level: str = "info", category: str = "", format: str = "text", account: Any = None) -> object:
         try:

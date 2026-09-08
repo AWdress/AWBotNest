@@ -9,6 +9,7 @@ description = "AWBotNest - Telethon based plugin platform"
 requires-python = ">=3.11"
 dependencies = [
   "telethon>=1.44,<2",
+  "beautifulsoup4>=4.12,<5",
   "cryptg>=0.5,<1",
   "fastapi>=0.115,<1",
   "uvicorn[standard]>=0.34,<1",

@@ -287,7 +287,27 @@ Cookie 读取与 V1 一致：`get(domain, path="/", names=None)` 返回 Cookie �
 
 ```python
 await ctx.notify("任务执行完成", category="定时任务", level="info")
+
+# 结构化数据自动转换，不需要插件拼 HTML。
+await ctx.notify([{"账号": "账号 A", "结果": "成功"}], level="success")
+await ctx.notify_table(["账号", "结果"], [["账号 A", "成功"]],
+                       caption="签到结果", align=["left", "center"], level="success")
+
+# 与 V1 一致的账号级接口；使用当前用户或 Bot 自身身份。
+if ctx.user:
+    supported = await ctx.user.supports_native_rich()
+    await ctx.user.send_rich("me", "<table><tr><td>成功</td></tr></table>", format="html")
+# ctx.bot.send_rich(chat_id, content, format="html" 或 "markdown") 同样可用。
 ```
+
+`notify_table(headers, rows, ...)` 支持 `caption`、`bordered`、`striped`、`align`、`valign`，
+并通过 `notify` 的渠道路由投递。表格单元格自动转义，HTML 通知经过安全过滤。
+普通 `ctx.notify(text)` 按 V1 规则识别连续键值、账号明细和紧凑任务统计；
+无法识别的文本保留原意，不强制猜成表格。直接提交 dict/list 时按 V1 结构化规则转换。
+已有 HTML 使用 `format="rich"`。普通 `client.send_message()` 不改变语义、不自动转换。
+Bot 与 Premium 用户走原生富文本，普通用户的 HTML 表格降级为逐项可读文本。
+账号 `send_rich` 支持 `is_rtl`、`skip_entity_detection`，发送选项使用 Telethon 参数；
+另兼容 V1 的 `disable_notification` 和 `reply_to_message_id`。
 
 不要在日志或通知中包含密码、Token、Cookie 或 Session。
 
