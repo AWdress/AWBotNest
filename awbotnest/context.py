@@ -11,6 +11,8 @@ from telethon import TelegramClient, events
 from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .storage import PluginKV
+from .sessions import SessionManager
+from .delivery import TelegramDelivery
 from .config import DATA_DIR, Settings, save_settings
 from .services import PlatformServices, PluginAI
 from .plugin_cookies import PluginCookies
@@ -46,7 +48,11 @@ class PluginContext:
         self.scheduler = scheduler
         self.settings = settings
         self.bot_id = bot_id
-        self.kv = PluginKV(self.instance_id)
+        self.storage = PluginKV(self.instance_id)
+        # ``kv`` remains a naming alias; both expose the same explicit async API.
+        self.kv = self.storage
+        self.sessions = SessionManager(self.plugin_id, self.instance_id)
+        self.delivery = TelegramDelivery(self.plugin_id, self.instance_id)
         self.data_dir = DATA_DIR / "plugins" / plugin_id
         if account_name:
             self.data_dir = self.data_dir / "instances" / account_name
@@ -64,13 +70,12 @@ class PluginContext:
         self.failure_threshold = policy.failure_threshold
         self.max_tasks = policy.max_background_tasks
         self.max_concurrency = policy.max_concurrency
-        self._semaphore = asyncio.Semaphore(self.max_concurrency)
         self.log = PluginLogger(logging.getLogger(f"awbotnest.plugin.{plugin_id}"),
                                 {"plugin_name": self.plugin_name})
         self._handlers: list[tuple[TelegramClient, EventCallback, object]] = []
-        self._tasks: set[asyncio.Task[Any]] = set()
         self._active: set[asyncio.Task[Any]] = set()
         self._cleanups: list[Callable[..., Any]] = []
+        self._close_task: asyncio.Task[None] | None = None
         self._closed = False
 
     def add_cleanup(self, callback: Callable[..., Any]) -> None:
@@ -245,14 +250,15 @@ class PluginContext:
         return lambda callback: self._register(builder, callback)
 
     def create_task(self, awaitable: Awaitable[Any], *, name: str | None = None) -> asyncio.Task[Any]:
-        if self._closed or len(self._tasks) >= self.max_tasks:
+        if self._closed:
             if hasattr(awaitable, "close"):
                 awaitable.close()
-            raise RuntimeError(f"插件后台任务已达到 {self.max_tasks} 个上限")
-        task = asyncio.create_task(awaitable, name=name or f"plugin:{self.plugin_id}")
-        self._tasks.add(task)
+            raise RuntimeError("插件已停用")
+        task = self.governor.create_task(
+            self.plugin_id, awaitable,
+            name=name or f"plugin:{self.instance_id}", owner_id=self.instance_id,
+        )
         def finished(value: asyncio.Task[Any]) -> None:
-            self._tasks.discard(value)
             if value.cancelled():
                 return
             try:
@@ -324,46 +330,67 @@ class PluginContext:
             self._managed(invoke, operation=f"schedule:{name}"), trigger, **fields)
 
     def schedule_interval(self, name: str, callback: Callable[..., Any], *, seconds: int) -> str:
-        async def guarded_schedule() -> None:
-            try:
-                value = callback()
-                if isinstance(value, Awaitable):
-                    return await asyncio.wait_for(value, timeout=self.timeout)
-                return value
-            except Exception:
-                self.log.exception("定时任务执行失败：%s", name)
-                raise
+        async def invoke() -> Any:
+            if inspect.iscoroutinefunction(callback):
+                return await callback()
+            value = await asyncio.to_thread(callback)
+            return await value if inspect.isawaitable(value) else value
         return self.scheduler.add_interval(
-            self.instance_id, name, self._managed(guarded_schedule, operation=f"job:{name}"), seconds=seconds,
+            self.instance_id, name, self._managed(invoke, operation=f"job:{name}"), seconds=seconds,
         )
 
     def schedule_cron(self, name: str, callback: Callable[..., Any], **fields: Any) -> str:
-        async def guarded_schedule() -> None:
-            try:
-                value = callback()
-                if isinstance(value, Awaitable):
-                    return await asyncio.wait_for(value, timeout=self.timeout)
-                return value
-            except Exception:
-                self.log.exception("定时任务执行失败：%s", name)
-                raise
+        async def invoke() -> Any:
+            if inspect.iscoroutinefunction(callback):
+                return await callback()
+            value = await asyncio.to_thread(callback)
+            return await value if inspect.isawaitable(value) else value
         return self.scheduler.add_cron(self.instance_id, name,
-            self._managed(guarded_schedule, operation=f"job:{name}"), **fields)
+            self._managed(invoke, operation=f"job:{name}"), **fields)
 
     async def close(self) -> None:
+        if self._close_task is None:
+            self._closed = True
+            caller = asyncio.current_task()
+            self._close_task = asyncio.create_task(
+                self._drain(caller), name=f"context-close:{self.instance_id}",
+            )
+        try:
+            await asyncio.shield(self._close_task)
+        except asyncio.CancelledError:
+            await asyncio.gather(self._close_task, return_exceptions=True)
+            raise
+
+    async def _drain(self, caller: asyncio.Task[Any] | None) -> None:
         self._closed = True
         if self.is_primary_instance:
-            self.routes.remove_plugin(self.plugin_id)
-        self.scheduler.remove_plugin(self.instance_id)
+            try:
+                self.routes.remove_plugin(self.plugin_id)
+            except Exception:
+                self.log.exception("清理插件路由失败")
+        try:
+            self.scheduler.remove_plugin(self.instance_id)
+        except Exception:
+            self.log.exception("清理插件定时任务失败")
         for client, callback, builder in reversed(self._handlers):
-            client.remove_event_handler(callback, builder)
+            try:
+                client.remove_event_handler(callback, builder)
+            except Exception:
+                self.log.exception("清理 Telegram handler 失败")
         self._handlers.clear()
-        pending = (self._tasks | self._active) - {asyncio.current_task()}
+        try:
+            await self.governor.cancel_all(
+                self.instance_id, exclude={caller} if caller is not None else None,
+            )
+        except asyncio.CancelledError:
+            self.log.error("后台任务清理异常取消，继续清理其他资源")
+        except Exception:
+            self.log.exception("后台任务清理失败")
+        pending = self._active - {asyncio.current_task(), caller}
         for task in pending:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
-        self._tasks.clear()
         self._active.clear()
         while self._cleanups:
             callback = self._cleanups.pop()
@@ -371,5 +398,18 @@ class PluginContext:
                 value = callback()
                 if isinstance(value, Awaitable):
                     await asyncio.wait_for(value, timeout=10)
+            except asyncio.CancelledError:
+                self.log.error("插件清理回调异常取消，继续清理其他资源")
             except Exception:
                 self.log.exception("插件资源清理失败")
+        for name, resource in (
+            ("Telegram Delivery", self.delivery),
+            ("Session Runtime", self.sessions),
+            ("Storage", self.storage),
+        ):
+            try:
+                await resource.close()
+            except asyncio.CancelledError:
+                self.log.error("%s 清理异常取消，继续清理其他资源", name)
+            except Exception:
+                self.log.exception("%s 清理失败", name)

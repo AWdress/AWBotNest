@@ -196,6 +196,7 @@ class PluginGovernor:
         self._circuits: dict[tuple[str, str], CircuitState] = defaultdict(CircuitState)
         self._tasks: dict[str, set[asyncio.Task]] = defaultdict(set)
         self._replayers: dict[tuple[str, str], Callable[[dict[str, Any]], Any]] = {}
+        self._release_tasks: dict[str, asyncio.Task[None]] = {}
 
     def configure(self, plugin_id: str, resources: Any) -> ResourcePolicy:
         policy = ResourcePolicy.from_mapping(resources)
@@ -256,6 +257,7 @@ class PluginGovernor:
             if isinstance(exc, StopPropagation):
                 # Telegram propagation control is successful handling, not a plugin failure.
                 circuit.failures = 0
+                circuit.opened_until = 0
                 circuit.last_error = ""
                 raise
             circuit.failures += 1
@@ -276,10 +278,28 @@ class PluginGovernor:
             return await result
         return result
 
-    def create_task(self, plugin_id: str, awaitable: Awaitable, *, name: str | None = None) -> asyncio.Task:
+    @staticmethod
+    def _belongs_to(owner_id: str, plugin_id: str) -> bool:
+        return owner_id == plugin_id or owner_id.startswith(f"{plugin_id}@")
+
+    def background_tasks(self, plugin_id: str) -> int:
+        return sum(
+            not task.done()
+            for owner_id, tasks in self._tasks.items()
+            if self._belongs_to(owner_id, plugin_id)
+            for task in tasks
+        )
+
+    def create_task(self, plugin_id: str, awaitable: Awaitable, *, name: str | None = None,
+                    owner_id: str | None = None) -> asyncio.Task:
         policy = self.policy(plugin_id)
-        tasks = self._tasks[plugin_id]
-        active_count = sum(not task.done() for task in tasks)
+        owner_id = owner_id or plugin_id
+        if not self._belongs_to(owner_id, plugin_id):
+            if inspect.iscoroutine(awaitable):
+                awaitable.close()
+            raise ValueError("后台任务 owner 必须属于当前插件")
+        tasks = self._tasks[owner_id]
+        active_count = self.background_tasks(plugin_id)
         if active_count >= policy.max_background_tasks:
             if inspect.iscoroutine(awaitable):
                 awaitable.close()
@@ -289,6 +309,8 @@ class PluginGovernor:
 
         def completed(done_task: asyncio.Task) -> None:
             tasks.discard(done_task)
+            if not tasks and self._tasks.get(owner_id) is tasks:
+                self._tasks.pop(owner_id, None)
             if done_task.cancelled():
                 return
             # 后台任务可能无人显式 await；读取异常可避免事件循环再报
@@ -298,20 +320,26 @@ class PluginGovernor:
         task.add_done_callback(completed)
         return task
 
-    async def cancel_all(self, plugin_id: str, timeout: float = 10.0) -> dict[str, int]:
-        tasks = [task for task in self._tasks.pop(plugin_id, set()) if not task.done()]
+    async def cancel_all(self, owner_id: str, timeout: float = 10.0, *,
+                         exclude: set[asyncio.Task] | None = None) -> dict[str, int]:
+        tracked = self._tasks.get(owner_id, set())
+        tasks = [task for task in tracked if not task.done()]
         current = asyncio.current_task()
-        tasks = [task for task in tasks if task is not current]
+        excluded = exclude or set()
+        tasks = [task for task in tasks if task is not current and task not in excluded]
         for task in tasks:
             task.cancel()
         if tasks:
             done, pending = await asyncio.wait(tasks, timeout=timeout)
             for task in pending:
-                logger.warning("插件后台任务未能及时退出 [%s]: %s", plugin_id, task.get_name())
+                logger.warning("插件后台任务未能及时退出 [%s]: %s", owner_id, task.get_name())
         else:
             done, pending = set(), set()
         if tasks:
+            plugin_id = owner_id.split("@", 1)[0]
             self.events.append(plugin_id, "tasks_cancelled", completed=len(done), pending=len(pending))
+        if not pending:
+            self._tasks.pop(owner_id, None)
         return {"completed": len(done), "pending": len(pending)}
 
     async def call_capability(self, caller: str, name: str, method: str | None, *args, **kwargs) -> Any:
@@ -368,20 +396,38 @@ class PluginGovernor:
             })
         return {
             "policy": asdict(policy),
-            "background_tasks": sum(not task.done() for task in self._tasks.get(plugin_id, set())),
+            "background_tasks": self.background_tasks(plugin_id),
             "circuits": circuits,
         }
 
     async def release(self, plugin_id: str) -> None:
-        await self.cancel_all(plugin_id)
-        self._policies.pop(plugin_id, None)
-        self._semaphores.pop(plugin_id, None)
-        for key in [key for key in self._circuits if key[0] == plugin_id]:
-            self._circuits.pop(key, None)
-        for key in [
-            key for key in self._replayers
-            if key[0] == plugin_id or key[0].startswith(f"{plugin_id}@")
-        ]:
-            self._replayers.pop(key, None)
+        task = self._release_tasks.get(plugin_id)
+        if task is None or task.done():
+            task = asyncio.create_task(
+                self._release(plugin_id), name=f"governor-release:{plugin_id}",
+            )
+            self._release_tasks[plugin_id] = task
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
-
+    async def _release(self, plugin_id: str) -> None:
+        try:
+            owners = [owner_id for owner_id in self._tasks if self._belongs_to(owner_id, plugin_id)]
+            for owner_id in owners:
+                await self.cancel_all(owner_id)
+            self._policies.pop(plugin_id, None)
+            self._semaphores.pop(plugin_id, None)
+            for key in [key for key in self._circuits if key[0] == plugin_id]:
+                self._circuits.pop(key, None)
+            for key in [
+                key for key in self._replayers
+                if key[0] == plugin_id or key[0].startswith(f"{plugin_id}@")
+            ]:
+                self._replayers.pop(key, None)
+        finally:
+            current = asyncio.current_task()
+            if self._release_tasks.get(plugin_id) is current:
+                self._release_tasks.pop(plugin_id, None)

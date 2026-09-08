@@ -120,12 +120,12 @@ def register_open_api(
     @router.get("/plugins/{plugin_id}/kv")
     async def list_kv(plugin_id: str):
         meta(plugin_id)
-        return {"plugin_id": plugin_id, "keys": list(PluginKV(plugin_id).items())}
+        return {"plugin_id": plugin_id, "keys": list(await PluginKV(plugin_id).items())}
 
     @router.get("/plugins/{plugin_id}/kv/{key}")
     async def get_kv(plugin_id: str, key: str):
         meta(plugin_id)
-        values = PluginKV(plugin_id).items()
+        values = await PluginKV(plugin_id).items()
         if key not in values:
             raise HTTPException(status_code=404, detail="键不存在")
         return {"plugin_id": plugin_id, "key": key, "value": values[key]}
@@ -136,13 +136,13 @@ def register_open_api(
         raw = await request.json()
         if "value" not in raw:
             raise HTTPException(status_code=400, detail="缺少 value")
-        PluginKV(plugin_id).set(key, raw["value"])
+        await PluginKV(plugin_id).set(key, raw["value"])
         return {"ok": True, "message": "键值已设置"}
 
     @router.delete("/plugins/{plugin_id}/kv/{key}")
     async def delete_kv(plugin_id: str, key: str):
         meta(plugin_id)
-        if not PluginKV(plugin_id).delete(key):
+        if not await PluginKV(plugin_id).delete(key):
             raise HTTPException(status_code=404, detail="键不存在")
         return {"ok": True, "message": "键已删除"}
 
