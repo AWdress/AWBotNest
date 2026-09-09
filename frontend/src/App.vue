@@ -581,18 +581,18 @@ onUnmounted(() => {
   /* 底部标签栏：覆盖整个安全区，避免 iPhone 底部露出白边 */
   .tabbar {
     display: flex; position: fixed;
-    right: 0; bottom: 0; left: 0;
+    bottom: max(12px, calc(12px + env(safe-area-inset-bottom)));
+    left: 50%; transform: translateX(-50%);
     z-index: 20;
     background: rgba(10, 15, 24, .96);
     -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
-    border: 0;
-    border-top: 1px solid var(--border-light);
-    border-radius: 16px 16px 0 0;
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-    width: 100%;
+    width: min(calc(100vw - 16px), 460px);
     justify-content: stretch;
     gap: 2px;
-    padding: 5px max(4px, env(safe-area-inset-right)) calc(5px + env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-left));
+    padding: 4px 6px;
   }
   .tab-item {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
