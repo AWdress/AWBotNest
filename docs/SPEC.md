@@ -127,7 +127,7 @@ Platform Services / Scheduler / Governance
 
 依赖持久化在共享的 `data/plugin_deps`，并非每插件独立环境。当前不提供跨插件版本冲突求解、升级事务、依赖回滚或系统软件安装；不能保证依赖变更不影响其他插件。具体开发约束与排查步骤见 [插件开发指南](PLUGIN_GUIDE.md#python-依赖声明与安装)。
 
-加载器支持 `instance_mode="shared"`（默认）及 `"account"`。账号实例分别隔离 storage、session、scheduler job、delivery lifecycle、后台任务和数据目录；HTTP 路由由首个实例注册。需要 shared storage 时必须设计明确的新平台能力，不得把账号实例数据库隐式合并。`requires_plugins` 声明前置插件，`requires_capabilities` 声明所需能力，`provides_capabilities` 声明提供能力。恢复启动按依赖顺序进行，单个失败不阻断其他无关插件；手动启用缺少依赖时明确报错，不擅自启用其他插件。能力通过 `ctx.provide_capability` 注册，调用失败时尝试下一提供者。Capability 仅用于少量平台扩展点，不发展为通用插件间 RPC；`dependencies` 不作为这些字段的别名。
+加载器支持 `instance_mode="shared"`（默认）及 `"account"`。账号实例分别隔离 storage、session、scheduler job、delivery lifecycle、后台任务和数据目录；HTTP 路由由首个实例注册。需要 shared storage 时必须设计明确的新平台能力，不得把账号实例数据库隐式合并。`requires_plugins` 声明前置插件，`requires_capabilities` 声明所需能力，`provides_capabilities` 声明提供能力。恢复启动按依赖顺序进行，单个失败不阻断其他无关插件；手动启用缺少依赖时明确报错，不擅自启用其他插件。插件默认必须彼此独立，`requires_plugins` 仅用于少数边界清晰、确有必要的扩展场景。能力通过 `ctx.provide_capability` 注册，调用失败时尝试下一提供者。Capability 仅用于少量平台扩展点，不得发展为通用 plugin-to-plugin RPC，不得用于取得其他插件实例、共享插件内部状态或建立链式依赖网络；`dependencies` 不作为这些字段的别名。
 
 运行治理提供超时、并发限制、熔断冷却恢复、事件回放及停用时资源清理。Telegram `StopPropagation` 属于控制流程，不计为故障。Cookie 接口只读，按 `cookie_domains` 声明授权，保留路径、过期时间和子域匹配；`request_sync` 对缺少 Cookie 的提醒限频 30 分钟。
 

@@ -162,6 +162,8 @@ async def setup(ctx):
 
 `requirements` 是 Python 依赖，不是前置插件 ID 列表。前置插件使用 `requires_plugins: ["插件ID"]`；能力依赖使用 `requires_capabilities`，提供能力使用 `provides_capabilities` 并在 setup 中调用 `ctx.provide_capability(name, provider, priority=100)`。通过 `await ctx.call_capability(name, ...)` 调用，优先级高的提供者失败后尝试备用提供者。平台不自动启用缺失的前置插件，`dependencies` 不是受支持的别名。
 
+插件默认应彼此独立；`requires_plugins` 仅用于少数边界清晰、确有必要的扩展场景。Capabilities 是平台扩展点，不是通用的 plugin-to-plugin RPC；普通插件不得借此取得其他插件实例、共享内部状态或形成链式依赖网络。
+
 `instance_mode: "account"` 为每个所选在线用户账号创建独立上下文；默认 `"shared"` 保持全局实例。账号模式使用 `ctx.account_name`、`ctx.instance_id` 和 `ctx.user`。每个账号实例拥有独立的 storage、Session namespace、scheduler jobs、Delivery lifecycle 和 `data_dir`。不要把账号实例的 SQLite 隐式改成共享存储；确实需要共享数据时，应等待平台提供明确的 shared storage 能力。所有后台任务应通过 `ctx.create_task` 创建，额外资源通过 `ctx.add_cleanup(callback)` 登记清理。
 
 读取平台 Cookie 必须声明 `cookie_domains`，如 `["example.org", "*.example.org"]`。`ctx.cookies.get/header/playwright` 支持 `path`；`get/header` 还支持 `names`。`ctx.cookies.available` 表示服务与快照可用，`await ctx.cookies.request_sync(domain)` 在已有有效 Cookie 时返回 True，否则提醒同步并返回 False。不得直接修改平台 Cookie 存储。
@@ -189,7 +191,7 @@ async def setup(ctx):
 注册器：
 
 - `ctx.on_message(pattern=None, chats=None, incoming=True, outgoing=False, interactive=False)`
-- `ctx.on_edited_message(pattern=None, chats=None)`
+- `ctx.on_edited_message(pattern=None, chats=None, interactive=False)`
 - `ctx.on_callback(pattern=None, interactive=False)`
 
 对按钮、小游戏和其他延迟敏感的短回调，可以显式传入 `interactive=True`：
