@@ -603,6 +603,14 @@ function availableAiModels(capability) {
   )
 }
 
+function aiProviderName(providerId) {
+  return ai.value?.providers?.find((provider) => provider.id === providerId)?.name || '未知服务'
+}
+
+function aiModelLabel(model) {
+  return `${model.name}（${aiProviderName(model.provider_id)} · ${model.alias}）`
+}
+
 async function testAi(capability) {
   if (aiDirty.value && !(await saveAiSettings())) return
   aiTesting.value[capability] = true
@@ -1825,7 +1833,7 @@ onBeforeRouteLeave(async () => {
                     <option value="">未设置</option>
                     <option v-for="model in availableAiModels(capability.key)"
                             :key="model.id" :value="model.id">
-                      {{ model.name }}（{{ model.alias }}）
+                      {{ aiModelLabel(model) }}
                     </option>
                   </select>
                 </div>
@@ -1836,7 +1844,7 @@ onBeforeRouteLeave(async () => {
                     <option v-for="model in availableAiModels(capability.key)"
                             :key="model.id" :value="model.id"
                             :disabled="model.id === ai.capabilities[capability.key].default_model">
-                      {{ model.name }}（{{ model.alias }}）
+                      {{ aiModelLabel(model) }}
                     </option>
                   </select>
                 </div>
@@ -1903,7 +1911,7 @@ onBeforeRouteLeave(async () => {
                       <option value="">跟随默认设置</option>
                       <option v-for="model in availableAiModels(capability.key)"
                               :key="model.id" :value="model.id">
-                        {{ model.name }}（{{ model.alias }}）
+                        {{ aiModelLabel(model) }}
                       </option>
                     </select>
                   </div>
