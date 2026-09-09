@@ -188,9 +188,81 @@ async def setup(ctx):
 
 注册器：
 
-- `ctx.on_message(pattern=None, chats=None, incoming=True, outgoing=False)`
+- `ctx.on_message(pattern=None, chats=None, incoming=True, outgoing=False, interactive=False)`
 - `ctx.on_edited_message(pattern=None, chats=None)`
-- `ctx.on_callback(pattern=None)`
+- `ctx.on_callback(pattern=None, interactive=False)`
+
+对按钮、小游戏和其他延迟敏感的短回调，可以显式传入 `interactive=True`：
+
+```python
+@ctx.on_callback(pattern=b"play", interactive=True)
+async def play(event):
+    await event.answer()
+```
+
+Interactive Fast Path 保留关闭检查、运行任务追踪、插件归属、异常隔离、取消传播和停用清理；
+它不进入普通 Governor，因此不占用插件级并发信号量，也不执行通用超时、执行日志和熔断。
+长任务、需要资源治理或完整执行事件记录的处理器继续使用默认路径。交互状态应放在
+`ctx.sessions` 中并由插件按真实 session key 加锁，不要在每次交互中读写 SQLite Storage。
+
+平台交互性能分析默认关闭。排查真实延迟时可在启动平台前设置：
+
+```text
+AWBOTNEST_INTERACTIVE_PROFILE=1
+AWBOTNEST_INTERACTIVE_PROFILE_SLOW_MS=100
+```
+
+启用后，interactive wrapper 自动测量 dispatch 和 callback 总时长；通过 `ctx.sessions` 获取的
+Session lock 会记录等待及持锁时间，`ctx.delivery.send/edit` 会记录每次 Telethon RPC await。
+超过阈值时平台只输出脱敏摘要，最近 200 条内存记录可由 `ctx.interactive_profile.recent()`
+在本地诊断中读取，不写入磁盘。直接调用 `event.answer/reply/edit` 或原生 client 方法不会被
+自动拦截；平台不 monkey patch Telethon，可使用 `benchmarks/telegram_interactive_latency.py`
+进行真实网络探测。
+
+真实探针默认使用 50 个正式样本、3 次 warm-up 和 0.5 秒请求间隔，输出 Mean、Median、
+P90、P95、P99、Min、Max、StdDev、Samples 与 FloodWait 次数：
+
+```text
+python benchmarks/telegram_interactive_latency.py --chat me --mode edit --proxy current
+python benchmarks/telegram_interactive_latency.py --chat me --mode send --iterations 100
+python benchmarks/telegram_interactive_latency.py --chat <chat> --mode callback --account bot:<id>
+python benchmarks/telegram_interactive_latency.py --chat <chat> --mode reply --account user:<session>
+```
+
+`--proxy current` 使用平台当前代理，`--proxy none` 临时直连，`--proxy <url>` 临时使用另一个
+节点；这些覆盖只作用于探针进程，不保存 Settings。建议在条件允许时比较当前代理、直连、
+另一代理以及更接近 Telegram DC 的节点。代理凭据和账号标识会脱敏。
+
+### Interactive / 实时插件性能规范
+
+普通 handler 适合低频命令、后台业务和需要完整 Governance 的自动化；文字游戏、抢答、
+按钮互动和高频多人输入才应显式使用 `interactive=True`。Fast Path 只降低 AWBotNest 收到
+update 后的本地 dispatch 开销，不能消除 Telegram RPC、FloodWait 或插件自身慢操作。
+
+Session lock 只保护短小的内存状态变化：
+
+```python
+session = await ctx.sessions.get(str(event.chat_id))
+
+async with session.lock:
+    apply_action(session.data)
+    text = render(session.data)
+
+await event.edit(text)
+```
+
+不要在锁内执行 `event.edit()`、`ctx.storage.get/set()`、`ctx.http.get()`、`ctx.ai.chat()`
+或其他网络、SQLite、AI、Browser await。实测纯内存临界区为微秒级；模拟持锁约 20ms 的
+慢 await 时，50 个并发任务的 lock wait median 可达到约 500ms。具体数值随机器和负载
+变化，但排队关系不变。
+
+当前回合、HP、手牌、题目、抢答状态和本局选择放入 `ctx.sessions`；积分、排行榜、长期玩家
+资料、配置、历史和最终结算写入 `ctx.storage`。不要让每条互动命令都往返 SQLite。
+
+真实 Telegram RPC 通常远高于本地 dispatch。一个玩家动作应尽量在内存完成状态变化后只做
+一次最终 Telegram 更新，避免无必要的 `send → edit → edit` 串行调用。按钮交互在完成必要的
+短本地权限、时效和玩家身份验证后，应尽早 `await event.answer()`；不要在 answer 前执行
+HTTP、SQLite、AI 或 Browser 操作。
 
 `ctx.bot` 是可用 Bot 或 `None`，`ctx.users` 是在线用户客户端列表。不要跨越停用、重载或重连缓存客户端。
 

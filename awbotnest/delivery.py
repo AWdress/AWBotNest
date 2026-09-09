@@ -31,7 +31,8 @@ class TelegramDelivery:
     """Optional governed Telegram delivery scoped to one plugin instance."""
 
     def __init__(self, plugin_id: str, instance_id: str, *, retries: int = 2,
-                 flood_wait_limit: float = 60, coalesce_window: float = 0.05) -> None:
+                 flood_wait_limit: float = 60, coalesce_window: float = 0.05,
+                 profiler: Any = None) -> None:
         if retries < 0:
             raise ValueError("Telegram Delivery 重试次数不能小于 0")
         if flood_wait_limit < 0:
@@ -43,6 +44,7 @@ class TelegramDelivery:
         self.retries = int(retries)
         self.flood_wait_limit = float(flood_wait_limit)
         self.coalesce_window = float(coalesce_window)
+        self.profiler = profiler
         self._chat_locks: dict[tuple[int, str], _ChatLock] = {}
         self._pending_edits: dict[tuple[int, str, int], _PendingEdit] = {}
         self._last_edits: dict[tuple[int, str, int], str] = {}
@@ -89,17 +91,25 @@ class TelegramDelivery:
             return None
 
     async def _retry(self, operation: Callable[[], Awaitable[Any]], *, retries: int | None,
-                     flood_wait_limit: float | None) -> Any:
+                     flood_wait_limit: float | None, operation_name: str) -> Any:
         retry_limit = self.retries if retries is None else max(0, int(retries))
         wait_limit = self.flood_wait_limit if flood_wait_limit is None else max(0, float(flood_wait_limit))
         attempts = 0
         while True:
             self._ensure_open()
+            span = self.profiler.rpc_started(operation_name) if self.profiler is not None else None
             try:
-                return await operation()
+                result = await operation()
+                if self.profiler is not None:
+                    self.profiler.rpc_returned(span)
+                return result
             except asyncio.CancelledError:
+                if self.profiler is not None:
+                    self.profiler.rpc_returned(span, failed=True)
                 raise
             except Exception as exc:
+                if self.profiler is not None:
+                    self.profiler.rpc_returned(span, failed=True)
                 seconds = self._flood_wait_seconds(exc)
                 if seconds is None or attempts >= retry_limit or seconds > wait_limit:
                     raise
@@ -155,7 +165,7 @@ class TelegramDelivery:
             async with self._ordered_chat(client, chat):
                 return await self._retry(
                     lambda: client.send_message(chat, text, **kwargs),
-                    retries=retries, flood_wait_limit=flood_wait_limit,
+                    retries=retries, flood_wait_limit=flood_wait_limit, operation_name="send_message",
                 )
         finally:
             if task is not None:
@@ -177,7 +187,7 @@ class TelegramDelivery:
                 return message
             result = await self._retry(
                 lambda: message.edit(text, **kwargs),
-                retries=retries, flood_wait_limit=flood_wait_limit,
+                retries=retries, flood_wait_limit=flood_wait_limit, operation_name="message_edit",
             )
             self._remember_edit(key, text)
             return result

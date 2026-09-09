@@ -14,7 +14,7 @@ class PluginSession:
     instance_id: str
     key: str
     data: dict[str, Any] = field(default_factory=dict)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    lock: Any = field(default_factory=asyncio.Lock)
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     expires_at: float | None = None
@@ -40,7 +40,7 @@ class SessionManager:
     """In-memory sessions scoped permanently to one plugin runtime instance."""
 
     def __init__(self, plugin_id: str, instance_id: str, *, default_ttl: float | None = None,
-                 cleanup_interval: float = 60.0) -> None:
+                 cleanup_interval: float = 60.0, profiler: Any = None) -> None:
         if default_ttl is not None and default_ttl <= 0:
             raise ValueError("Session 默认 TTL 必须大于 0")
         if cleanup_interval <= 0:
@@ -49,6 +49,7 @@ class SessionManager:
         self.instance_id = instance_id
         self.default_ttl = float(default_ttl) if default_ttl is not None else None
         self.cleanup_interval = float(cleanup_interval)
+        self.profiler = profiler
         self._sessions: dict[str, PluginSession] = {}
         self._registry_lock = asyncio.Lock()
         self._cleanup_task: asyncio.Task[None] | None = None
@@ -92,6 +93,7 @@ class SessionManager:
             if session is None:
                 session = PluginSession(
                     self.plugin_id, self.instance_id, key, dict(initial or {}),
+                    lock=self.profiler.lock(key) if self.profiler is not None else asyncio.Lock(),
                     _ttl_seconds=effective_ttl,
                 )
                 self._sessions[key] = session

@@ -169,6 +169,8 @@ V2 同时支持 `config_schema` 原生表单和 `render_mode: "vue"`。Vue 插�
 6. Delivery 修改至少覆盖同 chat 顺序、不同 chat 并发、FloodWait 有限重试、重复抑制、edit 合并、取消、idle lock 回收及 shutdown。
 7. 测试必须检查并消除 `coroutine was never awaited`、`Task was destroyed but it is pending`、未关闭 transport/client 等资源警告。
 8. 不得通过删除、跳过或放宽有效回归测试使变更通过。测试 patch target 必须对应重构后的实际模块。
+9. 延迟敏感的 Telegram handler 可显式启用 Interactive Fast Path。快路径必须绕过普通 Governor、plugin-wide semaphore、通用超时、执行日志和 per-operation circuit，但仍保留关闭检查、活动任务追踪、插件归属、异常隔离、`StopPropagation`、取消传播和生命周期清理。状态一致性由插件按真实业务 key 使用 `ctx.sessions` 负责，平台不得自动添加 per-chat lock。性能回归应比较普通与交互 handler，并分别测量 handler wrapper overhead、Session lock wait 和 Telegram API call start。
+10. Interactive profiling 默认关闭，仅在显式诊断开关启用时使用单调纳秒时钟和有界内存记录。不得为 profiling 默认写磁盘、生成 UUID、记录消息正文或全局 monkey patch Telethon。Session lock 和 TelegramDelivery instrumentation 必须保持原有语义；直接 Telethon 调用无法安全自动覆盖时使用独立真实网络探针。
 
 ## 变更协议
 

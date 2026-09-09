@@ -19,6 +19,7 @@ from .plugin_cookies import PluginCookies
 from .routing import PluginRoutes
 from .notifier import NotificationService
 from .activity import set_current, reset_current, track_call
+from .interactive_profile import InteractiveProfiler
 
 EventCallback = Callable[[Any], Awaitable[Any]]
 
@@ -51,8 +52,6 @@ class PluginContext:
         self.storage = PluginKV(self.instance_id)
         # ``kv`` remains a naming alias; both expose the same explicit async API.
         self.kv = self.storage
-        self.sessions = SessionManager(self.plugin_id, self.instance_id)
-        self.delivery = TelegramDelivery(self.plugin_id, self.instance_id)
         self.data_dir = DATA_DIR / "plugins" / plugin_id
         if account_name:
             self.data_dir = self.data_dir / "instances" / account_name
@@ -72,6 +71,18 @@ class PluginContext:
         self.max_concurrency = policy.max_concurrency
         self.log = PluginLogger(logging.getLogger(f"awbotnest.plugin.{plugin_id}"),
                                 {"plugin_name": self.plugin_name})
+        self.interactive_profile = InteractiveProfiler(
+            self.plugin_id, self.instance_id, self.log,
+        )
+        self._interactive_profiler = (
+            self.interactive_profile if self.interactive_profile.enabled else None
+        )
+        self.sessions = SessionManager(
+            self.plugin_id, self.instance_id, profiler=self._interactive_profiler,
+        )
+        self.delivery = TelegramDelivery(
+            self.plugin_id, self.instance_id, profiler=self._interactive_profiler,
+        )
         self._handlers: list[tuple[TelegramClient, EventCallback, object]] = []
         self._active: set[asyncio.Task[Any]] = set()
         self._cleanups: list[Callable[..., Any]] = []
@@ -192,7 +203,7 @@ class PluginContext:
         save_settings(self.settings)
         return dict(current)
 
-    def _register(self, builder: object, callback: EventCallback) -> EventCallback:
+    def _register(self, builder: object, callback: EventCallback, *, interactive: bool = False) -> EventCallback:
         clients = self.accounts.clients_for_scope(self.scope, self.bot_id)
         if self.settings.plugin_accounts.get(self.plugin_id) or self.account_name:
             user_clients = list(self.accounts.users.values())
@@ -205,6 +216,8 @@ class PluginContext:
         failures = 0
         async def guarded(*args: Any, **kwargs: Any) -> Any:
             nonlocal failures
+            profiler = self._interactive_profiler if interactive else None
+            wrapper_entered_ns = profiler.timestamp() if profiler is not None else None
             if self._closed:
                 return
             task = asyncio.current_task()
@@ -214,9 +227,19 @@ class PluginContext:
             chat_id = getattr(event, "chat_id", "") or getattr(getattr(event, "message", None), "chat_id", "")
             event_id = f"{chat_id}:{raw_id}" if raw_id else f"task:{id(asyncio.current_task())}"
             token = set_current(self.plugin_id, event_id)
+            profile_token = profiler.start(
+                getattr(callback, "__name__", "call"), chat_id,
+                wrapper_entered_ns=wrapper_entered_ns,
+            ) if profiler is not None else None
             try:
-                result = await self.execute(f"event:{getattr(callback, '__name__', 'call')}",
-                                            lambda: callback(*args, **kwargs))
+                if interactive:
+                    if profiler is not None:
+                        profiler.callback_entered()
+                    result = callback(*args, **kwargs)
+                    result = await result if inspect.isawaitable(result) else result
+                else:
+                    result = await self.execute(f"event:{getattr(callback, '__name__', 'call')}",
+                                                lambda: callback(*args, **kwargs))
                 failures = 0
                 return result
             except events.StopPropagation:
@@ -224,9 +247,12 @@ class PluginContext:
             except Exception:
                 failures += 1
                 self.log.exception("事件处理失败（连续 %s 次）", failures)
-                if failures == self.failure_threshold:
+                if not interactive and failures == self.failure_threshold:
                     self.log.error("事件处理连续失败 %s 次，暂时熔断，冷却后自动恢复", self.failure_threshold)
             finally:
+                if profile_token is not None:
+                    profiler.callback_exited()
+                    profiler.finish(profile_token)
                 self._active.discard(task)
                 reset_current(token)
         for client in clients:
@@ -235,19 +261,20 @@ class PluginContext:
         return callback
 
     def on_message(self, *, pattern: str | None = None, chats: object = None,
-                   incoming: bool = True, outgoing: bool = False):
+                   incoming: bool = True, outgoing: bool = False, interactive: bool = False):
         builder = events.NewMessage(
             pattern=pattern, chats=chats, incoming=incoming, outgoing=outgoing,
         )
-        return lambda callback: self._register(builder, callback)
+        return lambda callback: self._register(builder, callback, interactive=interactive)
 
-    def on_edited_message(self, *, pattern: str | None = None, chats: object = None):
+    def on_edited_message(self, *, pattern: str | None = None, chats: object = None,
+                          interactive: bool = False):
         builder = events.MessageEdited(pattern=pattern, chats=chats)
-        return lambda callback: self._register(builder, callback)
+        return lambda callback: self._register(builder, callback, interactive=interactive)
 
-    def on_callback(self, *, pattern: str | bytes | None = None):
+    def on_callback(self, *, pattern: str | bytes | None = None, interactive: bool = False):
         builder = events.CallbackQuery(pattern=pattern)
-        return lambda callback: self._register(builder, callback)
+        return lambda callback: self._register(builder, callback, interactive=interactive)
 
     def create_task(self, awaitable: Awaitable[Any], *, name: str | None = None) -> asyncio.Task[Any]:
         if self._closed:

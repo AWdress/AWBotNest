@@ -64,6 +64,10 @@ Linux：`./.venv/bin/python -m awbotnest.main`
 
 插件通过静态元数据扫描，通过 `PluginContext` 获取能力。平台停用插件时必须撤销事件、路由、调度、后台任务、capability、Session、Delivery、Storage 和 cleanup callback。账号实例的 storage、session、scheduler、delivery、任务和数据目录必须保持隔离。
 
+延迟敏感的短 Telegram 回调可使用 handler 的 `interactive=True` 快路径。它绕过普通 Governor、plugin-wide semaphore、通用超时和 circuit，但必须保留异常隔离、取消传播及生命周期清理；业务一致性由插件使用 `ctx.sessions` 加锁。延迟回归使用 `python benchmarks/interactive_latency.py` 分别检查 handler wrapper、Session lock 和 Telegram API 调用起点。
+
+交互 profiling 由 `AWBOTNEST_INTERACTIVE_PROFILE=1` 显式启用，默认不得产生 trace。慢事件阈值由 `AWBOTNEST_INTERACTIVE_PROFILE_SLOW_MS` 控制；记录只保存在有界内存中且 chat 必须脱敏。真实 Telegram RPC 使用 `benchmarks/telegram_interactive_latency.py` 手动测试，不在 CI 中连接 Telegram。
+
 `/api/v1` 是第三方稳定接口，文档中的每条路径必须有实际实现和 API Key 测试。`/api/*` 主要服务控制台，不在开放 API 文档中承诺稳定。危险操作不进入开放 API；远程源码写入固定禁用。
 
 新增或改变公开插件能力时必须同步 `context.py`、`PLUGIN_GUIDE.md`、`plugins/_TEMPLATE.py` 和相关测试；如果改变平台规则或架构边界，必须按 SPEC 的变更协议同步修改 SPEC。
