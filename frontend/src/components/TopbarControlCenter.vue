@@ -927,7 +927,7 @@ onUnmounted(() => {
   }
   .control-center > .profile-trigger .avatar-btn { width: 40px; height: 40px; flex-basis: 40px; }
   .profile-trigger .profile-trigger-copy, .profile-trigger .profile-chevron { display: none; }
-  .control-pop { position: fixed; top: calc(54px + 8px); right: 8px; width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 132px); box-sizing: border-box; }
+  .control-pop { position: fixed; top: calc(54px + env(safe-area-inset-top) + 8px); right: 8px; width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 148px - env(safe-area-inset-top)); box-sizing: border-box; }
   .notifications-pop { width: calc(100vw - 16px); max-width: calc(100vw - 16px); box-sizing: border-box; }
   .notice-content { word-break: break-word; overflow-wrap: anywhere; }
   .control-modal-mask { padding: 0; }

@@ -76,7 +76,11 @@ html, body, #app {
   height: 100%;
 }
 
-html, body {
+html {
+  background-color: #07101b;
+}
+
+html, body, #app {
   min-width: 0;
   overflow-x: hidden;
 }
@@ -95,6 +99,7 @@ body {
   -webkit-font-smoothing: antialiased;
   background-image: var(--app-bg-image), radial-gradient(900px 520px at 22% -12%, rgba(48,128,240,.13), transparent 68%), radial-gradient(760px 480px at 92% 108%, rgba(16,176,128,.08), transparent 70%);
   background-size: cover, auto, auto; background-position: center; background-attachment: fixed;
+  min-height: 100%;
 }
 
 body::before {
@@ -258,6 +263,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* ───────── 手机端全局适配（≤768px）───────── */
 @media (max-width: 768px) {
+  html, body {
+    min-height: 100%;
+    overscroll-behavior-y: none;
+  }
   .card { padding: 14px; }
   /* 全局表单控件在手机上更易点 */
   .input, .select { min-height: 44px; font-size: 16px; }  /* 16px 防 iOS 聚焦自动放大 */
