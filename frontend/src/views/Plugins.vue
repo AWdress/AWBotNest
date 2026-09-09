@@ -2757,7 +2757,10 @@ onUnmounted(() => {
   .filter-dropdown {
     right: 0;
     left: auto;
-    min-width: 280px;
+    width: min(320px, calc(100vw - 28px));
+    min-width: 0;
+    max-width: calc(100vw - 28px);
+    box-sizing: border-box;
   }
 }
 
@@ -2891,7 +2894,8 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
 /* 手机适配 */
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
-  .toolbar > .row { flex-wrap: wrap; }
+  .toolbar > .row { width: 100%; min-width: 0; flex-wrap: wrap; }
+  .toolbar > .row .stats { min-width: 0; flex: 1 1 100%; }
   .grid {
     grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
     gap: 14px;
@@ -2913,12 +2917,13 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .tab { flex: 1; justify-content: center; padding: 9px 8px; }
   .plugin-controls { align-items: flex-start; margin-top: -4px; overflow: hidden; }
   .filter-pills { max-width: calc(100vw - 118px); overflow-x: auto; padding-bottom: 3px; }
-  .filter-pills button { flex: 0 0 auto; }
+  .filter-pills button { flex: 0 0 auto; min-height: 40px; }
   .control-caption { display: none; }
   .grid { grid-template-columns: 1fr; }
   .grid.compact { grid-template-columns: 1fr; }
   .plugin-card, .grid.compact .plugin-card { min-height: 0; padding: 15px; }
   .repo-row { flex-wrap: wrap; }
+  .repo-row .btn { flex: 1 1 120px; }
   .modal { --modal-pad: 14px; }
   .plugin-search-fab { right: 16px; bottom: 82px; width: 52px; height: 52px; border-radius: 16px; }
   .search-modal {

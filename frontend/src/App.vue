@@ -560,15 +560,16 @@ onUnmounted(() => {
   .main { flex: 1; min-height: 0; }
   /* 顶栏:logo + 标题 + 右侧操作 */
   .topbar {
-    height: 54px; padding: 0 16px; gap: 10px;
+    height: 54px; padding: 0 12px; gap: 8px;
     position: sticky; top: 0; z-index: 10;
     background: var(--bg-sidebar);
   }
   .topbar-logo { display: block; }
   .page-heading > span { display: none; }
-  .topbar h1 { margin-top: 0; font-size: 16px; }
+  .page-heading { flex: 1; overflow: hidden; }
+  .topbar h1 { margin-top: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
   /* 内容区留出底部悬浮标签栏高度，避免被遮 */
-  .content { padding: 16px 14px calc(86px + env(safe-area-inset-bottom)); }
+  .content { padding: 16px 14px calc(82px + env(safe-area-inset-bottom)); }
   /* 底部标签栏：悬浮胶囊，居中不拉满 */
   .tabbar {
     display: flex; position: fixed;
@@ -580,11 +581,15 @@ onUnmounted(() => {
     border: 1px solid var(--border-light);
     border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-    padding: 5px 6px;
+    width: min(calc(100vw - 16px), 460px);
+    justify-content: stretch;
+    gap: 2px;
+    padding: 4px;
   }
   .tab-item {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 6px 12px; color: var(--text-muted);
+    flex: 1 1 0; min-width: 0; min-height: 44px;
+    justify-content: center; padding: 5px 2px; color: var(--text-muted);
     font-size: 10px; font-weight: 600; white-space: nowrap;
     border-radius: 999px;
     transition: color 0.15s, background 0.15s;

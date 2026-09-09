@@ -52,4 +52,9 @@ const icons = {
 .toast-enter-from { opacity: 0; transform: translateX(30px); }
 .toast-leave-to { opacity: 0; transform: translateX(30px); }
 .toast-leave-active { position: absolute; right: 0; }
+
+@media (max-width: 560px) {
+  .toast-wrap { top: max(12px, env(safe-area-inset-top)); right: 12px; left: 12px; }
+  .toast { width: 100%; min-width: 0; max-width: none; }
+}
 </style>

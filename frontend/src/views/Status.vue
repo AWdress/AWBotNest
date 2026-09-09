@@ -810,6 +810,7 @@ onUnmounted(() => {
   .account-tgid { display: none; }
   .runtime-strip { flex-wrap: wrap; gap: 8px 18px; padding-block: 11px; }
   .runtime-strip .runtime-health { width: 100%; }
+  .range-switch button { min-height: 40px; }
 }
 
 @media (max-width: 460px) {

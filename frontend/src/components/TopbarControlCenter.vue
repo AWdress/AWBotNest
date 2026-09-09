@@ -920,19 +920,21 @@ onUnmounted(() => {
 .release-note-content :deep(td) { padding: 8px 10px; border: 1px solid var(--border); text-align: left; }
 @media (max-width: 768px) {
   .control-center { gap: 3px; }
-  .control-btn, .avatar-btn { width: 34px; height: 34px; }
+  .control-btn, .avatar-btn { width: 40px; height: 40px; }
   .control-center > .profile-trigger {
-    width: 34px; min-width: 34px; max-width: 34px; min-height: 34px; padding: 0;
-    flex: 0 0 34px; border-radius: 50%;
+    width: 40px; min-width: 40px; max-width: 40px; min-height: 40px; padding: 0;
+    flex: 0 0 40px; border-radius: 50%;
   }
-  .control-center > .profile-trigger .avatar-btn { width: 34px; height: 34px; flex-basis: 34px; }
+  .control-center > .profile-trigger .avatar-btn { width: 40px; height: 40px; flex-basis: 40px; }
   .profile-trigger .profile-trigger-copy, .profile-trigger .profile-chevron { display: none; }
-  .control-pop { position: fixed; top: 56px; right: 8px; width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 132px); box-sizing: border-box; }
+  .control-pop { position: fixed; top: calc(54px + 8px); right: 8px; width: calc(100vw - 16px); max-width: calc(100vw - 16px); max-height: calc(100dvh - 132px); box-sizing: border-box; }
   .notifications-pop { width: calc(100vw - 16px); max-width: calc(100vw - 16px); box-sizing: border-box; }
   .notice-content { word-break: break-word; overflow-wrap: anywhere; }
   .control-modal-mask { padding: 0; }
   .control-modal { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
-  .control-modal .modal-body { padding: 14px; }
+  .control-modal > header { padding: 12px max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left)); }
+  .control-modal > header button { width: 44px; height: 44px; }
+  .control-modal .modal-body { padding: 14px max(14px, env(safe-area-inset-right)) calc(14px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); }
   .log-level-tabs { width: 100%; overflow-x: auto; }
   .log-level-tabs button { flex: 1 0 auto; }
   .log-toolbar { flex-wrap: wrap; }
@@ -947,5 +949,6 @@ onUnmounted(() => {
   .about-current { margin-left: 0; }
   .version-row { align-items: flex-start; flex-direction: column; }
   .version-row .btn { width: 100%; }
+  .theme-submenu { position: static; width: 100%; margin: 4px 0; }
 }
 </style>

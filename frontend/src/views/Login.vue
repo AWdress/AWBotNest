@@ -125,4 +125,12 @@ async function submit() {
 .lc-btn.setup { letter-spacing: 0.08em; }
 
 .lc-hint { text-align: center; font-size: 11px; color: var(--text-muted); margin-top: 18px; }
+
+@media (max-width: 480px) {
+  .login-bg { align-items: flex-start; padding: max(24px, env(safe-area-inset-top)) 12px max(24px, env(safe-area-inset-bottom)); overflow-y: auto; }
+  .login-card { width: 100%; max-width: 420px; padding: 30px 20px 24px; border-radius: 16px; }
+  .lc-head { margin-bottom: 24px; }
+  .lc-input { min-height: 48px; font-size: 16px; }
+  .lc-btn { min-height: 48px; }
+}
 </style>

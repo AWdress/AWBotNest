@@ -187,8 +187,10 @@ onUnmounted(() => {
 /* 手机适配 */
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
-  .toolbar .row { flex-wrap: wrap; }
+  .toolbar .row { width: 100%; min-width: 0; flex-wrap: wrap; }
+  .toolbar .row > * { min-width: 0; }
   .level-tabs { width: 100%; overflow-x: auto; }
+  .level-tabs button { min-height: 44px; }
   .input.sm { width: 100%; }
 }
 </style>

@@ -332,6 +332,8 @@ onMounted(load)
 
 /* 手机适配 */
 @media (max-width: 768px) {
+  .toolbar { align-items: flex-start; flex-wrap: wrap; gap: 12px; }
+  .toolbar > .btn { width: 100%; }
   .account-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .account-overview > div:nth-child(2) { border-right: 0; }
   .account-overview > div:nth-child(-n+2) { border-bottom: 1px solid var(--border); }

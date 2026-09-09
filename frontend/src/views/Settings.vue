@@ -3498,6 +3498,8 @@ onBeforeRouteLeave(async () => {
   .settings-page,
   .toolbar { min-width: 0; width: 100%; }
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
+  .toolbar > .row { width: 100%; flex-wrap: wrap; }
+  .toolbar > .row .btn { flex: 1 1 140px; }
   .tabs {
     width: 100%; min-width: 0; display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3513,5 +3515,12 @@ onBeforeRouteLeave(async () => {
   .ai-capability-grid { grid-template-columns: 1fr; }
   .ai-permission-row { grid-template-columns: 1fr 1fr; }
   .ai-plugin-name { grid-column: 1 / -1; }
+  .cookie-overview { align-items: flex-start; }
+  .cookie-overview .btn { width: 100%; }
+  .input-action { flex-wrap: wrap; }
+  .input-action .input { flex-basis: 100%; }
+  .input-action .btn { width: 100%; }
+  .route-row { align-items: stretch; flex-direction: column; }
+  .route-sel { width: 100%; max-width: none; }
 }
 </style>
