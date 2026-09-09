@@ -580,11 +580,16 @@ onUnmounted(() => {
     border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
     -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
+    width: min(86vw, 460px);
+    max-width: calc(100vw - 24px);
+    justify-content: stretch;
+    gap: 2px;
     padding: 5px 6px;
   }
   .tab-item {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
-    padding: 6px 12px; color: var(--text-muted);
+    flex: 1 1 0; min-width: 0; min-height: 44px;
+    justify-content: center; padding: 5px 2px; color: var(--text-muted);
     font-size: 10px; font-weight: 600; white-space: nowrap;
     border-radius: 999px;
     transition: color 0.15s, background 0.15s;
