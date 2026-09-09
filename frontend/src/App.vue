@@ -554,50 +554,37 @@ onUnmounted(() => {
 
 /* ───────── 手机版（窄屏）───────── */
 @media (max-width: 768px) {
-  .layout {
-    flex-direction: column;
-    min-height: 100dvh;
-    height: 100dvh;
-    background: var(--bg-base);
-  }
+  .layout { flex-direction: column; height: 100vh; height: 100dvh; }
   /* 侧边栏隐藏，导航走底部标签栏 */
   .sidebar { display: none; }
   .main { flex: 1; min-height: 0; }
   /* 顶栏:logo + 标题 + 右侧操作 */
   .topbar {
-    height: calc(54px + env(safe-area-inset-top));
-    min-height: calc(54px + env(safe-area-inset-top));
-    padding: env(safe-area-inset-top) 12px 0; gap: 8px;
-    position: sticky; top: 0; z-index: 40;
-    background: rgba(8, 13, 21, .96);
-    background-clip: padding-box;
+    height: 54px; padding: 0 16px; gap: 10px;
+    position: sticky; top: 0; z-index: 10;
+    background: var(--bg-sidebar);
   }
   .topbar-logo { display: block; }
   .page-heading > span { display: none; }
   .page-heading { flex: 1; overflow: hidden; }
   .topbar h1 { margin-top: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
   /* 内容区留出底部悬浮标签栏高度，避免被遮 */
-  .content { padding: 16px 14px calc(94px + env(safe-area-inset-bottom)); }
-  /* 底部标签栏：覆盖整个安全区，避免 iPhone 底部露出白边 */
+  .content { padding: 16px 14px calc(86px + env(safe-area-inset-bottom)); }
   .tabbar {
     display: flex; position: fixed;
-    bottom: max(12px, calc(12px + env(safe-area-inset-bottom)));
+    bottom: calc(12px + env(safe-area-inset-bottom));
     left: 50%; transform: translateX(-50%);
     z-index: 20;
-    background: rgba(10, 15, 24, .96);
-    -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
+    background: rgba(20, 23, 31, .55);
     border: 1px solid var(--border-light);
     border-radius: 999px;
     box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
-    width: min(calc(100vw - 16px), 460px);
-    justify-content: stretch;
-    gap: 2px;
-    padding: 4px 6px;
+    -webkit-backdrop-filter: blur(20px) saturate(160%); backdrop-filter: blur(20px) saturate(160%);
+    padding: 5px 6px;
   }
   .tab-item {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
-    flex: 1 1 0; min-width: 0; min-height: 44px;
-    justify-content: center; padding: 5px 2px; color: var(--text-muted);
+    padding: 6px 12px; color: var(--text-muted);
     font-size: 10px; font-weight: 600; white-space: nowrap;
     border-radius: 999px;
     transition: color 0.15s, background 0.15s;
