@@ -5,6 +5,7 @@ const SOURCE_LABELS = {
   custom_client: 'Telegram 客户端', notification: '通知服务', notifier: '通知服务',
   notification_channels: '通知渠道', backup: '备份服务', deps: '依赖管理',
   registry: '插件注册', context: '插件上下文', routing: '路由服务', activity: '活动统计',
+  ai: 'AI 服务',
   'apscheduler.scheduler': '定时任务', 'uvicorn.error': 'Web 服务',
   'uvicorn.access': '访问记录', httpx: '网络请求',
   'telethon.network.mtprotosender': 'Telegram 网络',
