@@ -81,6 +81,36 @@ html, body, #app {
   overflow-x: hidden;
 }
 
+/* 安装到桌面后的 PWA 使用内部滚动，外壳始终覆盖完整设备画布。 */
+@media (max-width: 768px) {
+  html.pwa-standalone,
+  html.pwa-standalone body,
+  html.pwa-standalone #app {
+    min-height: 100vh;
+    min-height: 100lvh;
+    overflow: hidden;
+  }
+
+  html.pwa-standalone #app > .layout {
+    height: 100vh;
+    height: 100lvh;
+    min-height: 100vh;
+    min-height: 100lvh;
+  }
+
+  html.ios-pwa,
+  html.ios-pwa body,
+  html.ios-pwa #app,
+  html.ios-pwa #app > .layout {
+    height: var(--pwa-viewport-height, 100vh);
+    min-height: var(--pwa-viewport-height, 100vh);
+  }
+
+  html.pwa-standalone #app > .layout > .tabbar {
+    position: absolute;
+  }
+}
+
 /*
  * iOS 会在地址栏收起/展开时短暂露出根画布。背景只放在 body 上时，
  * 这块区域会退回 html 的纯色，看起来像页面底部多了一截空白。

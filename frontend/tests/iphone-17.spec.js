@@ -149,6 +149,47 @@ test('iPhone 17 根画布与页面背景连续铺满', async ({ page }) => {
   expect(coverage.layoutBottom).toBeGreaterThanOrEqual(coverage.viewportBottom - 1)
 })
 
+test('iPhone 17 PWA 独立窗口使用完整屏幕高度', async ({ page, context }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, 'standalone', {
+      configurable: true,
+      value: true,
+    })
+  })
+  const cdp = await context.newCDPSession(page)
+  await cdp.send('Emulation.setDeviceMetricsOverride', {
+    width: 402,
+    height: 797,
+    deviceScaleFactor: 3,
+    mobile: true,
+    screenWidth: 402,
+    screenHeight: 874,
+    positionX: 0,
+    positionY: 0,
+  })
+  await page.goto('/#/status')
+  await expect(page.locator('.layout')).toBeVisible()
+  const coverage = await page.evaluate(() => {
+    const layoutBox = document.querySelector('.layout').getBoundingClientRect()
+    const dock = document.querySelector('[data-mobile-navigation-dock]')
+    return {
+      standalone: document.documentElement.classList.contains('ios-pwa'),
+      viewportHeight: window.innerHeight,
+      screenHeight: window.screen.height,
+      shellHeight: layoutBox.height,
+      shellBottom: layoutBox.bottom,
+      dockPosition: getComputedStyle(dock).position,
+      dockBottom: dock.getBoundingClientRect().bottom,
+    }
+  })
+  expect(coverage.standalone).toBe(true)
+  expect(coverage.screenHeight).toBeGreaterThan(coverage.viewportHeight)
+  expect(coverage.shellHeight).toBeGreaterThanOrEqual(coverage.screenHeight - 1)
+  expect(coverage.shellBottom).toBeGreaterThanOrEqual(coverage.screenHeight - 1)
+  expect(coverage.dockPosition).toBe('absolute')
+  expect(coverage.dockBottom).toBeGreaterThan(coverage.viewportHeight)
+})
+
 test('iPhone 17 完整显示 AI 服务、协议和调用明细', async ({ page }) => {
   await page.goto('/#/settings')
   await page.getByRole('button', { name: 'AI 服务', exact: true }).click()

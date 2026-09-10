@@ -1,9 +1,9 @@
 // AWBotNest PWA Service Worker
 // 极简策略：导航请求网络优先（保证控制台数据最新），静态资源缓存兜底。
 // 不缓存 /api/，避免登录态/数据陈旧。
-const CACHE = 'awbotnest-v2-2'
+const CACHE = 'awbotnest-v2-3'
 const ICON_CACHE = 'awbotnest-v2-icons'
-const ASSETS = ['/', '/index.html', '/favicon.ico', '/pwa-192.png', '/pwa-512.png']
+const ASSETS = ['/', '/index.html', '/manifest.webmanifest', '/favicon.ico', '/pwa-192.png', '/pwa-512.png']
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).catch(() => {}))
