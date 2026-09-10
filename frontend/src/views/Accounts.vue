@@ -85,6 +85,28 @@ function openWizard() {
   wizardOpen.value = true
 }
 
+async function showLoginComplete(result) {
+  // Refresh the account profile first so the success state can use the same
+  // avatar data as the account cards (including the freshly downloaded photo).
+  await load()
+  const account = accounts.value.find((item) => item.session === result.session)
+  doneInfo.value = {
+    ...result,
+    name: account?.name || result.username || result.session,
+    account: account || {
+      session: result.session,
+      name: result.username || result.session,
+      online: true,
+      avatar_id: '',
+    },
+  }
+  step.value = 'done'
+}
+
+function sanitizeCode() {
+  form.value.code = String(form.value.code || '').replace(/\D/g, '').slice(0, 6)
+}
+
 async function sendCode() {
   if (!form.value.session.trim()) { wizardErr.value = '请填写本地账号名称'; return }
   if (!form.value.phone.trim()) { wizardErr.value = '请填写手机号'; return }
@@ -105,7 +127,7 @@ async function submitCode() {
   try {
     const r = await api.loginSubmitCode(form.value.session.trim(), form.value.code.trim())
     if (r.need === 'password' || r.needs_password) step.value = 'password'
-    else if (r.ok || r.authorized) { doneInfo.value = r; step.value = 'done'; await load() }
+    else if (r.ok || r.authorized) await showLoginComplete(r)
     if (r.error) wizardErr.value = r.error
     else if (!(r.need === 'password' || r.needs_password || r.ok || r.authorized)) wizardErr.value = '登录未完成，请检查验证码后重试'
   } catch (e) {
@@ -120,7 +142,7 @@ async function submitPassword() {
   wizardBusy.value = true; wizardErr.value = ''
   try {
     const r = await api.loginSubmitPassword(form.value.session.trim(), form.value.password)
-    if (r.ok || r.authorized) { doneInfo.value = r; step.value = 'done'; await load() }
+    if (r.ok || r.authorized) await showLoginComplete(r)
     else wizardErr.value = r.error || '登录未完成，请检查两步验证密码后重试'
   } catch (e) {
     wizardErr.value = e.message
@@ -235,7 +257,8 @@ onMounted(load)
         <div v-else-if="step==='code'" class="form">
           <div class="field">
             <label>验证码（Telegram 发来的 6 位数字）</label>
-            <input class="input" v-model="form.code" placeholder="12345" />
+            <input class="input" v-model="form.code" inputmode="numeric" autocomplete="one-time-code"
+                   maxlength="6" pattern="[0-9]*" placeholder="123456" @input="sanitizeCode" />
           </div>
           <div class="modal-foot">
             <button class="btn" @click="step='phone'">上一步</button>
@@ -261,7 +284,7 @@ onMounted(load)
 
         <!-- 完成 -->
         <div v-else-if="step==='done'" class="done">
-          <div class="done-icon"></div>
+          <AccountAvatar :account="doneInfo.account" class="done-avatar" />
           <p><b>{{ doneInfo?.name }}</b> 登录成功并已上线</p>
           <p class="muted mono">{{ doneInfo?.session }}<template v-if="doneInfo?.tgid"> · {{ doneInfo.tgid }}</template></p>
           <button class="btn btn-primary" @click="wizardOpen=false">完成</button>
@@ -327,7 +350,7 @@ onMounted(load)
 .field label { font-size: 13px; color: var(--text-secondary); }
 
 .done { text-align: center; padding: 20px 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
-.done-icon { width: 48px; height: 48px; border-radius: 50%; background: var(--accent-2-dim); color: var(--accent-2); display: flex; align-items: center; justify-content: center; font-size: 24px; }
+.done-avatar { width: 60px; height: 60px; border-radius: 50%; font-size: 16px; box-shadow: 0 0 0 4px var(--accent-dim); }
 .done .btn { margin-top: 12px; }
 
 /* 手机适配 */

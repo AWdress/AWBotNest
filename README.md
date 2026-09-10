@@ -31,7 +31,16 @@ CloakBrowser 浏览器缓存默认保存在 `data/cloakbrowser`（容器内 `/ap
 curl -fsSL https://raw.githubusercontent.com/AWdress/AWBotNest/v2/install.sh | sudo bash
 ```
 
-运行后会直接询问安装位置和访问端口，直接按回车会使用默认目录 `/opt/AWBotNest` 和默认端口 `18001`。脚本会自动检查并安装 Docker、拉取最新镜像、创建持久化目录并启动 AWBotNest。
+运行后会询问安装位置、网络模式和端口。默认使用 Docker bridge 模式，宿主访问端口和容器内平台监听端口都可以单独设置；选择 `host` 模式时不做端口映射，平台会直接监听你设置的平台端口。直接按回车会使用默认目录 `/opt/AWBotNest`、bridge 模式和端口 `18001`。脚本会自动检查并安装 Docker、拉取最新镜像、创建持久化目录并启动 AWBotNest。
+
+也可以用环境变量跳过交互，例如：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AWdress/AWBotNest/v2/install.sh | \
+  sudo -E env AWBOTNEST_MODE=host AWBOTNEST_PLATFORM_PORT=19001 bash
+```
+
+bridge 模式可同时设置 `AWBOTNEST_PORT`（宿主映射端口）和 `AWBOTNEST_PLATFORM_PORT`（容器内平台端口）。host 模式只使用 `AWBOTNEST_PLATFORM_PORT`。
 
 运行数据会保存在你选择的安装目录中。以后重新执行同一条命令并选择原来的目录，即可拉取最新镜像并更新容器，已有数据不会丢失。
 

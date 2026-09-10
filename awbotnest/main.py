@@ -253,6 +253,7 @@ async def run() -> None:
     logging.getLogger("telethon").setLevel(logging.ERROR)
     root_logger = logging.getLogger()
     root_logger.addHandler(memory_logs)
+    memory_logs.load_persisted()
     file_handler = create_file_handler(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
     if file_handler is not None:
         root_logger.addHandler(file_handler)

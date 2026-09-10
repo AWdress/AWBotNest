@@ -947,6 +947,21 @@ onUnmounted(() => {
   .about-current { margin-left: 0; }
   .version-row { align-items: flex-start; flex-direction: column; }
   .version-row .btn { width: 100%; }
-  .theme-submenu { position: static; width: 100%; margin: 4px 0; }
+  /* Keep the theme choices in the viewport instead of extending the user menu
+     below the fold on narrow phones. The panel overlays the menu rows while
+     retaining the same visual treatment as the desktop flyout. */
+  .theme-submenu {
+    position: absolute;
+    top: 104px;
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - 180px);
+    margin: 0;
+    box-sizing: border-box;
+    overflow-y: auto;
+    z-index: 3;
+  }
 }
 </style>

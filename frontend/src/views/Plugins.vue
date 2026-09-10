@@ -751,6 +751,7 @@ function showStoreNotice(message) {
 }
 const storeLastSync = ref(null)
 const dlBusy = ref({})
+const updateAllBusy = ref(false)
 let storeIdleTask = null
 
 // 应用筛选和排序
@@ -1089,6 +1090,43 @@ async function download(p) {
   }
 }
 
+async function updateAll() {
+  if (updateAllBusy.value || !storeUpdatable.value.length) return
+
+  const targets = [...storeUpdatable.value]
+  const errors = []
+  updateAllBusy.value = true
+  storeErr.value = ''
+
+  try {
+    // The API accepts up to 100 plugins per request. Keep the operation safe
+    // for larger stores while preserving the order shown in the UI.
+    for (let index = 0; index < targets.length; index += 100) {
+      const chunk = targets.slice(index, index + 100)
+      const response = await api.storeDownload(chunk)
+      const result = response.result || {}
+      if (Array.isArray(result.errors) && result.errors.length) {
+        errors.push(...result.errors)
+      }
+    }
+
+    await load()
+    await loadStore(true)
+
+    if (errors.length) {
+      showStoreNotice(errors.join('；'))
+      toast.error(`部分插件更新失败：${errors.length} 个`)
+    } else {
+      toast.success(`已更新 ${targets.length} 个插件`)
+    }
+  } catch (e) {
+    showStoreNotice(e.message)
+    toast.error(`全部更新失败：${e.message}`)
+  } finally {
+    updateAllBusy.value = false
+  }
+}
+
 // ── 设置 GitHub 仓库地址（多仓库） ──
 const repoOpen = ref(false)
 const repoList = ref([])
@@ -1399,7 +1437,12 @@ onUnmounted(() => {
       <template v-else>
         <!-- 有更新的已安装插件 -->
         <div v-if="storeUpdatable.length" class="update-section">
-          <div class="section-label">可更新（{{ storeUpdatable.length }}）</div>
+          <div class="update-section-head">
+            <div class="section-label">可更新（{{ storeUpdatable.length }}）</div>
+            <button class="btn sm btn-primary" type="button" :disabled="updateAllBusy" @click="updateAll">
+              {{ updateAllBusy ? '全部更新中…' : '全部更新' }}
+            </button>
+          </div>
           <div class="grid" :class="{ compact: density === 'compact' }">
             <div v-for="p in storeUpdatable" :key="p.id" class="card plugin-card store-card has-update">
               <div class="card-head">
@@ -1433,8 +1476,8 @@ onUnmounted(() => {
               </div>
 
               <div class="card-actions">
-                <button class="btn sm btn-primary" @click.stop="download(p)" :disabled="dlBusy[p.id]">
-                  <template v-if="dlBusy[p.id]">更新中…</template>
+                <button class="btn sm btn-primary" @click.stop="download(p)" :disabled="dlBusy[p.id] || updateAllBusy">
+                  <template v-if="dlBusy[p.id] || updateAllBusy">更新中…</template>
                   <template v-else>
                     <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                          stroke-linecap="round" stroke-linejoin="round">
@@ -2146,9 +2189,21 @@ onUnmounted(() => {
   border-radius: var(--radius-sm);
   border: 1px solid rgba(224, 160, 32, .34);
 }
+.update-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.update-section-head .section-label { margin-bottom: 0; }
 .section-label {
   font-size: 14px; font-weight: 600; color: var(--text-secondary);
   margin: 0 0 12px; letter-spacing: .3px;
+}
+@media (max-width: 768px) {
+  .update-section-head { align-items: flex-start; }
+  .update-section-head .btn { flex: 0 0 auto; }
 }
 .badge-update {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
