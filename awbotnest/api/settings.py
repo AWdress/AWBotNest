@@ -125,7 +125,10 @@ def create_router(deps) -> APIRouter:
         for provider in safe.get("providers", []):
             if provider.get("api_key"):
                 provider["api_key"] = "********"
-        return {"settings": safe, "status": {"configured": bool(settings.ai_api_key)}}
+        return {"settings": safe, "status": {
+            "configured": bool(settings.ai_api_key),
+            "usage": runtime.services.ai.usage_snapshot(),
+        }}
 
     @router.put("/api/ai/settings", dependencies=[Depends(require_admin)])
     async def save_ai_settings(request: Request):
@@ -162,7 +165,12 @@ def create_router(deps) -> APIRouter:
 
     @router.get("/api/ai/status", dependencies=[Depends(require_admin)])
     async def ai_status():
-        return {"configured": bool(settings.ai_api_key), "base_url": settings.ai_base_url, "model": settings.ai_model}
+        return {
+            "configured": bool(settings.ai_api_key),
+            "base_url": settings.ai_base_url,
+            "model": settings.ai_model,
+            "usage": runtime.services.ai.usage_snapshot(),
+        }
 
     @router.post("/api/ai/test", dependencies=[Depends(require_admin)])
     async def test_ai_capability(request: Request):

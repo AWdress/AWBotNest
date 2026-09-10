@@ -30,7 +30,7 @@ async def run_once() -> bool:
 
     restored = BackupManager.apply_pending()
     if restored:
-        logging.getLogger("awbotnest.backup").info("已应用待恢复备份")
+        logging.getLogger("awbotnest.backup").info("已应用待导入配置")
     settings = load_settings()
     accounts = TelegramAccounts(settings)
     scheduler = PluginScheduler()

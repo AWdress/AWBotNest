@@ -150,24 +150,24 @@ def create_router(deps, list_plugins) -> APIRouter:
 
     @router.post("/api/backups", dependencies=[Depends(require_admin)])
     async def create_backup():
-        logger.info("备份导出开始")
+        logger.info("配置导出开始")
         try:
             archive = await asyncio.wait_for(asyncio.to_thread(BackupManager.create), timeout=120)
         except Exception as exc:
-            logger.exception("备份导出失败：%s", exc)
-            raise HTTPException(status_code=500, detail=f"备份导出失败：{exc}") from exc
-        logger.info("备份导出完成：%s", archive.name)
+            logger.exception("配置导出失败：%s", exc)
+            raise HTTPException(status_code=500, detail=f"配置导出失败：{exc}") from exc
+        logger.info("配置导出完成：%s", archive.name)
         return {"ok": True, "filename": archive.name}
 
     @router.post("/api/system/backup", dependencies=[Depends(require_admin)])
     async def system_backup():
-        logger.info("备份下载开始")
+        logger.info("配置包下载开始")
         try:
             archive = await asyncio.wait_for(asyncio.to_thread(BackupManager.create), timeout=120)
         except Exception as exc:
-            logger.exception("备份下载失败：%s", exc)
-            raise HTTPException(status_code=500, detail=f"备份生成失败：{exc}") from exc
-        logger.info("备份下载完成：%s", archive.name)
+            logger.exception("配置包下载失败：%s", exc)
+            raise HTTPException(status_code=500, detail=f"配置包生成失败：{exc}") from exc
+        logger.info("配置包下载完成：%s", archive.name)
         return FileResponse(archive, filename=archive.name, media_type="application/zip")
 
     @router.get("/api/backups", dependencies=[Depends(require_admin)])
@@ -178,10 +178,15 @@ def create_router(deps, list_plugins) -> APIRouter:
     @router.post("/api/backups/restore", dependencies=[Depends(require_admin)])
     async def stage_restore(request: Request):
         try:
-            BackupManager.stage(await request.body())
+            content = bytearray()
+            async for chunk in request.stream():
+                content.extend(chunk)
+                if len(content) > MAX_BACKUP_SIZE:
+                    raise ValueError("配置备份超过 16 MB")
+            BackupManager.stage(bytes(content))
         except (ValueError, OSError, zipfile.BadZipFile) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "restart_required": True}
+        return {"ok": True, "restart_required": True, "staged_files": 2}
 
     @router.post("/api/system/restore", dependencies=[Depends(require_admin)])
     async def system_restore(file: UploadFile = File(...)):
@@ -189,7 +194,7 @@ def create_router(deps, list_plugins) -> APIRouter:
             BackupManager.stage(await file.read(MAX_BACKUP_SIZE + 1))
         except (ValueError, OSError, zipfile.BadZipFile) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "restart_required": True}
+        return {"ok": True, "restart_required": True, "staged_files": 2}
 
     @router.get("/api/backups/{filename}", dependencies=[Depends(require_admin)])
     async def download_backup(filename: str):

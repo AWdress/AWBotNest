@@ -17,16 +17,23 @@ import httpx
 from ..config import DATA_DIR, Settings
 
 from .http import HttpService
+from .ai_usage import AIUsageTracker
 
 logger = logging.getLogger("awbotnest.ai")
 
 
 class AIService:
-    def __init__(self, settings: Settings, http: HttpService) -> None:
+    def __init__(self, settings: Settings, http: HttpService,
+                 usage_path: Path | None = None) -> None:
         self.settings = settings
         self.http = http
+        self.usage = AIUsageTracker(usage_path)
+        self._plugin_names: dict[str, str] = {}
         self._limit = 0
         self._semaphore = None
+
+    def usage_snapshot(self) -> dict[str, int]:
+        return self.usage.snapshot()
 
     async def _post(self, *args, **kwargs):
         try:
@@ -87,9 +94,12 @@ class AIService:
         permission = (config.get("plugin_permissions") or {}).get(plugin_id, {}) if plugin_id else {}
         return str(((config.get("capabilities") or {}).get(capability) or {}).get("fallback_model") or "")
 
-    @staticmethod
-    def _audit_source(plugin_id: str) -> str:
-        return f"插件:{plugin_id}" if plugin_id else "平台"
+    def register_plugin(self, plugin_id: str, plugin_name: str) -> None:
+        if plugin_id:
+            self._plugin_names[plugin_id] = plugin_name.strip() or plugin_id
+
+    def _audit_source(self, plugin_id: str) -> str:
+        return f"插件:{self._plugin_names.get(plugin_id, plugin_id)}" if plugin_id else "平台"
 
     @staticmethod
     def _provider_host(base_url: str) -> str:
@@ -148,7 +158,11 @@ class AIService:
 
     async def chat(self, messages: list[dict[str, object]], *, model: str = "",
                    temperature: float | None = None, max_tokens: int | None = None,
-                   plugin_id: str = "", _allow_fallback: bool = True) -> str:
+                   plugin_id: str = "", _allow_fallback: bool = True,
+                   _track_usage: bool = True) -> str:
+        if _track_usage:
+            self.usage.begin()
+        completed = False
         requested_model = model
         started = time.perf_counter()
         base_url = ""
@@ -173,18 +187,34 @@ class AIService:
             response.raise_for_status()
             data = response.json()
             self._log_succeeded("文字", plugin_id, resolved_model, base_url, started, data)
-            return str(data["choices"][0]["message"]["content"])
+            self.usage.record_tokens(data)
+            result = str(data["choices"][0]["message"]["content"])
+            if _track_usage:
+                self.usage.succeed()
+                completed = True
+            return result
         except Exception as exc:
             fallback = self._fallback("text", plugin_id) if not requested_model else ""
             self._log_failed("文字", plugin_id, resolved_model, base_url, started, exc,
                              bool(_allow_fallback and fallback))
             if _allow_fallback and fallback:
-                return await self.chat(messages, model=fallback, temperature=temperature,
-                                       max_tokens=max_tokens, plugin_id=plugin_id, _allow_fallback=False)
+                result = await self.chat(messages, model=fallback, temperature=temperature,
+                                         max_tokens=max_tokens, plugin_id=plugin_id,
+                                         _allow_fallback=False, _track_usage=False)
+                if _track_usage:
+                    self.usage.succeed()
+                    completed = True
+                return result
             raise
+        finally:
+            if _track_usage and not completed:
+                self.usage.fail()
 
     async def vision(self, prompt: str, image: str, *, model: str = "", plugin_id: str = "",
-                     _allow_fallback: bool = True) -> str:
+                     _allow_fallback: bool = True, _track_usage: bool = True) -> str:
+        if _track_usage:
+            self.usage.begin()
+        completed = False
         requested_model = model
         started = time.perf_counter()
         base_url = ""
@@ -204,19 +234,35 @@ class AIService:
             response.raise_for_status()
             data = response.json()
             self._log_succeeded("视觉", plugin_id, resolved_model, base_url, started, data)
-            return str(data["choices"][0]["message"]["content"])
+            self.usage.record_tokens(data)
+            result = str(data["choices"][0]["message"]["content"])
+            if _track_usage:
+                self.usage.succeed()
+                completed = True
+            return result
         except Exception as exc:
             fallback = self._fallback("vision", plugin_id) if not requested_model else ""
             self._log_failed("视觉", plugin_id, resolved_model, base_url, started, exc,
                              bool(_allow_fallback and fallback))
             if _allow_fallback and fallback:
-                return await self.vision(prompt, image, model=fallback, plugin_id=plugin_id,
-                                         _allow_fallback=False)
+                result = await self.vision(prompt, image, model=fallback, plugin_id=plugin_id,
+                                           _allow_fallback=False, _track_usage=False)
+                if _track_usage:
+                    self.usage.succeed()
+                    completed = True
+                return result
             raise
+        finally:
+            if _track_usage and not completed:
+                self.usage.fail()
 
     async def generate_image(self, prompt: str, *, model: str = "", size: str = "1024x1024",
                              plugin_id: str = "", quality: str | None = None,
-                             _allow_fallback: bool = True) -> dict[str, object]:
+                             _allow_fallback: bool = True,
+                             _track_usage: bool = True) -> dict[str, object]:
+        if _track_usage:
+            self.usage.begin()
+        completed = False
         requested_model = model
         started = time.perf_counter()
         base_url = ""
@@ -235,15 +281,29 @@ class AIService:
             if not data or not isinstance(data[0], dict):
                 raise RuntimeError("AI 服务未返回图片")
             self._log_succeeded("生图", plugin_id, resolved_model, base_url, started, body)
-            return dict(data[0])
+            self.usage.record_tokens(body)
+            result = dict(data[0])
+            if _track_usage:
+                self.usage.succeed()
+                completed = True
+            return result
         except Exception as exc:
             fallback = self._fallback("image", plugin_id) if not requested_model else ""
             self._log_failed("生图", plugin_id, resolved_model, base_url, started, exc,
                              bool(_allow_fallback and fallback))
             if _allow_fallback and fallback:
-                return await self.generate_image(prompt, model=fallback, size=size,
-                                                 plugin_id=plugin_id, quality=quality, _allow_fallback=False)
+                result = await self.generate_image(
+                    prompt, model=fallback, size=size, plugin_id=plugin_id, quality=quality,
+                    _allow_fallback=False, _track_usage=False,
+                )
+                if _track_usage:
+                    self.usage.succeed()
+                    completed = True
+                return result
             raise
+        finally:
+            if _track_usage and not completed:
+                self.usage.fail()
 
     def available_models(self, capability: str, plugin_id: str = "") -> list[dict[str, object]]:
         config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
@@ -264,8 +324,12 @@ class AIService:
 class PluginAI:
     """绑定插件身份的 AI 数据面，避免插件绕过管理员的能力授权。"""
 
-    def __init__(self, service: AIService, plugin_id: str, data_dir: Path) -> None:
+    def __init__(self, service: AIService, plugin_id: str, data_dir: Path,
+                 plugin_name: str = "") -> None:
         self.service, self.plugin_id, self.data_dir = service, plugin_id, data_dir
+        register = getattr(self.service, "register_plugin", None)
+        if callable(register):
+            register(plugin_id, plugin_name or plugin_id)
 
     @property
     def available(self) -> bool:

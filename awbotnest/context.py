@@ -60,7 +60,7 @@ class PluginContext:
         self.governor = services.governor
         if plugin_id not in self.governor._policies:
             self.governor.configure(plugin_id, resources)
-        self._plugin_ai = PluginAI(services.ai, plugin_id, self.data_dir)
+        self._plugin_ai = PluginAI(services.ai, plugin_id, self.data_dir, self.plugin_name)
         self.routes = routes
         self.notifier = notifier
         self._plugin_cookies = PluginCookies(services.cookies, settings, cookie_domains or [], self.notify)

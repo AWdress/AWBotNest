@@ -240,7 +240,7 @@ export const api = {
     }
     const disposition = res.headers.get('content-disposition') || ''
     const m = /filename="?([^"]+)"?/.exec(disposition)
-    return { blob: await res.blob(), filename: m?.[1] || 'awbotnest-backup.zip' }
+    return { blob: await res.blob(), filename: m?.[1] || 'awbotnest-config.zip' }
   },
   downloadStoredBackup: async (filename) => {
     const res = await fetch(`/api/system/backups/${encodeURIComponent(filename)}`, { headers: authHeaders() })

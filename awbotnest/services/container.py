@@ -30,4 +30,4 @@ class PlatformServices:
         self.http = HttpService(settings)
         self.cookies = CookieService()
         self.browser = BrowserService(settings)
-        self.ai = AIService(settings, self.http)
+        self.ai = AIService(settings, self.http, services_data_dir / "ai_usage.json")

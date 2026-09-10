@@ -1,90 +1,139 @@
 from __future__ import annotations
 
-import shutil
-import zipfile
-import sqlite3
-import stat
 import json
+import shutil
+import stat
+import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
 
-from .config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, validate_config_format
+from .config import DATA_DIR, validate_config_format
+
 
 BACKUP_DIR = DATA_DIR / "backups"
 PENDING_RESTORE = DATA_DIR / ".restore-pending.zip"
-MAX_BACKUP_SIZE = 512 * 1024 * 1024
+MAX_BACKUP_SIZE = 16 * 1024 * 1024
+MAX_CONFIG_SIZE = 8 * 1024 * 1024
+BACKUP_FORMAT = "awbotnest-config"
+BACKUP_VERSION = 1
 
 
 class BackupManager:
     @staticmethod
+    def _json_bytes(value: object) -> bytes:
+        return json.dumps(value, ensure_ascii=False, indent=2).encode("utf-8")
+
+    @staticmethod
     def create() -> Path:
+        config_path = DATA_DIR / "config.json"
+        try:
+            raw = json.loads(config_path.read_text(encoding="utf-8"))
+            validate_config_format(raw)
+        except FileNotFoundError as exc:
+            raise ValueError("系统配置文件不存在") from exc
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("系统配置文件无法读取") from exc
+
+        system_config = dict(raw)
+        plugin_config = system_config.pop("plugin_config", {})
+        if not isinstance(plugin_config, dict):
+            plugin_config = {}
+
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        base = BACKUP_DIR / f"AWBotNest-{stamp}"
-        temporary = APP_ROOT / f".backup-{stamp}"
-        temporary.mkdir(parents=True, exist_ok=False)
+        target = BACKUP_DIR / f"AWBotNest-config-{stamp}.zip"
+        temporary = BACKUP_DIR / f".{target.name}.tmp"
+        manifest = {
+            "format": BACKUP_FORMAT,
+            "version": BACKUP_VERSION,
+            "created_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "contents": ["system_config", "plugin_config"],
+        }
+        system_bytes = BackupManager._json_bytes(system_config)
+        plugin_bytes = BackupManager._json_bytes(plugin_config)
+        if len(system_bytes) > MAX_CONFIG_SIZE or len(plugin_bytes) > MAX_CONFIG_SIZE:
+            raise ValueError("系统配置或插件配置超过 8 MB")
         try:
-            for source, name in ((DATA_DIR, "data"), (PLUGINS_DIR, "plugins"), (SESSIONS_DIR, "sessions")):
-                if source.exists():
-                    def ignore(directory, names):
-                        return [name for name in names if name in {"backups", ".restore-pending.zip", ".restore-pending.tmp"}
-                                or (Path(directory) / name).is_symlink()
-                                or name.endswith(("-wal", "-shm", "-journal"))]
-
-                    def copy_file(src, dst):
-                        with open(src, "rb") as stream:
-                            sqlite = stream.read(16) == b"SQLite format 3\x00"
-                        if sqlite:
-                            original = sqlite3.connect(Path(src).resolve().as_uri() + "?mode=ro", uri=True)
-                            snapshot = sqlite3.connect(dst)
-                            try:
-                                original.backup(snapshot)
-                            finally:
-                                snapshot.close()
-                                original.close()
-                            return dst
-                        return shutil.copy2(src, dst)
-
-                    shutil.copytree(source, temporary / name, ignore=ignore, copy_function=copy_file)
-            return Path(shutil.make_archive(str(base), "zip", temporary))
-        finally:
-            shutil.rmtree(temporary, ignore_errors=True)
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("manifest.json", BackupManager._json_bytes(manifest))
+                archive.writestr("config/system.json", system_bytes)
+                archive.writestr("config/plugins.json", plugin_bytes)
+            temporary.replace(target)
+            return target
+        except Exception:
+            temporary.unlink(missing_ok=True)
+            raise
 
     @staticmethod
     def list() -> list[Path]:
         return sorted(BACKUP_DIR.glob("AWBotNest-*.zip"), reverse=True) if BACKUP_DIR.exists() else []
 
     @staticmethod
-    def validate(path: Path) -> None:
+    def _safe_members(archive: zipfile.ZipFile) -> dict[str, zipfile.ZipInfo]:
+        members: dict[str, zipfile.ZipInfo] = {}
+        for item in archive.infolist():
+            name = PurePosixPath(item.filename.replace("\\", "/"))
+            if (name.is_absolute() or ".." in name.parts or ":" in item.filename
+                    or "\\" in item.orig_filename or stat.S_ISLNK(item.external_attr >> 16)):
+                raise ValueError("备份包含不安全路径")
+            if not item.is_dir():
+                members[name.as_posix()] = item
+        return members
+
+    @classmethod
+    def _read_config(cls, path: Path) -> dict[str, object]:
         if not path.exists() or path.stat().st_size > MAX_BACKUP_SIZE:
-            raise ValueError("备份不存在或超过 512 MB")
+            raise ValueError("配置备份不存在或超过 16 MB")
         with zipfile.ZipFile(path) as archive:
-            roots: set[str] = set()
-            total = 0
-            for item in archive.infolist():
-                name = PurePosixPath(item.filename.replace("\\", "/"))
-                if (name.is_absolute() or ".." in name.parts or ":" in item.filename
-                        or "\\" in item.orig_filename or stat.S_ISLNK(item.external_attr >> 16)):
-                    raise ValueError("备份包含不安全路径")
-                if len(name.parts) == 1 and not item.is_dir():
-                    raise ValueError("备份根节点必须是目录")
-                if name.parts:
-                    roots.add(name.parts[0])
-                total += item.file_size
-                if total > MAX_BACKUP_SIZE * 2:
-                    raise ValueError("备份解压内容过大")
-            if not roots or not roots.issubset({"data", "plugins", "sessions"}):
-                raise ValueError("不是有效的 AWBotNest 备份")
-            for item in archive.infolist():
-                if PurePosixPath(item.filename) == PurePosixPath("data/config.json"):
-                    if item.file_size > 8 * 1024 * 1024:
-                        raise ValueError("备份中的配置文件过大")
-                    validate_config_format(json.loads(archive.read(item).decode("utf-8")))
+            members = cls._safe_members(archive)
+            if {"manifest.json", "config/system.json", "config/plugins.json"}.issubset(members):
+                manifest = cls._read_json(archive, members["manifest.json"], 64 * 1024, "备份描述")
+                if manifest.get("format") != BACKUP_FORMAT or manifest.get("version") != BACKUP_VERSION:
+                    raise ValueError("不支持的 AWBotNest 配置备份版本")
+                system_config = cls._read_json(
+                    archive, members["config/system.json"], MAX_CONFIG_SIZE, "系统配置",
+                )
+                plugin_config = cls._read_json(
+                    archive, members["config/plugins.json"], MAX_CONFIG_SIZE, "插件配置",
+                )
+                system_config.pop("plugin_config", None)
+                system_config["plugin_config"] = plugin_config
+                config = system_config
+            elif "data/config.json" in members:
+                # 兼容旧版完整备份，但只读取其中的配置，不解压其他运行数据。
+                config = cls._read_json(
+                    archive, members["data/config.json"], MAX_CONFIG_SIZE, "系统配置",
+                )
+            else:
+                raise ValueError("不是有效的 AWBotNest 配置备份")
+
+        validate_config_format(config)
+        plugin_config = config.get("plugin_config", {})
+        if not isinstance(plugin_config, dict):
+            raise ValueError("备份中的插件配置格式不正确")
+        return config
+
+    @staticmethod
+    def _read_json(archive: zipfile.ZipFile, item: zipfile.ZipInfo,
+                   maximum: int, label: str) -> dict[str, object]:
+        if item.file_size > maximum:
+            raise ValueError(f"备份中的{label}过大")
+        try:
+            value = json.loads(archive.read(item).decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RuntimeError) as exc:
+            raise ValueError(f"备份中的{label}无法读取") from exc
+        if not isinstance(value, dict):
+            raise ValueError(f"备份中的{label}格式不正确")
+        return value
+
+    @classmethod
+    def validate(cls, path: Path) -> None:
+        cls._read_config(path)
 
     @classmethod
     def stage(cls, content: bytes) -> None:
         if len(content) > MAX_BACKUP_SIZE:
-            raise ValueError("备份超过 512 MB")
+            raise ValueError("配置备份超过 16 MB")
         PENDING_RESTORE.parent.mkdir(parents=True, exist_ok=True)
         temporary = PENDING_RESTORE.with_suffix(".tmp")
         temporary.write_bytes(content)
@@ -99,54 +148,22 @@ class BackupManager:
     def apply_pending(cls) -> bool:
         if not PENDING_RESTORE.exists():
             return False
-        cls.validate(PENDING_RESTORE)
+        config = cls._read_config(PENDING_RESTORE)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        staging = DATA_DIR / "backups" / f".restore-{stamp}"
-        rollback = DATA_DIR / "backups" / f"rollback-{stamp}"
-        staging.mkdir(parents=True)
-        rollback.mkdir(parents=True)
-        targets = {"data": DATA_DIR, "plugins": PLUGINS_DIR, "sessions": SESSIONS_DIR}
-        moved: list[tuple[Path, Path]] = []
-        installed: list[Path] = []
-        rolled_back = False
+        target = DATA_DIR / "config.json"
+        rollback = BACKUP_DIR / f"before-config-restore-{stamp}.json"
+        temporary = DATA_DIR / ".config-restore.tmp"
+        if target.exists():
+            shutil.copy2(target, rollback)
         try:
-            with zipfile.ZipFile(PENDING_RESTORE) as archive:
-                archive.extractall(staging)
-            for name, target in targets.items():
-                incoming = staging / name
-                if not incoming.exists():
-                    continue
-                # Docker 的挂载根目录不能 rename；只移动目录内容，并保留备份与待恢复包。
-                target.mkdir(parents=True, exist_ok=True)
-                old = rollback / name
-                old.mkdir()
-                for child in list(target.iterdir()):
-                    if target == DATA_DIR and child.name in {"backups", PENDING_RESTORE.name}:
-                        continue
-                    saved = old / child.name
-                    shutil.move(str(child), str(saved))
-                    moved.append((saved, child))
-                for child in incoming.iterdir():
-                    if target == DATA_DIR and child.name in {"backups", PENDING_RESTORE.name}:
-                        continue
-                    destination = target / child.name
-                    installed.append(destination)
-                    shutil.move(str(child), str(destination))
+            temporary.write_text(
+                json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8",
+            )
+            temporary.replace(target)
             PENDING_RESTORE.unlink()
             return True
         except Exception:
-            for target in reversed(installed):
-                if target.exists():
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
-            for old, target in reversed(moved):
-                shutil.move(str(old), str(target))
-            rolled_back = True
+            temporary.unlink(missing_ok=True)
             raise
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
-            # 成功时也保留旧数据；回滚本身失败时绝不能删除最后一份原件。
-            if rolled_back:
-                shutil.rmtree(rollback, ignore_errors=True)
