@@ -48,9 +48,17 @@ const aiPlugins = ref([])
 const aiModels = ref({})
 const aiModelSearch = ref('')
 const aiSelectedModels = ref([])
+const aiModelPickerOpen = ref(false)
 const aiModelDropdown = ref('')
 const aiModelLoading = ref({})
 const aiTesting = ref({})
+const aiLibrarySearch = ref('')
+const aiLibraryProvider = ref('')
+const aiLibraryCapability = ref('')
+const aiLibraryStatus = ref('all')
+const aiExpandedModel = ref('')
+const aiModelPage = ref(1)
+const AI_MODEL_PAGE_SIZE = 10
 const aiDirty = computed(() => !!ai.value && JSON.stringify(ai.value) !== aiSavedSnap.value)
 const cookieSettings = ref(null)
 const cookieSavedSnap = ref('')
@@ -121,6 +129,63 @@ const AI_CAPABILITIES = [
   { key: 'image', label: '生图模型', desc: '根据文字描述生成图片' },
 ]
 
+function aiCapabilityLabel(key) {
+  return AI_CAPABILITIES.find((capability) => capability.key === key)?.label || key
+}
+
+function toggleAiModelEditor(modelId) {
+  aiExpandedModel.value = aiExpandedModel.value === modelId ? '' : modelId
+  aiModelDropdown.value = ''
+}
+
+function clearAiLibraryFilters() {
+  aiLibrarySearch.value = ''
+  aiLibraryProvider.value = ''
+  aiLibraryCapability.value = ''
+  aiLibraryStatus.value = 'all'
+}
+
+const filteredAiLibraryModels = computed(() => {
+  const query = aiLibrarySearch.value.trim().toLowerCase()
+  return (ai.value?.models || []).filter((model) => {
+    // Keep the row visible while edits change a field used by the active filter.
+    if (model.id === aiExpandedModel.value) return true
+    if (aiLibraryProvider.value && model.provider_id !== aiLibraryProvider.value) return false
+    if (aiLibraryCapability.value && !model.capabilities.includes(aiLibraryCapability.value)) return false
+    if (aiLibraryStatus.value === 'enabled' && !model.enabled) return false
+    if (aiLibraryStatus.value === 'disabled' && model.enabled) return false
+    if (!query) return true
+    const content = [model.name, model.alias, model.model, aiProviderName(model.provider_id)]
+      .join(' ').toLowerCase()
+    return content.includes(query)
+  })
+})
+
+const aiModelPageCount = computed(() => Math.max(
+  1,
+  Math.ceil(filteredAiLibraryModels.value.length / AI_MODEL_PAGE_SIZE),
+))
+
+const pagedAiLibraryModels = computed(() => {
+  const start = (aiModelPage.value - 1) * AI_MODEL_PAGE_SIZE
+  return filteredAiLibraryModels.value.slice(start, start + AI_MODEL_PAGE_SIZE)
+})
+
+const aiModelRange = computed(() => {
+  const total = filteredAiLibraryModels.value.length
+  if (!total) return '0'
+  const start = (aiModelPage.value - 1) * AI_MODEL_PAGE_SIZE + 1
+  return `${start}–${Math.min(total, start + AI_MODEL_PAGE_SIZE - 1)}`
+})
+
+watch(
+  [aiLibrarySearch, aiLibraryProvider, aiLibraryCapability, aiLibraryStatus],
+  () => { aiModelPage.value = 1 },
+)
+watch(aiModelPageCount, (count) => {
+  if (aiModelPage.value > count) aiModelPage.value = count
+})
+
 function newAiProvider() {
   return {
     id: `ai_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
@@ -160,6 +225,13 @@ async function loadAiSettings() {
     aiModels.value = {}
     aiModelSearch.value = ''
     aiSelectedModels.value = []
+    aiModelPickerOpen.value = false
+    aiLibrarySearch.value = ''
+    aiLibraryProvider.value = ''
+    aiLibraryCapability.value = ''
+    aiLibraryStatus.value = 'all'
+    aiExpandedModel.value = ''
+    aiModelPage.value = 1
     aiSavedSnap.value = JSON.stringify(ai.value)
   } catch (e) {
     toast.error('读取 AI 设置失败：' + e.message)
@@ -481,7 +553,14 @@ function chooseAiModel(model, modelName) {
 }
 
 function addAiModel() {
-  ai.value.models.push(newAiModel())
+  const model = newAiModel()
+  ai.value.models.push(model)
+  aiLibrarySearch.value = ''
+  aiLibraryProvider.value = ''
+  aiLibraryCapability.value = ''
+  aiLibraryStatus.value = 'all'
+  aiModelPage.value = Math.ceil(ai.value.models.length / AI_MODEL_PAGE_SIZE)
+  aiExpandedModel.value = model.id
 }
 
 function uniqueAiModelAlias(modelName) {
@@ -562,9 +641,11 @@ function addSelectedAiModels() {
   if (added) toast.success(`已添加 ${added} 个模型，请按实际用途勾选模型能力`)
 }
 
-function removeAiModel(index) {
-  const removed = ai.value.models[index]
-  ai.value.models.splice(index, 1)
+function removeAiModel(model) {
+  const index = ai.value.models.findIndex((item) => item.id === model.id)
+  if (index < 0) return
+  const [removed] = ai.value.models.splice(index, 1)
+  if (aiExpandedModel.value === removed.id) aiExpandedModel.value = ''
   for (const capability of AI_CAPABILITIES) {
     const target = ai.value.capabilities[capability.key]
     if (target.default_model === removed.id) target.default_model = ''
@@ -1701,115 +1782,199 @@ onBeforeRouteLeave(async () => {
               </div>
               <button class="btn sm btn-primary" @click="addAiModel">+ 手动添加模型</button>
             </div>
-            <div v-if="fetchedAiModelCount" class="ai-model-picker">
-              <div class="row between ai-model-picker-head">
-                <div>
+            <div v-if="fetchedAiModelCount" class="ai-model-picker" :class="{ open: aiModelPickerOpen }">
+              <button type="button" class="ai-model-picker-toggle"
+                      :aria-expanded="aiModelPickerOpen" @click="aiModelPickerOpen = !aiModelPickerOpen">
+                <span>
                   <strong>已读取的模型</strong>
-                  <span class="muted small">
-                    共 {{ fetchedAiModelCount }} 个，选择需要使用的模型加入模型库
-                  </span>
+                  <small>待添加 {{ allFetchedAiModelOptions.length }} 个 · 共读取 {{ fetchedAiModelCount }} 个</small>
+                </span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m6 9 6 6 6-6"/>
+                </svg>
+              </button>
+              <div v-if="aiModelPickerOpen" class="ai-model-picker-body">
+                <div class="row between ai-model-picker-head">
+                  <input class="input ai-model-search" v-model="aiModelSearch"
+                         aria-label="搜索已读取的模型" placeholder="搜索模型名称" />
+                  <div class="row gap">
+                    <span class="muted small">已选 {{ aiSelectedModels.length }} 个</span>
+                    <button class="btn sm btn-primary" @click="addSelectedAiModels"
+                            :disabled="aiSelectedModels.length === 0">
+                      添加所选模型
+                    </button>
+                  </div>
                 </div>
-                <div class="row gap">
-                  <span class="muted small">已选 {{ aiSelectedModels.length }} 个</span>
-                  <button class="btn sm btn-primary" @click="addSelectedAiModels"
-                          :disabled="aiSelectedModels.length === 0">
-                    添加所选模型
-                  </button>
+                <div v-if="fetchedAiModelOptions.length" class="ai-fetched-models">
+                  <label v-for="option in fetchedAiModelOptions" :key="option.key"
+                         class="ai-fetched-model">
+                    <input type="checkbox" v-model="aiSelectedModels" :value="option.key" />
+                    <span class="ai-fetched-model-name mono">{{ option.modelName }}</span>
+                    <span class="muted small">{{ option.providerName }}</span>
+                  </label>
                 </div>
-              </div>
-              <input class="input ai-model-search" v-model="aiModelSearch"
-                     placeholder="搜索模型名称" />
-              <div v-if="fetchedAiModelOptions.length" class="ai-fetched-models">
-                <label v-for="option in fetchedAiModelOptions" :key="option.key"
-                       class="ai-fetched-model">
-                  <input type="checkbox" v-model="aiSelectedModels" :value="option.key" />
-                  <span class="ai-fetched-model-name mono">{{ option.modelName }}</span>
-                  <span class="muted small">{{ option.providerName }}</span>
-                </label>
-              </div>
-              <div v-else class="muted center ai-model-picker-empty">
-                {{ aiModelSearch ? '没有符合条件的模型' : '读取到的模型已全部加入模型库' }}
+                <div v-else class="muted center ai-model-picker-empty">
+                  {{ aiModelSearch ? '没有符合条件的模型' : '读取到的模型已全部加入模型库' }}
+                </div>
               </div>
             </div>
             <div v-if="ai.models.length === 0" class="muted center ai-model-empty">
               还没有模型，请从上方读取结果中选择，或手动添加一个模型。
             </div>
-            <div v-else class="ai-model-grid">
-              <div v-for="(model, index) in ai.models" :key="model.id" class="ai-model-card">
-                <div class="row between">
-                  <label class="ai-provider-enable">
-                    <input type="checkbox" v-model="model.enabled" />
-                    <span>{{ model.enabled ? '已启用' : '已停用' }}</span>
-                  </label>
-                  <button class="ai-remove" @click="removeAiModel(index)" title="删除模型">×</button>
-                </div>
-                <div class="grid2">
-                  <div class="field">
-                    <label>显示名称</label>
-                    <input class="input" v-model="model.name" placeholder="例如：快速文字模型" />
+            <template v-else>
+              <div class="ai-library-toolbar">
+                <input class="input" v-model="aiLibrarySearch" aria-label="搜索模型库"
+                       placeholder="搜索名称、别名或模型" />
+                <select class="select" v-model="aiLibraryProvider" aria-label="按服务商筛选">
+                  <option value="">全部服务</option>
+                  <option v-for="provider in ai.providers" :key="provider.id" :value="provider.id">
+                    {{ provider.name }}
+                  </option>
+                </select>
+                <select class="select" v-model="aiLibraryCapability" aria-label="按模型能力筛选">
+                  <option value="">全部能力</option>
+                  <option v-for="capability in AI_CAPABILITIES" :key="capability.key" :value="capability.key">
+                    {{ capability.label }}
+                  </option>
+                </select>
+                <select class="select" v-model="aiLibraryStatus" aria-label="按启用状态筛选">
+                  <option value="all">全部状态</option>
+                  <option value="enabled">已启用</option>
+                  <option value="disabled">已停用</option>
+                </select>
+              </div>
+
+              <div class="ai-library-result">
+                <span>共 {{ filteredAiLibraryModels.length }} 个模型</span>
+                <span v-if="filteredAiLibraryModels.length">显示 {{ aiModelRange }}</span>
+              </div>
+
+              <div v-if="filteredAiLibraryModels.length === 0" class="ai-library-empty">
+                <span>没有符合当前条件的模型</span>
+                <button type="button" class="btn sm" @click="clearAiLibraryFilters">清除筛选</button>
+              </div>
+
+              <div v-else class="ai-model-list">
+                <section v-for="model in pagedAiLibraryModels" :key="model.id"
+                         class="ai-model-item" :class="{ expanded: aiExpandedModel === model.id }">
+                  <div class="ai-model-summary-row">
+                    <button type="button" class="ai-model-summary"
+                            :aria-expanded="aiExpandedModel === model.id"
+                            @click="toggleAiModelEditor(model.id)">
+                      <svg class="ai-model-chevron" viewBox="0 0 24 24" fill="none"
+                           stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                           stroke-linejoin="round" aria-hidden="true">
+                        <path d="m9 18 6-6-6-6"/>
+                      </svg>
+                      <span class="ai-model-summary-content">
+                        <span class="ai-model-identity">
+                          <strong>{{ model.name || model.model || '未命名模型' }}</strong>
+                          <small class="mono">{{ model.model || '尚未填写真实模型名' }}</small>
+                        </span>
+                        <span class="ai-model-origin">
+                          <span>{{ aiProviderName(model.provider_id) }}</span>
+                          <small class="mono">{{ model.alias || '无调用别名' }}</small>
+                        </span>
+                        <span class="ai-model-tags">
+                          <span :class="['ai-model-state', model.enabled ? 'enabled' : 'disabled']">
+                            {{ model.enabled ? '已启用' : '已停用' }}
+                          </span>
+                          <span v-for="capability in model.capabilities" :key="capability"
+                                class="ai-model-capability-tag">
+                            {{ aiCapabilityLabel(capability) }}
+                          </span>
+                        </span>
+                      </span>
+                    </button>
+                    <button type="button" class="ai-remove" @click.stop="removeAiModel(model)"
+                            :aria-label="`删除模型 ${model.name || model.model || ''}`" title="删除模型">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M18 6 6 18M6 6l12 12"/>
+                      </svg>
+                    </button>
                   </div>
-                  <div class="field">
-                    <label>插件调用别名</label>
-                    <input class="input mono" v-model="model.alias" placeholder="例如：fast" />
-                  </div>
-                </div>
-                <div class="grid2">
-                  <div class="field">
-                    <label>所属服务</label>
-                    <select class="select" v-model="model.provider_id">
-                      <option v-for="provider in ai.providers" :key="provider.id" :value="provider.id">
-                        {{ provider.name }}
-                      </option>
-                    </select>
-                  </div>
-                  <div class="field">
-                    <label>真实模型名</label>
-                    <div class="ai-model-combobox"
-                         :class="{ open: aiModelDropdown === model.id }">
-                      <input class="input mono" v-model="model.model"
-                             autocomplete="off"
-                             placeholder="从列表选择或手动填写"
-                             @focus="aiModelDropdown = model.id"
-                             @input="aiModelDropdown = model.id"
-                             @keydown.esc="aiModelDropdown = ''" />
-                      <button type="button" class="ai-model-combobox-toggle"
-                              title="选择模型"
-                              @mousedown.prevent
-                              @click="aiModelDropdown = aiModelDropdown === model.id ? '' : model.id">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                          <path d="m6 9 6 6 6-6"/>
-                        </svg>
-                      </button>
-                      <div v-if="aiModelDropdown === model.id" class="ai-model-dropdown">
-                        <button v-for="item in aiModelChoices(model)" :key="item"
-                                type="button" class="ai-model-dropdown-option mono"
-                                @mousedown.prevent @click="chooseAiModel(model, item)">
-                          {{ item }}
-                        </button>
-                        <div v-if="aiProviderModels(model.provider_id).length === 0"
-                             class="ai-model-dropdown-empty">
-                          请先读取这个服务商的模型列表，也可以直接手动填写
-                        </div>
-                        <div v-else-if="aiModelChoices(model).length === 0"
-                             class="ai-model-dropdown-empty">
-                          没有匹配的模型，可以保留当前内容并手动填写
+
+                  <div v-if="aiExpandedModel === model.id" class="ai-model-editor">
+                    <label class="ai-provider-enable">
+                      <input type="checkbox" v-model="model.enabled" />
+                      <span>{{ model.enabled ? '已启用' : '已停用' }}</span>
+                    </label>
+                    <div class="grid2">
+                      <div class="field">
+                        <label>显示名称</label>
+                        <input class="input" v-model="model.name" placeholder="例如：快速文字模型" />
+                      </div>
+                      <div class="field">
+                        <label>插件调用别名</label>
+                        <input class="input mono" v-model="model.alias" placeholder="例如：fast" />
+                      </div>
+                    </div>
+                    <div class="grid2">
+                      <div class="field">
+                        <label>所属服务</label>
+                        <select class="select" v-model="model.provider_id">
+                          <option v-for="provider in ai.providers" :key="provider.id" :value="provider.id">
+                            {{ provider.name }}
+                          </option>
+                        </select>
+                      </div>
+                      <div class="field">
+                        <label>真实模型名</label>
+                        <div class="ai-model-combobox" :class="{ open: aiModelDropdown === model.id }">
+                          <input class="input mono" v-model="model.model" autocomplete="off"
+                                 placeholder="从列表选择或手动填写"
+                                 @focus="aiModelDropdown = model.id"
+                                 @input="aiModelDropdown = model.id"
+                                 @keydown.esc="aiModelDropdown = ''" />
+                          <button type="button" class="ai-model-combobox-toggle" title="选择模型"
+                                  @mousedown.prevent
+                                  @click="aiModelDropdown = aiModelDropdown === model.id ? '' : model.id">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <path d="m6 9 6 6 6-6"/>
+                            </svg>
+                          </button>
+                          <div v-if="aiModelDropdown === model.id" class="ai-model-dropdown">
+                            <button v-for="item in aiModelChoices(model)" :key="item"
+                                    type="button" class="ai-model-dropdown-option mono"
+                                    @mousedown.prevent @click="chooseAiModel(model, item)">
+                              {{ item }}
+                            </button>
+                            <div v-if="aiProviderModels(model.provider_id).length === 0"
+                                 class="ai-model-dropdown-empty">
+                              请先读取这个服务商的模型列表，也可以直接手动填写
+                            </div>
+                            <div v-else-if="aiModelChoices(model).length === 0"
+                                 class="ai-model-dropdown-empty">
+                              没有匹配的模型，可以保留当前内容并手动填写
+                            </div>
+                          </div>
                         </div>
                       </div>
                     </div>
+                    <div class="ai-model-capabilities">
+                      <span class="muted small">模型能力</span>
+                      <label v-for="capability in AI_CAPABILITIES" :key="capability.key">
+                        <input type="checkbox"
+                               :checked="model.capabilities.includes(capability.key)"
+                               @change="toggleAiModelCapability(model, capability.key)" />
+                        <span>{{ capability.label }}</span>
+                      </label>
+                    </div>
                   </div>
-                </div>
-                <div class="ai-model-capabilities">
-                  <span class="muted small">模型能力</span>
-                  <label v-for="capability in AI_CAPABILITIES" :key="capability.key">
-                    <input type="checkbox"
-                           :checked="model.capabilities.includes(capability.key)"
-                           @change="toggleAiModelCapability(model, capability.key)" />
-                    <span>{{ capability.label }}</span>
-                  </label>
-                </div>
+                </section>
               </div>
-            </div>
+
+              <div v-if="aiModelPageCount > 1" class="ai-model-pagination" aria-label="模型库分页">
+                <button type="button" class="btn sm" :disabled="aiModelPage === 1"
+                        @click="aiModelPage -= 1">上一页</button>
+                <span>第 {{ aiModelPage }} / {{ aiModelPageCount }} 页</span>
+                <button type="button" class="btn sm" :disabled="aiModelPage === aiModelPageCount"
+                        @click="aiModelPage += 1">下一页</button>
+              </div>
+            </template>
           </div>
 
           <div class="card" style="margin-top:16px">
@@ -3238,23 +3403,35 @@ onBeforeRouteLeave(async () => {
   border-radius: var(--radius);
   background: linear-gradient(145deg, rgba(32,34,46,.78), rgba(17,19,26,.72));
 }
-.ai-model-grid { display: flex; flex-direction: column; gap: 10px; }
 .ai-model-picker {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
   margin-bottom: 12px;
-  padding: 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
+  overflow: hidden;
 }
-.ai-model-picker-head { gap: 12px; }
-.ai-model-picker-head > div:first-child {
+.ai-model-picker-toggle {
+  width: 100%; min-height: 58px; display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 10px 14px; border: 0; background: transparent;
+  color: var(--text-primary); text-align: left; cursor: pointer;
+}
+.ai-model-picker-toggle:hover { background: var(--bg-hover); }
+.ai-model-picker-toggle > span {
   display: flex;
   flex-direction: column;
   gap: 3px;
 }
+.ai-model-picker-toggle small { color: var(--text-muted); font-size: 11px; }
+.ai-model-picker-toggle svg {
+  width: 18px; height: 18px; flex: 0 0 auto; color: var(--text-muted);
+  transition: transform .16s ease-out;
+}
+.ai-model-picker.open .ai-model-picker-toggle svg { transform: rotate(180deg); }
+.ai-model-picker-body {
+  display: flex; flex-direction: column; gap: 10px; padding: 0 14px 14px;
+  border-top: 1px solid var(--border);
+}
+.ai-model-picker-head { gap: 12px; padding-top: 12px; }
 .ai-model-search { max-width: 460px; }
 .ai-fetched-models {
   display: grid;
@@ -3293,14 +3470,77 @@ onBeforeRouteLeave(async () => {
   border-radius: var(--radius);
   background: rgba(255,255,255,.012);
 }
-.ai-model-card {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  padding: 14px;
+.ai-library-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) repeat(3, minmax(130px, .7fr));
+  gap: 8px;
+}
+.ai-library-result {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; min-height: 34px; color: var(--text-muted); font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.ai-library-empty {
+  min-height: 120px; display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px; border: 1px dashed var(--border-light);
+  border-radius: var(--radius); color: var(--text-muted);
+}
+.ai-model-list {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--bg-elevated);
+  overflow: hidden;
+}
+.ai-model-item + .ai-model-item { border-top: 1px solid var(--border); }
+.ai-model-item.expanded { background: rgba(255,255,255,.018); }
+.ai-model-summary-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) 46px; align-items: stretch;
+}
+.ai-model-summary {
+  min-width: 0; min-height: 66px; display: grid; grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center; gap: 10px; padding: 10px 12px; border: 0; background: transparent;
+  color: var(--text-primary); text-align: left; cursor: pointer;
+}
+.ai-model-summary:hover { background: var(--bg-hover); }
+.ai-model-chevron {
+  width: 17px; height: 17px; color: var(--text-muted); transition: transform .16s ease-out;
+}
+.ai-model-item.expanded .ai-model-chevron { transform: rotate(90deg); }
+.ai-model-summary-content {
+  min-width: 0; display: grid;
+  grid-template-columns: minmax(180px, 1.15fr) minmax(150px, .9fr) minmax(180px, auto);
+  align-items: center; gap: 16px;
+}
+.ai-model-identity,
+.ai-model-origin { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.ai-model-identity strong,
+.ai-model-identity small,
+.ai-model-origin > span,
+.ai-model-origin small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-model-identity strong { font-size: 13px; }
+.ai-model-identity small,
+.ai-model-origin small { color: var(--text-muted); font-size: 11px; }
+.ai-model-origin > span { color: var(--text-secondary); font-size: 12px; }
+.ai-model-tags { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 5px; }
+.ai-model-state,
+.ai-model-capability-tag {
+  padding: 3px 7px; border-radius: 6px; font-size: 10px; line-height: 1.35; white-space: nowrap;
+}
+.ai-model-state.enabled { background: var(--accent-2-dim); color: var(--accent-2); }
+.ai-model-state.disabled { background: rgba(255,255,255,.05); color: var(--text-muted); }
+.ai-model-capability-tag { background: var(--accent-dim); color: var(--accent); }
+.ai-model-summary-row > .ai-remove {
+  align-self: center; justify-self: center; width: 34px; height: 34px;
+}
+.ai-remove svg { width: 16px; height: 16px; }
+.ai-model-editor {
+  display: flex; flex-direction: column; gap: 11px; padding: 14px;
+  border-top: 1px solid var(--border); background: rgba(5,10,18,.24);
+}
+.ai-model-pagination {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: 12px; color: var(--text-muted); font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 .ai-model-combobox {
   position: relative;
@@ -3475,6 +3715,8 @@ onBeforeRouteLeave(async () => {
   .ai-provider-grid,
   .ai-capability-grid,
   .ai-plugin-model-grid { grid-template-columns: 1fr; }
+  .ai-section-head { align-items: stretch; flex-direction: column; }
+  .ai-section-head > .btn { width: 100%; }
   .ai-model-picker-head { align-items: stretch; flex-direction: column; }
   .ai-model-picker-head .row { justify-content: space-between; }
   .ai-fetched-models { grid-template-columns: 1fr; }
@@ -3510,6 +3752,13 @@ onBeforeRouteLeave(async () => {
     padding: 8px 6px; white-space: nowrap; font-size: 13px;
   }
   .panel { max-width: 100%; }
+  .ai-library-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ai-library-toolbar > .input { grid-column: 1 / -1; }
+  .ai-model-summary-content { grid-template-columns: 1fr; gap: 7px; }
+  .ai-model-origin { flex-direction: row; justify-content: space-between; gap: 10px; }
+  .ai-model-tags { justify-content: flex-start; }
+  .ai-model-summary-row > .ai-remove { width: 44px; height: 44px; }
+  .ai-model-pagination { justify-content: center; }
   .maint-item { flex-direction: column; align-items: stretch; }
   .grid3 { grid-template-columns: 1fr; }
   .ai-capability-grid { grid-template-columns: 1fr; }
