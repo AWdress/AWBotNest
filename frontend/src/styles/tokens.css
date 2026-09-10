@@ -76,29 +76,34 @@ html, body, #app {
   height: 100%;
 }
 
-html {
-  background-color: #07101b;
-}
-
 html, body, #app {
   min-width: 0;
   overflow-x: hidden;
 }
 
+/*
+ * iOS 会在地址栏收起/展开时短暂露出根画布。背景只放在 body 上时，
+ * 这块区域会退回 html 的纯色，看起来像页面底部多了一截空白。
+ * 根画布与 body 使用同一套背景，保证整个设备视口始终连续铺满。
+ */
+html,
+body {
+  background-color: #07101b;
+  background-image:
+    var(--app-bg-image),
+    radial-gradient(900px 520px at 22% -12%, rgba(48,128,240,.13), transparent 68%),
+    radial-gradient(760px 480px at 92% 108%, rgba(16,176,128,.08), transparent 70%);
+  background-size: cover, auto, auto;
+  background-position: center;
+  background-attachment: fixed;
+}
+
 body {
   font-family: 'Aptos', 'Microsoft YaHei UI', 'PingFang SC', sans-serif;
-  background:
-    radial-gradient(900px 520px at 22% -12%, rgba(48, 128, 240, 0.13), transparent 68%),
-    radial-gradient(760px 480px at 92% 108%, rgba(16, 176, 128, 0.08), transparent 70%),
-    radial-gradient(680px 420px at 58% -18%, rgba(48, 128, 240, 0.035), transparent 72%),
-    var(--bg-base);
   color: var(--text-primary);
-  background-color: #07101b;
   font-size: 14px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
-  background-image: var(--app-bg-image), radial-gradient(900px 520px at 22% -12%, rgba(48,128,240,.13), transparent 68%), radial-gradient(760px 480px at 92% 108%, rgba(16,176,128,.08), transparent 70%);
-  background-size: cover, auto, auto; background-position: center; background-attachment: fixed;
   min-height: 100%;
 }
 
@@ -111,6 +116,7 @@ body::before {
 }
 :root[data-theme="transparent"] body::before { z-index: 0; background: rgba(4, 8, 15, .42); }
 :root[data-theme="transparent"] #app { position: relative; z-index: 1; }
+:root[data-theme="transparent"],
 :root[data-theme="transparent"] body { background-image: linear-gradient(rgba(5, 10, 18, .42), rgba(5, 10, 18, .42)), var(--app-bg-image), radial-gradient(900px 520px at 22% -12%, rgba(48,128,240,.13), transparent 68%), radial-gradient(760px 480px at 92% 108%, rgba(16,176,128,.08), transparent 70%); background-size: cover, cover, auto, auto; }
 /* 框架背景只能命中平台根布局，不能给插件同名布局生成覆盖层。 */
 :root[data-theme="transparent"] #app > .layout::before { content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none; background: rgba(5, 10, 18, .24); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }

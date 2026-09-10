@@ -125,6 +125,30 @@ test('iPhone 17 外壳保留悬浮导航且内容不被遮挡', async ({ page })
   await expectInsideViewport(page)
 })
 
+test('iPhone 17 根画布与页面背景连续铺满', async ({ page }) => {
+  await page.goto('/#/status')
+  await expect(page.locator('.layout')).toBeVisible()
+  const coverage = await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'transparent'
+    document.documentElement.style.setProperty(
+      '--app-bg-image',
+      'linear-gradient(rgb(17, 34, 51), rgb(17, 34, 51))',
+    )
+    const rootStyle = getComputedStyle(document.documentElement)
+    const bodyStyle = getComputedStyle(document.body)
+    const layoutBox = document.querySelector('.layout').getBoundingClientRect()
+    return {
+      rootBackground: rootStyle.backgroundImage,
+      bodyBackground: bodyStyle.backgroundImage,
+      layoutBottom: layoutBox.bottom,
+      viewportBottom: window.visualViewport?.height || window.innerHeight,
+    }
+  })
+  expect(coverage.rootBackground).toBe(coverage.bodyBackground)
+  expect(coverage.rootBackground).toContain('rgb(17, 34, 51)')
+  expect(coverage.layoutBottom).toBeGreaterThanOrEqual(coverage.viewportBottom - 1)
+})
+
 test('iPhone 17 完整显示 AI 服务、协议和调用明细', async ({ page }) => {
   await page.goto('/#/settings')
   await page.getByRole('button', { name: 'AI 服务', exact: true }).click()
