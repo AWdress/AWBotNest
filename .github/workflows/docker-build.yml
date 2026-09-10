@@ -17,7 +17,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 设置 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: 安装后端依赖
+        run: pip install -r requirements.txt
+      - name: 运行后端回归测试
+        run: python -m unittest discover -s quality_tests -p "test_*.py"
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm ci
+      - name: 校验 OpenAPI 类型同步
+        working-directory: frontend
+        run: |
+          npm run codegen:api
+          git diff --exit-code -- openapi.json src/api/schema.d.ts
+      - name: 构建前端
+        working-directory: frontend
+        run: npm run build
+      - name: 安装手机测试浏览器
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: 运行 iPhone 17 回归测试
+        working-directory: frontend
+        run: npm run test:mobile
+
   build:
+    needs: quality
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码

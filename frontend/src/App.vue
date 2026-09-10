@@ -346,8 +346,8 @@ onUnmounted(() => {
     </aside>
 
     <!-- 主区 -->
-    <main class="main">
-      <header class="topbar">
+    <main class="main" data-app-main>
+      <header class="topbar" data-app-topbar>
         <img :src="logoWhite" class="topbar-logo" alt="" />
         <div class="page-heading">
           <span>{{ currentPage.kicker }}</span>
@@ -364,13 +364,13 @@ onUnmounted(() => {
           @logout="logout"
         />
       </header>
-      <div class="content" :class="`route-${route.path.slice(1) || 'status'}`">
+      <div class="content" data-app-content :class="`route-${route.path.slice(1) || 'status'}`">
         <RouterView />
       </div>
     </main>
 
     <!-- 手机底部标签栏（仅窄屏显示） -->
-    <nav class="tabbar">
+    <nav class="tabbar" data-mobile-navigation-dock>
       <RouterLink v-for="item in nav" :key="item.to" :to="item.to"
                   class="tab-item" :class="{ active: route.path === item.to }">
         <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -554,13 +554,15 @@ onUnmounted(() => {
 
 /* ───────── 手机版（窄屏）───────── */
 @media (max-width: 768px) {
-  .layout { flex-direction: column; height: 100vh; height: 100dvh; }
+  .layout { flex-direction: column; height: 100vh; height: 100dvh; min-height: 100svh; }
   /* 侧边栏隐藏，导航走底部标签栏 */
   .sidebar { display: none; }
   .main { flex: 1; min-height: 0; }
   /* 顶栏:logo + 标题 + 右侧操作 */
   .topbar {
-    height: 54px; padding: 0 16px; gap: 10px;
+    height: calc(54px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(16px, env(safe-area-inset-right)) 0 max(16px, env(safe-area-inset-left));
+    gap: 10px;
     position: sticky; top: 0; z-index: 10;
     background: var(--bg-sidebar);
   }
@@ -569,7 +571,10 @@ onUnmounted(() => {
   .page-heading { flex: 1; overflow: hidden; }
   .topbar h1 { margin-top: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
   /* 内容区留出底部悬浮标签栏高度，避免被遮 */
-  .content { padding: 16px 14px calc(86px + env(safe-area-inset-bottom)); }
+  .content {
+    padding: 16px max(14px, env(safe-area-inset-right)) calc(92px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
+    overscroll-behavior-y: contain;
+  }
   .tabbar {
     display: flex; position: fixed;
     bottom: calc(12px + env(safe-area-inset-bottom));

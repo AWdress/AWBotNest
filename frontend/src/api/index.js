@@ -219,6 +219,9 @@ export const api = {
   getAiModels: (provider) => request('POST', '/api/ai/provider-models', { provider }),
   testAiCapability: (capability) => request('POST', '/api/ai/test', { capability }),
   getAiStatus: () => request('GET', '/api/ai/status'),
+  getAiUsageRecent: (limit = 50) => request('GET', `/api/ai/usage/recent?limit=${limit}`),
+  getAiUsagePlugins: () => request('GET', '/api/ai/usage/plugins'),
+  clearAiUsageRecent: () => request('DELETE', '/api/ai/usage/recent'),
   getCookieSettings: () => request('GET', '/api/cookies/settings'),
   saveCookieSettings: (settings) => request('PUT', '/api/cookies/settings', { settings }),
   generateCookieCredentials: () => request('POST', '/api/cookies/credentials'),
@@ -256,9 +259,29 @@ export const api = {
     }
     return { blob: await res.blob(), filename }
   },
-  restoreBackup: async (file) => {
+  previewBackup: async (file) => {
     const form = new FormData()
     form.append('file', file)
+    const headers = authHeaders()
+    delete headers['Content-Type']
+    const res = await fetch('/api/system/restore/preview', { method: 'POST', headers, body: form })
+    if (res.status === 401) {
+      setToken('')
+      if (onUnauthorized) onUnauthorized()
+      throw new Error('未登录或登录已过期')
+    }
+    if (!res.ok) {
+      let detail = res.statusText
+      try { detail = (await res.json()).detail || detail } catch {}
+      throw new Error(detail)
+    }
+    return res.json()
+  },
+  restoreBackup: async (file, preview) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('preview_digest', preview?.digest || '')
+    form.append('current_digest', preview?.current_digest || '')
     const headers = authHeaders()
     delete headers['Content-Type']
     const res = await fetch('/api/system/restore', { method: 'POST', headers, body: form })

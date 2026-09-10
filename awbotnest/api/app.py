@@ -39,6 +39,8 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
                restart_event: asyncio.Event | None = None,
                market: PluginMarket | None = None) -> FastAPI:
     app = FastAPI(title="AWBotNest API", version=__version__)
+    app.state.platform_ready = False
+    app.state.platform_startup_error = ""
     market = market or PluginMarket(settings)
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
                            admin_dependency(settings), time.monotonic(), ResourceSampler())

@@ -45,6 +45,10 @@ const aiLoading = ref(false)
 const aiSaving = ref(false)
 const aiStatus = ref(null)
 const aiPlugins = ref([])
+const aiRecent = ref([])
+const aiPluginSummary = ref([])
+const aiUsageLoading = ref(false)
+const aiUsageStatus = ref('all')
 const aiModels = ref({})
 const aiModelSearch = ref('')
 const aiSelectedModels = ref([])
@@ -75,6 +79,31 @@ function formatAiUsage(value) {
   const number = Number(value)
   return aiNumberFormatter.format(Number.isFinite(number) && number > 0 ? Math.floor(number) : 0)
 }
+function aiProtocolLabel(value) {
+  return ({
+    auto: '自动识别',
+    chat_completions: 'Chat Completions',
+    responses: 'Responses',
+    anthropic_messages: 'Anthropic Messages',
+    image_generations: 'Images',
+  })[value] || value || '未知协议'
+}
+function aiErrorLabel(value) {
+  return ({
+    authentication: '认证失败', permission: '权限被拒绝', model_not_found: '模型不存在',
+    endpoint_not_found: '接口路径不存在', rate_limit: '服务商限流',
+    protocol_mismatch: '协议不匹配', invalid_request: '请求不兼容',
+    invalid_response: '响应格式异常', timeout: '请求超时', network: '网络异常',
+    upstream: '上游异常', http_error: 'HTTP 异常',
+  })[value] || value || '调用失败'
+}
+function formatAiTime(value) {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN', { hour12: false })
+}
+const filteredAiRecent = computed(() => aiRecent.value.filter((item) =>
+  aiUsageStatus.value === 'all' || item.status === aiUsageStatus.value
+))
 let aiStatusTimer = null
 const cookieSettings = ref(null)
 const cookieSavedSnap = ref('')
@@ -209,6 +238,7 @@ function newAiProvider() {
     enabled: true,
     base_url: 'https://api.openai.com/v1',
     api_key: '',
+    api_format: 'auto',
   }
 }
 
@@ -231,13 +261,18 @@ function newAiModel(providerId = '') {
 async function loadAiSettings() {
   aiLoading.value = true
   try {
-    const [configData, pluginData] = await Promise.all([
+    const [configData, pluginData, recentData, pluginUsageData] = await Promise.all([
       api.getAiSettings(),
       api.listAiPlugins(),
+      api.getAiUsageRecent(),
+      api.getAiUsagePlugins(),
     ])
     ai.value = configData.settings
+    ai.value.providers.forEach((provider) => { provider.api_format ||= 'auto' })
     aiStatus.value = configData.status || {}
     aiPlugins.value = pluginData.plugins || []
+    aiRecent.value = recentData.items || []
+    aiPluginSummary.value = pluginUsageData.items || []
     aiModels.value = {}
     aiModelSearch.value = ''
     aiSelectedModels.value = []
@@ -253,6 +288,41 @@ async function loadAiSettings() {
     toast.error('读取 AI 设置失败：' + e.message)
   } finally {
     aiLoading.value = false
+  }
+}
+
+async function refreshAiUsage() {
+  if (aiUsageLoading.value) return
+  aiUsageLoading.value = true
+  try {
+    const [status, recent, plugins] = await Promise.all([
+      api.getAiStatus(), api.getAiUsageRecent(), api.getAiUsagePlugins(),
+    ])
+    aiStatus.value = status
+    aiRecent.value = recent.items || []
+    aiPluginSummary.value = plugins.items || []
+  } catch (e) {
+    toast.error('刷新调用记录失败：' + e.message)
+  } finally {
+    aiUsageLoading.value = false
+  }
+}
+
+async function clearAiUsage() {
+  const ok = await confirm({
+    title: '清空调用明细',
+    message: '只清空最近调用和插件聚合明细，累计调用次数与 Token 统计会保留。',
+    confirmText: '清空明细',
+    danger: true,
+  })
+  if (!ok) return
+  try {
+    await api.clearAiUsageRecent()
+    aiRecent.value = []
+    aiPluginSummary.value = []
+    toast.success('最近调用明细已清空')
+  } catch (e) {
+    toast.error('清空失败：' + e.message)
   }
 }
 
@@ -741,7 +811,7 @@ async function testAi(capability) {
   try {
     const result = await api.testAiCapability(capability)
     toast.success(result.message || '测试成功')
-    aiStatus.value = await api.getAiStatus()
+    await refreshAiUsage()
   } catch (e) {
     toast.error('测试失败：' + e.message)
   } finally {
@@ -963,17 +1033,24 @@ async function onRestoreFile(e) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (!file) return
-  const ok = await confirm({
-    title: '导入配置',
-    message: '导入后会覆盖当前的系统设置和插件设置，不会更改插件文件、账号会话、Cookie、日志等运行数据。请确认配置包来源可信。',
-    confirmText: '导入配置',
-    danger: true,
-  })
-  if (!ok) return
-
   restoreBusy.value = true
   try {
-    const r = await api.restoreBackup(file)
+    const preview = await api.previewBackup(file)
+    const summary = preview.summary || {}
+    const systemChanges = (summary.system_added || 0) + (summary.system_changed || 0) + (summary.system_removed || 0)
+    const pluginChanges = (summary.plugins_added || 0) + (summary.plugins_changed || 0) + (summary.plugins_removed || 0)
+    const detail = [
+      `系统设置：新增 ${summary.system_added || 0}、修改 ${summary.system_changed || 0}、移除 ${summary.system_removed || 0}`,
+      `插件设置：新增 ${summary.plugins_added || 0}、修改 ${summary.plugins_changed || 0}、移除 ${summary.plugins_removed || 0}`,
+      systemChanges + pluginChanges
+        ? '确认后将暂存这些变更，并在重启后应用。账号会话、Cookie、日志和插件文件不会改变。'
+        : '配置内容与当前设置一致，仍可重新导入并在重启后应用。',
+    ].join('\n')
+    const ok = await confirm({
+      title: '确认配置变更', message: detail, confirmText: '暂存并导入', danger: true,
+    })
+    if (!ok) return
+    const r = await api.restoreBackup(file, preview)
     restartHint.value = !!r.restart_required
     if (r.pre_restore_backup) {
       try {
@@ -983,7 +1060,7 @@ async function onRestoreFile(e) {
         toast.error('配置包已暂存，但导入前配置快照下载失败：' + downloadError.message)
       }
     }
-    toast.success(`配置包已校验，共 ${r.staged_files || 2} 个配置文件；重启后应用`)
+    toast.success(`配置变更已确认，共 ${r.staged_files || 2} 个配置文件；重启后应用`)
   } catch (err) {
     toast.error('导入配置失败：' + err.message)
   } finally {
@@ -1819,6 +1896,59 @@ onBeforeRouteLeave(async () => {
             </div>
           </div>
 
+          <div class="card ai-activity" style="margin-top:16px">
+            <div class="row between ai-section-head ai-activity-head">
+              <div>
+                <div class="card-title">最近调用</div>
+                <div class="hint muted">保留最近 200 次实际请求，可定位服务、模型、协议和失败原因。</div>
+              </div>
+              <div class="row gap ai-activity-actions">
+                <select class="select" v-model="aiUsageStatus" aria-label="筛选调用状态">
+                  <option value="all">全部状态</option>
+                  <option value="success">成功</option>
+                  <option value="failed">失败</option>
+                </select>
+                <button type="button" class="btn sm" @click="refreshAiUsage" :disabled="aiUsageLoading">
+                  {{ aiUsageLoading ? '刷新中…' : '刷新' }}
+                </button>
+                <button type="button" class="btn sm" @click="clearAiUsage" :disabled="!aiRecent.length">清空</button>
+              </div>
+            </div>
+
+            <div v-if="filteredAiRecent.length" class="ai-call-list">
+              <article v-for="(item, index) in filteredAiRecent" :key="`${item.timestamp}-${index}`"
+                       class="ai-call-row" :class="item.status">
+                <span class="ai-call-status">{{ item.status === 'success' ? '成功' : '失败' }}</span>
+                <div class="ai-call-identity">
+                  <strong>{{ item.model || '自动选择' }}</strong>
+                  <small>{{ item.source }} · {{ item.provider }}</small>
+                </div>
+                <div class="ai-call-transport">
+                  <span>{{ aiCapabilityLabel(item.capability) }}</span>
+                  <small>{{ aiProtocolLabel(item.protocol) }}</small>
+                </div>
+                <div class="ai-call-result">
+                  <strong>{{ formatAiUsage(item.latency_ms) }} ms</strong>
+                  <small v-if="item.status === 'success'">{{ formatAiUsage(item.total_tokens) }} Token</small>
+                  <small v-else :title="item.error_message">{{ aiErrorLabel(item.error_type) }}</small>
+                </div>
+                <time>{{ formatAiTime(item.timestamp) }}</time>
+              </article>
+            </div>
+            <div v-else class="ai-activity-empty">暂无符合条件的调用记录</div>
+
+            <div v-if="aiPluginSummary.length" class="ai-plugin-usage">
+              <div class="ai-plugin-usage-title">插件调用汇总</div>
+              <div class="ai-plugin-usage-grid">
+                <div v-for="item in aiPluginSummary" :key="item.plugin_id" class="ai-plugin-usage-item">
+                  <strong>{{ item.name }}</strong>
+                  <span>{{ item.calls }} 次 · 成功 {{ item.succeeded }} · 失败 {{ item.failed }}</span>
+                  <small>平均 {{ item.avg_latency_ms }} ms · {{ formatAiUsage(item.total_tokens) }} Token</small>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div class="card" style="margin-top:16px">
             <div class="row between ai-section-head">
               <div>
@@ -1844,6 +1974,20 @@ onBeforeRouteLeave(async () => {
                   <label>服务地址</label>
                   <input class="input mono" v-model="provider.base_url"
                          placeholder="https://api.openai.com/v1" />
+                </div>
+                <div class="field">
+                  <label>接口格式</label>
+                  <select class="select" v-model="provider.api_format">
+                    <option value="auto">自动识别</option>
+                    <option value="chat_completions">OpenAI Chat Completions</option>
+                    <option value="responses">OpenAI Responses</option>
+                    <option value="anthropic_messages">Anthropic Messages</option>
+                  </select>
+                  <div class="hint muted small">
+                    {{ provider.api_format === 'auto'
+                      ? `调用时识别并缓存可用协议${aiStatus?.detected_protocols?.[provider.id] ? `，当前识别为 ${aiProtocolLabel(aiStatus.detected_protocols[provider.id])}` : ''}`
+                      : '固定使用所选协议，不执行自动尝试' }}
+                  </div>
                 </div>
                 <div class="field">
                   <label>API Key</label>
@@ -3584,6 +3728,72 @@ onBeforeRouteLeave(async () => {
 @keyframes ai-running-pulse {
   50% { opacity: .5; box-shadow: 0 0 0 6px rgba(48,128,240,.05); }
 }
+.ai-activity { min-width: 0; }
+.ai-activity-actions .select { width: 124px; min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
+.ai-call-list {
+  max-height: 430px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: rgba(7,12,20,.24);
+}
+.ai-call-row {
+  display: grid;
+  grid-template-columns: 56px minmax(170px, 1.25fr) minmax(130px, .75fr) minmax(110px, .55fr) 148px;
+  align-items: center;
+  gap: 12px;
+  min-height: 62px;
+  padding: 10px 13px;
+  border-top: 1px solid var(--border);
+}
+.ai-call-row:first-child { border-top: 0; }
+.ai-call-status {
+  justify-self: start;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--success);
+  background: rgba(16,176,128,.1);
+  font-size: 10px;
+  font-weight: 700;
+}
+.ai-call-row.failed .ai-call-status { color: var(--danger); background: rgba(224,80,112,.1); }
+.ai-call-identity,
+.ai-call-transport,
+.ai-call-result { min-width: 0; }
+.ai-call-identity strong,
+.ai-call-identity small,
+.ai-call-transport span,
+.ai-call-transport small,
+.ai-call-result strong,
+.ai-call-result small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-call-identity strong { color: var(--text-primary); font-size: 12px; }
+.ai-call-identity small,
+.ai-call-transport small,
+.ai-call-result small,
+.ai-call-row time { margin-top: 4px; color: var(--text-muted); font-size: 10px; }
+.ai-call-transport span { color: var(--text-secondary); font-size: 11px; }
+.ai-call-result strong { color: var(--text-primary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ai-call-row.failed .ai-call-result small { color: var(--danger); }
+.ai-call-row time { margin-top: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.ai-activity-empty {
+  display: grid;
+  min-height: 96px;
+  place-items: center;
+  border: 1px dashed var(--border-light);
+  border-radius: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.ai-plugin-usage { margin-top: 16px; }
+.ai-plugin-usage-title { margin-bottom: 9px; color: var(--text-secondary); font-size: 11px; font-weight: 650; }
+.ai-plugin-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.ai-plugin-usage-item { min-width: 0; padding: 10px 12px; border-radius: 10px; background: var(--bg-elevated); }
+.ai-plugin-usage-item strong,
+.ai-plugin-usage-item span,
+.ai-plugin-usage-item small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-plugin-usage-item strong { color: var(--text-primary); font-size: 12px; }
+.ai-plugin-usage-item span { margin-top: 5px; color: var(--text-secondary); font-size: 10px; }
+.ai-plugin-usage-item small { margin-top: 3px; color: var(--text-muted); font-size: 10px; }
 .ai-section-head { margin-bottom: 14px; }
 .ai-provider-grid {
   display: grid;
@@ -3957,6 +4167,21 @@ onBeforeRouteLeave(async () => {
   }
   .panel { max-width: 100%; }
   .ai-library-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ai-activity-head { align-items: stretch; flex-direction: column; }
+  .ai-activity-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; width: 100%; }
+  .ai-activity-actions .select { width: 100%; }
+  .ai-call-list { max-height: 480px; }
+  .ai-call-row {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 7px 10px;
+    padding: 12px;
+  }
+  .ai-call-status { grid-row: 1 / span 2; }
+  .ai-call-identity { grid-column: 2; }
+  .ai-call-transport { grid-column: 2; }
+  .ai-call-result { grid-column: 3; grid-row: 1; text-align: right; }
+  .ai-call-row time { grid-column: 3; grid-row: 2; max-width: 96px; }
+  .ai-plugin-usage-grid { grid-template-columns: 1fr; }
   .ai-library-toolbar > .input { grid-column: 1 / -1; }
   .ai-model-summary-content { grid-template-columns: 1fr; gap: 7px; }
   .ai-model-origin { flex-direction: row; justify-content: space-between; gap: 10px; }

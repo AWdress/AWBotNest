@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 
 logger = logging.getLogger("awbotnest.ai")
@@ -16,6 +18,7 @@ _PERSISTED_FIELDS = (
     "output_tokens",
     "total_tokens",
 )
+_RECENT_LIMIT = 200
 
 
 class AIUsageTracker:
@@ -38,8 +41,9 @@ class AIUsageTracker:
         except (TypeError, ValueError, OverflowError):
             return 0
 
-    def _read(self) -> dict[str, int]:
+    def _read(self) -> dict[str, Any]:
         values = self._empty()
+        values["recent"] = []
         if self.path is None:
             return values
         try:
@@ -48,6 +52,10 @@ class AIUsageTracker:
                 return values
             for field in _PERSISTED_FIELDS:
                 values[field] = self._counter(raw.get(field))
+            recent = raw.get("recent")
+            if isinstance(recent, list):
+                values["recent"] = [item for item in recent[-_RECENT_LIMIT:]
+                                    if isinstance(item, dict)]
         except (OSError, json.JSONDecodeError):
             pass
         return values
@@ -105,6 +113,75 @@ class AIUsageTracker:
             self._data["output_tokens"] += output_tokens
             self._data["total_tokens"] += total_tokens
 
+    def record_attempt(self, *, source: str, plugin_id: str, capability: str,
+                       provider_id: str, provider: str, model: str, protocol: str,
+                       succeeded: bool, latency_ms: int, response: object = None,
+                       error_type: str = "", error_message: str = "",
+                       used_fallback: bool = False) -> None:
+        input_tokens, output_tokens, total_tokens = self._tokens(response)
+        item = {
+            "timestamp": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "source": source,
+            "plugin_id": plugin_id,
+            "capability": capability,
+            "provider_id": provider_id,
+            "provider": provider,
+            "model": model,
+            "protocol": protocol,
+            "status": "success" if succeeded else "failed",
+            "latency_ms": max(0, int(latency_ms)),
+            "error_type": str(error_type or ""),
+            "error_message": str(error_message or "")[:300],
+            "used_fallback": bool(used_fallback),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+        with self._lock:
+            self._data.setdefault("recent", []).append(item)
+            del self._data["recent"][:-_RECENT_LIMIT]
+            self._save()
+
+    def recent(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self._lock:
+            return [dict(item) for item in reversed(self._data.get("recent", []))][:max(1, min(limit, 200))]
+
+    def plugin_summary(self) -> list[dict[str, Any]]:
+        with self._lock:
+            groups: dict[str, dict[str, Any]] = {}
+            for item in self._data.get("recent", []):
+                plugin_id = str(item.get("plugin_id") or "")
+                if not plugin_id:
+                    continue
+                group = groups.setdefault(plugin_id, {
+                    "plugin_id": plugin_id,
+                    "name": str(item.get("source") or plugin_id).removeprefix("插件:"),
+                    "calls": 0, "succeeded": 0, "failed": 0,
+                    "fallbacks": 0, "latency_total": 0, "total_tokens": 0,
+                })
+                group["calls"] += 1
+                group["succeeded" if item.get("status") == "success" else "failed"] += 1
+                group["fallbacks"] += int(bool(item.get("used_fallback")))
+                group["latency_total"] += self._counter(item.get("latency_ms"))
+                group["total_tokens"] += self._counter(item.get("total_tokens"))
+            result = []
+            for group in groups.values():
+                calls = max(1, int(group.pop("calls")))
+                latency_total = int(group.pop("latency_total"))
+                group["calls"] = calls
+                group["avg_latency_ms"] = round(latency_total / calls)
+                result.append(group)
+            return sorted(result, key=lambda item: (-int(item["calls"]), str(item["name"])))
+
+    def clear_recent(self) -> int:
+        with self._lock:
+            removed = len(self._data.get("recent", []))
+            self._data["recent"] = []
+            self._save()
+            return removed
+
     def snapshot(self) -> dict[str, int]:
         with self._lock:
-            return {**self._data, "active": self._active}
+            return {field: self._counter(self._data.get(field)) for field in _PERSISTED_FIELDS} | {
+                "active": self._active,
+            }

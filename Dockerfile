@@ -42,7 +42,7 @@ RUN ["timeout", "--kill-after=5s", "30s", "/usr/bin/tini", "-s", "-g", "--", "xv
 EXPOSE 18001
 VOLUME ["/app/data", "/app/sessions", "/app/plugins"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/api/health', timeout=3)" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/readyz', timeout=3)" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
 CMD ["xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-m", "awbotnest.main"]

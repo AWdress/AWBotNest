@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import io
 import shutil
 import stat
 import zipfile
@@ -81,37 +83,103 @@ class BackupManager:
         return members
 
     @classmethod
-    def _read_config(cls, path: Path) -> dict[str, object]:
-        if not path.exists() or path.stat().st_size > MAX_BACKUP_SIZE:
-            raise ValueError("配置备份不存在或超过 16 MB")
-        with zipfile.ZipFile(path) as archive:
-            members = cls._safe_members(archive)
-            if {"manifest.json", "config/system.json", "config/plugins.json"}.issubset(members):
-                manifest = cls._read_json(archive, members["manifest.json"], 64 * 1024, "备份描述")
-                if manifest.get("format") != BACKUP_FORMAT or manifest.get("version") != BACKUP_VERSION:
-                    raise ValueError("不支持的 AWBotNest 配置备份版本")
-                system_config = cls._read_json(
-                    archive, members["config/system.json"], MAX_CONFIG_SIZE, "系统配置",
-                )
-                plugin_config = cls._read_json(
-                    archive, members["config/plugins.json"], MAX_CONFIG_SIZE, "插件配置",
-                )
-                system_config.pop("plugin_config", None)
-                system_config["plugin_config"] = plugin_config
-                config = system_config
-            elif "data/config.json" in members:
-                # 兼容旧版完整备份，但只读取其中的配置，不解压其他运行数据。
-                config = cls._read_json(
-                    archive, members["data/config.json"], MAX_CONFIG_SIZE, "系统配置",
-                )
-            else:
-                raise ValueError("不是有效的 AWBotNest 配置备份")
+    def _read_archive(cls, archive: zipfile.ZipFile) -> dict[str, object]:
+        members = cls._safe_members(archive)
+        if {"manifest.json", "config/system.json", "config/plugins.json"}.issubset(members):
+            manifest = cls._read_json(archive, members["manifest.json"], 64 * 1024, "备份描述")
+            if manifest.get("format") != BACKUP_FORMAT or manifest.get("version") != BACKUP_VERSION:
+                raise ValueError("不支持的 AWBotNest 配置备份版本")
+            system_config = cls._read_json(
+                archive, members["config/system.json"], MAX_CONFIG_SIZE, "系统配置",
+            )
+            plugin_config = cls._read_json(
+                archive, members["config/plugins.json"], MAX_CONFIG_SIZE, "插件配置",
+            )
+            system_config.pop("plugin_config", None)
+            system_config["plugin_config"] = plugin_config
+            config = system_config
+        elif "data/config.json" in members:
+            # 兼容旧版完整备份，但只读取其中的配置，不解压其他运行数据。
+            config = cls._read_json(
+                archive, members["data/config.json"], MAX_CONFIG_SIZE, "系统配置",
+            )
+        else:
+            raise ValueError("不是有效的 AWBotNest 配置备份")
 
         validate_config_format(config)
         plugin_config = config.get("plugin_config", {})
         if not isinstance(plugin_config, dict):
             raise ValueError("备份中的插件配置格式不正确")
         return config
+
+    @classmethod
+    def _read_config(cls, path: Path) -> dict[str, object]:
+        if not path.exists() or path.stat().st_size > MAX_BACKUP_SIZE:
+            raise ValueError("配置备份不存在或超过 16 MB")
+        with zipfile.ZipFile(path) as archive:
+            return cls._read_archive(archive)
+
+    @classmethod
+    def _read_content(cls, content: bytes) -> dict[str, object]:
+        if len(content) > MAX_BACKUP_SIZE:
+            raise ValueError("配置备份超过 16 MB")
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            return cls._read_archive(archive)
+
+    @staticmethod
+    def _config_digest(config: dict[str, object]) -> str:
+        packed = json.dumps(config, ensure_ascii=False, sort_keys=True,
+                            separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(packed).hexdigest()
+
+    @staticmethod
+    def _current_config() -> dict[str, object]:
+        path = DATA_DIR / "config.json"
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {}
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError("当前系统配置无法读取") from exc
+        validate_config_format(value)
+        return value
+
+    @classmethod
+    def preview(cls, content: bytes) -> dict[str, object]:
+        incoming = cls._read_content(content)
+        current = cls._current_config()
+        incoming_system = {key: value for key, value in incoming.items() if key != "plugin_config"}
+        current_system = {key: value for key, value in current.items() if key != "plugin_config"}
+        incoming_plugins = incoming.get("plugin_config") if isinstance(incoming.get("plugin_config"), dict) else {}
+        current_plugins = current.get("plugin_config") if isinstance(current.get("plugin_config"), dict) else {}
+
+        def changes(before: dict[str, object], after: dict[str, object]) -> dict[str, list[str]]:
+            before_keys, after_keys = set(before), set(after)
+            return {
+                "added": sorted(after_keys - before_keys),
+                "changed": sorted(key for key in before_keys & after_keys if before[key] != after[key]),
+                "removed": sorted(before_keys - after_keys),
+                "unchanged": sorted(key for key in before_keys & after_keys if before[key] == after[key]),
+            }
+
+        system = changes(current_system, incoming_system)
+        plugins = changes(current_plugins, incoming_plugins)
+        summary = {
+            "system_added": len(system["added"]),
+            "system_changed": len(system["changed"]),
+            "system_removed": len(system["removed"]),
+            "plugins_added": len(plugins["added"]),
+            "plugins_changed": len(plugins["changed"]),
+            "plugins_removed": len(plugins["removed"]),
+        }
+        return {
+            "ok": True,
+            "digest": hashlib.sha256(content).hexdigest(),
+            "current_digest": cls._config_digest(current),
+            "summary": summary,
+            "system": system,
+            "plugins": plugins,
+        }
 
     @staticmethod
     def _read_json(archive: zipfile.ZipFile, item: zipfile.ZipInfo,
@@ -131,14 +199,21 @@ class BackupManager:
         cls._read_config(path)
 
     @classmethod
-    def stage(cls, content: bytes) -> None:
+    def stage(cls, content: bytes, *, expected_digest: str = "",
+              expected_current_digest: str = "") -> None:
         if len(content) > MAX_BACKUP_SIZE:
             raise ValueError("配置备份超过 16 MB")
+        if expected_digest and not hashlib.sha256(content).hexdigest() == expected_digest:
+            raise ValueError("配置包已发生变化，请重新预览")
+        if expected_current_digest:
+            current_digest = cls._config_digest(cls._current_config())
+            if current_digest != expected_current_digest:
+                raise ValueError("当前配置在预览后已发生变化，请重新预览")
+        cls._read_content(content)
         PENDING_RESTORE.parent.mkdir(parents=True, exist_ok=True)
         temporary = PENDING_RESTORE.with_suffix(".tmp")
         temporary.write_bytes(content)
         try:
-            cls.validate(temporary)
             temporary.replace(PENDING_RESTORE)
         except Exception:
             temporary.unlink(missing_ok=True)

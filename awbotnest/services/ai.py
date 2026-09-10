@@ -18,6 +18,15 @@ from ..config import DATA_DIR, Settings
 
 from .http import HttpService
 from .ai_usage import AIUsageTracker
+from .ai_protocol import (
+    AIRequestError,
+    build_request,
+    decode_json,
+    normalize_api_format,
+    parse_text_response,
+    protocol_candidates,
+    raise_for_status,
+)
 
 logger = logging.getLogger("awbotnest.ai")
 
@@ -29,6 +38,7 @@ class AIService:
         self.http = http
         self.usage = AIUsageTracker(usage_path)
         self._plugin_names: dict[str, str] = {}
+        self._detected_protocols: dict[str, str] = {}
         self._limit = 0
         self._semaphore = None
 
@@ -55,7 +65,7 @@ class AIService:
         except (TypeError, ValueError):
             return default
 
-    def _resolve(self, capability: str, model: str = "", plugin_id: str = "") -> tuple[str, str, str]:
+    def _resolve_details(self, capability: str, model: str = "", plugin_id: str = "") -> dict[str, str]:
         config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
         providers = {str(item.get("id")): item for item in config.get("providers", [])
                      if isinstance(item, dict) and item.get("enabled", True)}
@@ -81,13 +91,34 @@ class AIService:
             key = str(provider.get("api_key") or "")
             if not key or key == "********":
                 raise RuntimeError("尚未配置 AI 服务密钥")
-            return (str(provider.get("base_url") or self.settings.ai_base_url).rstrip("/"), key,
-                    str(selected.get("model") or selected.get("alias") or ""))
+            return {
+                "base_url": str(provider.get("base_url") or self.settings.ai_base_url).rstrip("/"),
+                "api_key": key,
+                "model": str(selected.get("model") or selected.get("alias") or ""),
+                "provider_id": str(provider.get("id") or ""),
+                "provider_name": str(provider.get("name") or provider.get("id") or "未知服务"),
+                "api_format": normalize_api_format(provider.get("api_format")),
+            }
         if config.get("models") or config.get("providers"):
             raise RuntimeError(f"指定的 {capability} 模型不存在或未启用")
         if not self.settings.ai_api_key:
             raise RuntimeError(f"尚未配置 {capability} 模型")
-        return self.settings.ai_base_url.rstrip("/"), self.settings.ai_api_key, model or self.settings.ai_model
+        return {
+            "base_url": self.settings.ai_base_url.rstrip("/"),
+            "api_key": self.settings.ai_api_key,
+            "model": model or self.settings.ai_model,
+            "provider_id": "legacy",
+            "provider_name": "OpenAI 兼容服务",
+            "api_format": "auto",
+        }
+
+    def _resolve(self, capability: str, model: str = "", plugin_id: str = "") -> tuple[str, str, str]:
+        """Compatibility tuple retained for plugins/tests that inspect the legacy helper."""
+        target = self._resolve_details(capability, model, plugin_id)
+        return target["base_url"], target["api_key"], target["model"]
+
+    def detected_protocols(self) -> dict[str, str]:
+        return dict(self._detected_protocols)
 
     def _fallback(self, capability: str, plugin_id: str = "") -> str:
         config = self.settings.ai_settings if isinstance(self.settings.ai_settings, dict) else {}
@@ -124,12 +155,24 @@ class AIService:
 
     @staticmethod
     def _failure_summary(exc: Exception) -> str:
+        if isinstance(exc, AIRequestError):
+            return str(exc)
         if isinstance(exc, httpx.HTTPStatusError):
             return f"HTTP {exc.response.status_code}"
         if isinstance(exc, httpx.TimeoutException):
             return "请求超时"
         if isinstance(exc, httpx.RequestError):
             return "网络请求失败"
+        return type(exc).__name__
+
+    @staticmethod
+    def _error_type(exc: Exception) -> str:
+        if isinstance(exc, AIRequestError):
+            return exc.category
+        if isinstance(exc, httpx.TimeoutException):
+            return "timeout"
+        if isinstance(exc, httpx.RequestError):
+            return "network"
         return type(exc).__name__
 
     def _log_started(self, capability: str, plugin_id: str, model: str, base_url: str) -> None:
@@ -156,51 +199,108 @@ class AIService:
             "，将尝试备用模型" if fallback else "",
         )
 
+    def _record_attempt(self, *, capability: str, plugin_id: str, target: dict[str, str],
+                        protocol: str, started: float, succeeded: bool,
+                        data: object = None, exc: Exception | None = None,
+                        used_fallback: bool = False) -> None:
+        self.usage.record_attempt(
+            source=self._audit_source(plugin_id), plugin_id=plugin_id,
+            capability=capability, provider_id=target.get("provider_id", ""),
+            provider=target.get("provider_name", "") or self._provider_host(target.get("base_url", "")),
+            model=target.get("model", ""), protocol=protocol, succeeded=succeeded,
+            latency_ms=round((time.perf_counter() - started) * 1000), response=data,
+            error_type=self._error_type(exc) if exc else "",
+            error_message=self._failure_summary(exc) if exc else "",
+            used_fallback=used_fallback,
+        )
+
+    async def _text_request(self, messages: list[dict[str, object]], *, capability: str,
+                            model: str, plugin_id: str, temperature: float | None,
+                            max_tokens: int | None, used_fallback: bool) -> str:
+        resolving_started = time.perf_counter()
+        try:
+            target = self._resolve_details(capability, model, plugin_id)
+        except Exception as exc:
+            self._log_failed("文字" if capability == "text" else "视觉", plugin_id,
+                             model, "", resolving_started, exc, False)
+            raise
+        base_url, resolved_model = target["base_url"], target["model"]
+        candidates = protocol_candidates(
+            target["api_format"], base_url, resolved_model,
+            self._detected_protocols.get(target["provider_id"], ""),
+        )
+        last_error: Exception | None = None
+        for index, protocol in enumerate(candidates):
+            started = time.perf_counter()
+            self._log_started("文字" if capability == "text" else "视觉",
+                              plugin_id, resolved_model, base_url)
+            try:
+                request = build_request(
+                    protocol, base_url, target["api_key"], resolved_model, messages,
+                    temperature=temperature, max_tokens=max_tokens,
+                )
+                response = await self._post(
+                    request.url, headers=request.headers, json=request.payload,
+                    timeout=self._timeout(capability),
+                )
+                raise_for_status(response, protocol)
+                data = decode_json(response, protocol)
+                result = parse_text_response(data, protocol)
+                if target["api_format"] == "auto":
+                    self._detected_protocols[target["provider_id"]] = protocol
+                self._log_succeeded("文字" if capability == "text" else "视觉",
+                                    plugin_id, resolved_model, base_url, started, data)
+                self.usage.record_tokens(data)
+                self._record_attempt(
+                    capability=capability, plugin_id=plugin_id, target=target,
+                    protocol=protocol, started=started, succeeded=True, data=data,
+                    used_fallback=used_fallback,
+                )
+                return result
+            except (httpx.TimeoutException, httpx.RequestError) as exc:
+                last_error = exc
+            except Exception as exc:
+                last_error = exc
+            may_try_protocol = (
+                target["api_format"] == "auto" and index < len(candidates) - 1
+                and isinstance(last_error, AIRequestError) and last_error.protocol_mismatch
+            )
+            self._log_failed("文字" if capability == "text" else "视觉",
+                             plugin_id, resolved_model, base_url, started, last_error,
+                             may_try_protocol)
+            self._record_attempt(
+                capability=capability, plugin_id=plugin_id, target=target,
+                protocol=protocol, started=started, succeeded=False, exc=last_error,
+                used_fallback=used_fallback or may_try_protocol,
+            )
+            if not may_try_protocol:
+                raise last_error
+        raise last_error or AIRequestError("AI 服务未返回结果", category="unknown")
+
     async def chat(self, messages: list[dict[str, object]], *, model: str = "",
                    temperature: float | None = None, max_tokens: int | None = None,
                    plugin_id: str = "", _allow_fallback: bool = True,
-                   _track_usage: bool = True) -> str:
+                   _track_usage: bool = True, _used_fallback: bool = False) -> str:
         if _track_usage:
             self.usage.begin()
         completed = False
         requested_model = model
-        started = time.perf_counter()
-        base_url = ""
-        resolved_model = model
-        payload: dict[str, object] = {
-            "messages": messages,
-        }
-        if temperature is not None:
-            payload["temperature"] = temperature
-        if max_tokens is not None:
-            payload["max_tokens"] = max(1, int(max_tokens))
         try:
-            base_url, api_key, resolved_model = self._resolve("text", model, plugin_id)
-            payload["model"] = resolved_model
-            self._log_started("文字", plugin_id, resolved_model, base_url)
-            response = await self._post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-                timeout=self._timeout("text"),
+            result = await self._text_request(
+                messages, capability="text", model=model, plugin_id=plugin_id,
+                temperature=temperature, max_tokens=max_tokens, used_fallback=_used_fallback,
             )
-            response.raise_for_status()
-            data = response.json()
-            self._log_succeeded("文字", plugin_id, resolved_model, base_url, started, data)
-            self.usage.record_tokens(data)
-            result = str(data["choices"][0]["message"]["content"])
             if _track_usage:
                 self.usage.succeed()
                 completed = True
             return result
         except Exception as exc:
             fallback = self._fallback("text", plugin_id) if not requested_model else ""
-            self._log_failed("文字", plugin_id, resolved_model, base_url, started, exc,
-                             bool(_allow_fallback and fallback))
             if _allow_fallback and fallback:
                 result = await self.chat(messages, model=fallback, temperature=temperature,
                                          max_tokens=max_tokens, plugin_id=plugin_id,
-                                         _allow_fallback=False, _track_usage=False)
+                                         _allow_fallback=False, _track_usage=False,
+                                         _used_fallback=True)
                 if _track_usage:
                     self.usage.succeed()
                     completed = True
@@ -211,42 +311,32 @@ class AIService:
                 self.usage.fail()
 
     async def vision(self, prompt: str, image: str, *, model: str = "", plugin_id: str = "",
-                     _allow_fallback: bool = True, _track_usage: bool = True) -> str:
+                     _allow_fallback: bool = True, _track_usage: bool = True,
+                     _used_fallback: bool = False) -> str:
         if _track_usage:
             self.usage.begin()
         completed = False
         requested_model = model
-        started = time.perf_counter()
-        base_url = ""
-        resolved_model = model
-        payload = {"messages": [{"role": "user", "content": [
+        messages = [{"role": "user", "content": [
             {"type": "text", "text": prompt},
             *({"type": "image_url", "image_url": {"url": url}}
               for url in (image if isinstance(image, list) else [image])),
-        ]}]}
+        ]}]
         try:
-            base_url, api_key, resolved_model = self._resolve("vision", model, plugin_id)
-            payload["model"] = resolved_model
-            self._log_started("视觉", plugin_id, resolved_model, base_url)
-            response = await self._post(f"{base_url}/chat/completions",
-                                            headers={"Authorization": f"Bearer {api_key}"},
-                                            json=payload, timeout=self._timeout("vision"))
-            response.raise_for_status()
-            data = response.json()
-            self._log_succeeded("视觉", plugin_id, resolved_model, base_url, started, data)
-            self.usage.record_tokens(data)
-            result = str(data["choices"][0]["message"]["content"])
+            result = await self._text_request(
+                messages, capability="vision", model=model, plugin_id=plugin_id,
+                temperature=None, max_tokens=None, used_fallback=_used_fallback,
+            )
             if _track_usage:
                 self.usage.succeed()
                 completed = True
             return result
         except Exception as exc:
             fallback = self._fallback("vision", plugin_id) if not requested_model else ""
-            self._log_failed("视觉", plugin_id, resolved_model, base_url, started, exc,
-                             bool(_allow_fallback and fallback))
             if _allow_fallback and fallback:
                 result = await self.vision(prompt, image, model=fallback, plugin_id=plugin_id,
-                                           _allow_fallback=False, _track_usage=False)
+                                           _allow_fallback=False, _track_usage=False,
+                                           _used_fallback=True)
                 if _track_usage:
                     self.usage.succeed()
                     completed = True
@@ -259,7 +349,8 @@ class AIService:
     async def generate_image(self, prompt: str, *, model: str = "", size: str = "1024x1024",
                              plugin_id: str = "", quality: str | None = None,
                              _allow_fallback: bool = True,
-                             _track_usage: bool = True) -> dict[str, object]:
+                             _track_usage: bool = True,
+                             _used_fallback: bool = False) -> dict[str, object]:
         if _track_usage:
             self.usage.begin()
         completed = False
@@ -267,21 +358,29 @@ class AIService:
         started = time.perf_counter()
         base_url = ""
         resolved_model = model
+        target: dict[str, str] = {}
         try:
-            base_url, api_key, resolved_model = self._resolve("image", model, plugin_id)
+            target = self._resolve_details("image", model, plugin_id)
+            base_url, api_key, resolved_model = target["base_url"], target["api_key"], target["model"]
             self._log_started("生图", plugin_id, resolved_model, base_url)
             response = await self._post(f"{base_url}/images/generations",
                                             headers={"Authorization": f"Bearer {api_key}"},
                                             json={"model": resolved_model, "prompt": prompt, "size": size,
                                                   "n": 1, **({"quality": quality} if quality else {})},
                                             timeout=self._timeout("image"))
-            response.raise_for_status()
-            body = response.json()
+            raise_for_status(response, "chat_completions")
+            body = decode_json(response, "chat_completions")
             data = body.get("data", [])
             if not data or not isinstance(data[0], dict):
-                raise RuntimeError("AI 服务未返回图片")
+                raise AIRequestError("协议响应格式不匹配：AI 服务未返回图片",
+                                     category="invalid_response", protocol_mismatch=True)
             self._log_succeeded("生图", plugin_id, resolved_model, base_url, started, body)
             self.usage.record_tokens(body)
+            self._record_attempt(
+                capability="image", plugin_id=plugin_id, target=target,
+                protocol="image_generations", started=started, succeeded=True, data=body,
+                used_fallback=_used_fallback,
+            )
             result = dict(data[0])
             if _track_usage:
                 self.usage.succeed()
@@ -291,10 +390,16 @@ class AIService:
             fallback = self._fallback("image", plugin_id) if not requested_model else ""
             self._log_failed("生图", plugin_id, resolved_model, base_url, started, exc,
                              bool(_allow_fallback and fallback))
+            if target:
+                self._record_attempt(
+                    capability="image", plugin_id=plugin_id, target=target,
+                    protocol="image_generations", started=started, succeeded=False, exc=exc,
+                    used_fallback=_used_fallback or bool(_allow_fallback and fallback),
+                )
             if _allow_fallback and fallback:
                 result = await self.generate_image(
                     prompt, model=fallback, size=size, plugin_id=plugin_id, quality=quality,
-                    _allow_fallback=False, _track_usage=False,
+                    _allow_fallback=False, _track_usage=False, _used_fallback=True,
                 )
                 if _track_usage:
                     self.usage.succeed()

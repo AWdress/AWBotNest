@@ -194,7 +194,15 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
             server.force_exit = True
 
     restart_watcher = asyncio.create_task(stop_for_restart())
-    platform_task = asyncio.create_task(start_platform(settings, accounts, runtime, scheduler, market))
+    async def initialize_platform() -> None:
+        try:
+            await start_platform(settings, accounts, runtime, scheduler, market)
+            app.state.platform_ready = True
+        except Exception as exc:
+            app.state.platform_startup_error = type(exc).__name__
+            raise
+
+    platform_task = asyncio.create_task(initialize_platform())
     server_task = asyncio.create_task(server.serve())
     try:
         # V1 starts the web console independently of Telegram and plugin setup.
@@ -206,6 +214,7 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         logger.exception("平台后台任务异常，正在停止服务")
         raise
     finally:
+        app.state.platform_ready = False
         restart_watcher.cancel()
         platform_task.cancel()
         await asyncio.gather(restart_watcher, platform_task, return_exceptions=True)

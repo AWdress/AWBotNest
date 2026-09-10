@@ -29,6 +29,7 @@ from ..market import normalize_repo
 from ..routing import WebhookRequest
 from .models import *
 from .masking import masked_channels as mask_channels, masked_proxy as mask_proxy
+from ..services.ai_protocol import API_FORMATS, normalize_api_format
 
 logger = logging.getLogger("awbotnest.api")
 
@@ -99,15 +100,19 @@ def create_router(deps) -> APIRouter:
 
     def current_ai_settings() -> dict[str, object]:
         if settings.ai_settings:
-            value = dict(settings.ai_settings)
+            value = json.loads(json.dumps(settings.ai_settings))
             value.setdefault("timeout_seconds", 60)
             value.setdefault("image_timeout_seconds", 300)
             value.setdefault("max_concurrency", 3)
+            for provider in value.get("providers", []):
+                if isinstance(provider, dict):
+                    provider.setdefault("api_format", "auto")
             return value
         provider_id = "default"
         return {
             "providers": [{"id": provider_id, "name": "OpenAI 兼容服务", "enabled": True,
-                           "base_url": settings.ai_base_url, "api_key": "********" if settings.ai_api_key else ""}],
+                           "base_url": settings.ai_base_url, "api_key": "********" if settings.ai_api_key else "",
+                           "api_format": "auto"}],
             "models": [{"id": "default", "alias": settings.ai_model, "name": settings.ai_model,
                         "enabled": True, "provider_id": provider_id, "model": settings.ai_model,
                         "capabilities": ["text"]}],
@@ -128,6 +133,7 @@ def create_router(deps) -> APIRouter:
         return {"settings": safe, "status": {
             "configured": bool(settings.ai_api_key),
             "usage": runtime.services.ai.usage_snapshot(),
+            "detected_protocols": runtime.services.ai.detected_protocols(),
         }}
 
     @router.put("/api/ai/settings", dependencies=[Depends(require_admin)])
@@ -139,6 +145,16 @@ def create_router(deps) -> APIRouter:
         value.setdefault("timeout_seconds", 60)
         value.setdefault("image_timeout_seconds", 300)
         value.setdefault("max_concurrency", 3)
+        providers = value.get("providers", [])
+        if not isinstance(providers, list):
+            raise HTTPException(status_code=400, detail="AI 服务商列表格式不正确")
+        for provider in providers:
+            if not isinstance(provider, dict):
+                raise HTTPException(status_code=400, detail="AI 服务商配置格式不正确")
+            requested_format = str(provider.get("api_format") or "auto").strip().lower().replace("-", "_")
+            if requested_format not in API_FORMATS:
+                raise HTTPException(status_code=400, detail="AI 接口格式不受支持")
+            provider["api_format"] = normalize_api_format(requested_format)
         old_keys = {str(item.get("id")): str(item.get("api_key") or "")
                     for item in settings.ai_settings.get("providers", []) if isinstance(item, dict)}
         for provider in value.get("providers", []):
@@ -170,7 +186,20 @@ def create_router(deps) -> APIRouter:
             "base_url": settings.ai_base_url,
             "model": settings.ai_model,
             "usage": runtime.services.ai.usage_snapshot(),
+            "detected_protocols": runtime.services.ai.detected_protocols(),
         }
+
+    @router.get("/api/ai/usage/recent", dependencies=[Depends(require_admin)])
+    async def ai_usage_recent(limit: int = 50):
+        return {"items": runtime.services.ai.usage.recent(limit)}
+
+    @router.get("/api/ai/usage/plugins", dependencies=[Depends(require_admin)])
+    async def ai_usage_plugins():
+        return {"items": runtime.services.ai.usage.plugin_summary()}
+
+    @router.delete("/api/ai/usage/recent", dependencies=[Depends(require_admin)])
+    async def clear_ai_usage_recent():
+        return {"ok": True, "removed": runtime.services.ai.usage.clear_recent()}
 
     @router.post("/api/ai/test", dependencies=[Depends(require_admin)])
     async def test_ai_capability(request: Request):

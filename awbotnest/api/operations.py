@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from .. import __version__
@@ -45,8 +45,31 @@ def create_router(deps, list_plugins) -> APIRouter:
     resource_sampler = deps.resource_sampler
 
     @router.get("/api/health")
-    async def health():
-        return {"ok": True, "mode": "telegram" if settings.telegram_configured else "standalone"}
+    async def health(request: Request):
+        return {"ok": True, "ready": bool(getattr(request.app.state, "platform_ready", False)),
+                "mode": "telegram" if settings.telegram_configured else "standalone"}
+
+    @router.get("/healthz", include_in_schema=False)
+    async def liveness():
+        return {"ok": True, "status": "alive"}
+
+    @router.get("/readyz", include_in_schema=False)
+    async def readiness(request: Request):
+        ready = bool(getattr(request.app.state, "platform_ready", False))
+        detail = str(getattr(request.app.state, "platform_startup_error", ""))
+        payload = {
+            "ok": ready,
+            "status": "ready" if ready else "starting",
+            "components": {
+                "configuration": True,
+                "scheduler": bool(getattr(scheduler.scheduler, "running", False)),
+                "plugin_runtime": ready,
+            },
+        }
+        if detail:
+            payload["status"] = "failed"
+            payload["detail"] = detail
+        return JSONResponse(payload, status_code=200 if ready else 503)
 
     @router.get("/api/self-check", dependencies=[Depends(require_admin)])
     async def self_check():
@@ -189,12 +212,26 @@ def create_router(deps, list_plugins) -> APIRouter:
         return {"ok": True, "restart_required": True, "staged_files": 2}
 
     @router.post("/api/system/restore", dependencies=[Depends(require_admin)])
-    async def system_restore(file: UploadFile = File(...)):
+    async def system_restore(file: UploadFile = File(...), preview_digest: str = Form(""),
+                             current_digest: str = Form("")):
         try:
-            BackupManager.stage(await file.read(MAX_BACKUP_SIZE + 1))
+            content = await file.read(MAX_BACKUP_SIZE + 1)
+            if not preview_digest or not current_digest:
+                raise ValueError("请先预览配置变更")
+            rollback = await asyncio.to_thread(BackupManager.create)
+            BackupManager.stage(content, expected_digest=preview_digest,
+                                expected_current_digest=current_digest)
         except (ValueError, OSError, zipfile.BadZipFile) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        return {"ok": True, "restart_required": True, "staged_files": 2}
+        return {"ok": True, "restart_required": True, "staged_files": 2,
+                "pre_restore_backup": rollback.name}
+
+    @router.post("/api/system/restore/preview", dependencies=[Depends(require_admin)])
+    async def system_restore_preview(file: UploadFile = File(...)):
+        try:
+            return BackupManager.preview(await file.read(MAX_BACKUP_SIZE + 1))
+        except (ValueError, OSError, zipfile.BadZipFile) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @router.get("/api/backups/{filename}", dependencies=[Depends(require_admin)])
     async def download_backup(filename: str):

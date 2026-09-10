@@ -21,14 +21,16 @@ config.json
 __pycache__/
 *.py[cod]
 *$py.class
+/tests/
 .venv/
 env/
 venv/
-tests/
 
 # 前端构建产物与依赖
 frontend/node_modules/
 frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
 static/
 .DS_Store
 Thumbs.db
