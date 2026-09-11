@@ -57,6 +57,8 @@ let pluginPageMounted = false
 // 三点下拉菜单：记录当前展开菜单的插件 id
 const menuFor = ref(null)
 const menuAlignRight = ref(false)   // 靠近右边界时菜单改为向左展开
+const menuOpenAbove = ref(false)     // 下方空间不足时，菜单贴着按钮上方展开
+let menuWrap = null
 const configScopeDropdown = ref('')
 const configScopeMenuStyle = ref({})
 let configScopeTrigger = null
@@ -98,19 +100,38 @@ function toggleConfigScopeDropdown(type, event) {
 }
 
 function toggleMenu(p, ev) {
-  if (menuFor.value === p.id) { menuFor.value = null; return }
+  if (menuFor.value === p.id) { closeMenu(); return }
   menuAlignRight.value = false
+  menuOpenAbove.value = false
   menuFor.value = p.id
-  // 展开后测量是否会超出视口右边界，会则贴着按钮左侧展开
-  const wrap = ev?.currentTarget?.closest('.kebab-wrap')
+  // 展开后测量可用空间：右边界和底部空间分别独立判断。
+  menuWrap = ev?.currentTarget?.closest('.kebab-wrap') || null
   nextTick(() => {
-    const menu = wrap?.querySelector('.dropdown')
+    const menu = menuWrap?.querySelector('.dropdown')
     if (!menu) return
-    const r = menu.getBoundingClientRect()
-    if (r.right > window.innerWidth - 8) menuAlignRight.value = true
+    positionMenu()
   })
 }
-function closeMenu() { menuFor.value = null }
+function positionMenu() {
+  if (!menuFor.value || !menuWrap?.isConnected) return
+  const menu = menuWrap.querySelector('.dropdown')
+  const trigger = menuWrap.querySelector('.kebab')
+  if (!menu || !trigger) return
+  const menuRect = menu.getBoundingClientRect()
+  const triggerRect = trigger.getBoundingClientRect()
+  const viewportGap = 8
+  const availableBelow = window.innerHeight - triggerRect.bottom - viewportGap
+  const availableAbove = triggerRect.top - viewportGap
+  // 只有下方放不下，且上方确实有更多空间时才翻转。
+  menuOpenAbove.value = availableBelow < menuRect.height && availableAbove > availableBelow
+  menuAlignRight.value = menuRect.right > window.innerWidth - viewportGap
+}
+function closeMenu() {
+  menuFor.value = null
+  menuOpenAbove.value = false
+  menuAlignRight.value = false
+  menuWrap = null
+}
 function useFallbackPluginIcon(event) {
   const image = event?.currentTarget
   if (!image || image.dataset.fallbackApplied === '1') return
@@ -1234,6 +1255,8 @@ onMounted(() => {
   document.addEventListener('click', closePageDropdowns)
   window.addEventListener('resize', positionConfigScopeMenu)
   window.addEventListener('scroll', positionConfigScopeMenu, true)
+  window.addEventListener('resize', positionMenu)
+  window.addEventListener('scroll', positionMenu, true)
   window.addEventListener('keydown', onSearchHotkey)
   stopNotificationSync = subscribeNotificationSync((change) => {
     if (change.source === notificationSyncSource || !configOpen.value || configBotSaving.value) return
@@ -1250,6 +1273,8 @@ onUnmounted(() => {
   document.removeEventListener('click', closePageDropdowns)
   window.removeEventListener('resize', positionConfigScopeMenu)
   window.removeEventListener('scroll', positionConfigScopeMenu, true)
+  window.removeEventListener('resize', positionMenu)
+  window.removeEventListener('scroll', positionMenu, true)
   window.removeEventListener('keydown', onSearchHotkey)
 })
 </script>
@@ -1395,7 +1420,8 @@ onUnmounted(() => {
                   <circle cx="12" cy="19" r="1"/>
                 </svg>
               </button>
-              <div v-if="menuFor === p.id" class="dropdown" :class="{ 'align-right': menuAlignRight }" @click.stop>
+              <div v-if="menuFor === p.id" class="dropdown"
+                   :class="{ 'align-right': menuAlignRight, 'open-above': menuOpenAbove }" @click.stop>
                 <button class="menu-item" @click.stop="openConfig(p)">
                   <svg class="mi-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg> 配置
                 </button>
@@ -2038,6 +2064,8 @@ onUnmounted(() => {
 .plugin-card::before { content: ''; position: absolute; left: 20px; right: 20px; top: -1px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, rgba(48,128,240,0), rgba(48,128,240,.48), rgba(16,176,128,.34), rgba(16,176,128,0)); opacity: .28; transition: opacity .2s ease; }
 .plugin-card:hover::before { opacity: .95; }
 .plugin-card:hover {
+  position: relative;
+  z-index: 130;
   border-color: var(--border-light);
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   transform: translateY(-2px);
@@ -2056,7 +2084,7 @@ onUnmounted(() => {
   border-color: rgba(224, 72, 79, .48);
   box-shadow: inset 0 0 0 1px rgba(224, 72, 79, .08);
 }
-.kebab-wrap { margin-left: auto; position: relative; }
+.kebab-wrap { margin-left: auto; position: relative; z-index: 130; }
 .plugin-card.clickable .heat-count { margin-left: auto; }
 .plugin-card.clickable .kebab-wrap { margin-left: 0; }
 .store-card .heat-count { margin-left: auto; }
@@ -2104,6 +2132,11 @@ onUnmounted(() => {
   }
 }
 .dropdown.align-right { left: auto; right: 0; }
+.dropdown.open-above {
+  top: auto;
+  bottom: calc(100% + 6px);
+  transform-origin: bottom;
+}
 .menu-item {
   display: flex; align-items: center; gap: 9px;
   width: 100%; padding: 9px 11px; border: none; background: transparent;

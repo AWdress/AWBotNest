@@ -379,6 +379,34 @@ test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {
   await expect(input).toBeHidden()
 })
 
+test('插件三点菜单只在底部空间不足时向上展开', async ({ page }) => {
+  const lowerPlugin = {
+    ...configurablePlugin,
+    id: 'mobile_bottom_menu_test',
+    name: '底部菜单测试',
+    description: '用于验证菜单按视口空间自动翻转',
+  }
+  await page.route('**/api/plugins', (route) => json(route, {
+    plugins: [configurablePlugin, lowerPlugin],
+  }))
+  await page.goto('/#/plugins')
+  const cards = page.locator('.plugin-card')
+  await expect(cards).toHaveCount(2)
+
+  const upperMenu = cards.first().getByRole('button', { name: '更多' })
+  await upperMenu.click()
+  await expect(cards.first().locator('.dropdown')).toBeVisible()
+  await expect(cards.first().locator('.dropdown')).not.toHaveClass(/open-above/)
+  // 通过同一个触发按钮关闭，避免点击页面右下角的悬浮搜索按钮。
+  await upperMenu.click()
+  await expect(cards.first().locator('.dropdown')).toBeHidden()
+
+  const lowerCard = cards.last()
+  await lowerCard.scrollIntoViewIfNeeded()
+  await lowerCard.getByRole('button', { name: '更多' }).click()
+  await expect(lowerCard.locator('.dropdown')).toHaveClass(/open-above/)
+})
+
 test('iPhone 17 横屏仍可使用顶部与底部菜单', async ({ page }) => {
   await page.setViewportSize({ width: 874, height: 402 })
   await page.goto('/#/settings')
