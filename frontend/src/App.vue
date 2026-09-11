@@ -540,7 +540,7 @@ onUnmounted(() => {
 .page-heading > span { color: #60a5fa; font-size: 10px; line-height: 1; letter-spacing: .11em; font-weight: 700; }
 .topbar h1 { margin-top: 6px; font-size: 21px; line-height: 1; font-weight: 780; letter-spacing: .1px; }
 .content {
-  flex: 1; overflow-y: auto; padding: 28px 32px 34px; position: relative;
+  flex: 1; overflow-x: hidden; overflow-y: auto; padding: 28px 32px 34px; position: relative;
   background-image: radial-gradient(circle at center, rgba(80, 121, 172, .075) 0 1px, transparent 1.2px);
   background-size: 28px 28px;
   background-position: 3px 4px;
@@ -574,6 +574,11 @@ onUnmounted(() => {
   .content {
     padding: 16px max(14px, env(safe-area-inset-right)) calc(92px + env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left));
     overscroll-behavior-y: contain;
+    touch-action: pan-y;
+  }
+  .content.route-settings {
+    padding-right: max(8px, env(safe-area-inset-right));
+    padding-left: max(8px, env(safe-area-inset-left));
   }
   .tabbar {
     display: flex; position: fixed;

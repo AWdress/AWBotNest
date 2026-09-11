@@ -34,6 +34,12 @@ const aiSettings = {
   plugin_permissions: {}, timeout_seconds: 60, image_timeout_seconds: 300, max_concurrency: 3,
 }
 
+const configurablePlugin = {
+  id: 'mobile_config_test', name: '手机配置测试', version: '1.0.0', enabled: true,
+  description: '用于验证手机端插件配置弹窗', scope: 'standalone', render_mode: 'schema',
+  author: 'AWBotNest', tags: ['测试'], error: '',
+}
+
 function json(route, body) {
   return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
 }
@@ -81,7 +87,15 @@ test.beforeEach(async ({ page }) => {
       usage: { total: 8, succeeded: 7, failed: 1, active: 0,
         input_tokens: 1200, output_tokens: 340, total_tokens: 1540 },
     })
-    if (path === '/api/plugins') return json(route, { plugins: [] })
+    if (path === '/api/plugins') return json(route, { plugins: [configurablePlugin] })
+    if (path === '/api/plugins/mobile_config_test/config') return json(route, {
+      schema: { enabled: { type: 'boolean', label: '启用测试功能' } },
+      values: { enabled: true }, render_mode: 'schema', has_frontend: false,
+    })
+    if (path === '/api/bots/routing') return json(route, {
+      bots: [{ id: 'default', name: '主要通知渠道', type: 'telegram', is_default: true }],
+      plugins: [],
+    })
     if (path === '/api/accounts') return json(route, { accounts: [] })
     if (path === '/api/logs/recent') return json(route, { logs: [] })
     return json(route, {})
@@ -105,6 +119,7 @@ async function expectInsideViewport(page) {
 
 test('iPhone 17 外壳保留悬浮导航且内容不被遮挡', async ({ page }) => {
   await page.goto('/#/status')
+  await expect(page.locator('meta[name="mobile-web-app-capable"]')).toHaveAttribute('content', 'yes')
   const dock = page.locator('[data-mobile-navigation-dock]')
   await expect(dock).toBeVisible()
   await expect(page.locator('[data-app-topbar]')).toBeVisible()
@@ -197,7 +212,97 @@ test('iPhone 17 完整显示 AI 服务、协议和调用明细', async ({ page }
   await expect(page.getByText(/当前识别为 Responses/)).toBeVisible()
   await expect(page.getByText('多站签到', { exact: true })).toBeVisible()
   await expect(page.getByLabel('筛选调用状态')).toBeVisible()
+  const horizontal = await page.evaluate(() => {
+    const content = document.querySelector('[data-app-content]')
+    const settings = document.querySelector('.settings-page')
+    const overview = document.querySelector('.ai-overview')
+    const contentBox = content.getBoundingClientRect()
+    return {
+      contentClientWidth: content.clientWidth,
+      contentScrollWidth: content.scrollWidth,
+      contentOverflowX: getComputedStyle(content).overflowX,
+      settingsClientWidth: settings.clientWidth,
+      settingsScrollWidth: settings.scrollWidth,
+      outerGap: overview.getBoundingClientRect().left - contentBox.left,
+    }
+  })
+  expect(horizontal.contentOverflowX).toBe('hidden')
+  expect(horizontal.contentScrollWidth).toBeLessThanOrEqual(horizontal.contentClientWidth)
+  expect(horizontal.settingsScrollWidth).toBeLessThanOrEqual(horizontal.settingsClientWidth)
+  expect(horizontal.outerGap).toBeLessThanOrEqual(10)
   await expectInsideViewport(page)
+})
+
+test('iPhone 17 主题选项悬浮在主题菜单正下方', async ({ page }) => {
+  await page.goto('/#/settings')
+  await page.getByTitle('管理员菜单').click()
+  await page.locator('.theme-trigger').click()
+  const submenu = page.locator('.theme-submenu')
+  await expect(submenu).toBeVisible()
+  const layout = await page.evaluate(() => {
+    const submenu = document.querySelector('.theme-submenu')
+    const trigger = document.querySelector('.theme-trigger')
+    const userMenu = document.querySelector('.user-pop')
+    const submenuBox = submenu.getBoundingClientRect()
+    const triggerBox = trigger.getBoundingClientRect()
+    const menuBox = userMenu.getBoundingClientRect()
+    const centerElement = document.elementFromPoint(
+      submenuBox.left + submenuBox.width / 2,
+      submenuBox.top + submenuBox.height / 2,
+    )
+    return {
+      position: getComputedStyle(submenu).position,
+      overflowY: getComputedStyle(userMenu).overflowY,
+      triggerBottom: triggerBox.bottom,
+      submenuTop: submenuBox.top,
+      submenuLeft: submenuBox.left,
+      submenuRight: submenuBox.right,
+      submenuVisibleOnTop: submenu.contains(centerElement),
+      menuTop: menuBox.top,
+      menuBottom: menuBox.bottom,
+      viewportWidth: innerWidth,
+      viewportHeight: innerHeight,
+    }
+  })
+  expect(layout.position).toBe('absolute')
+  expect(layout.overflowY).toBe('auto')
+  expect(layout.submenuTop).toBeGreaterThanOrEqual(layout.triggerBottom + 5)
+  expect(layout.submenuTop).toBeLessThanOrEqual(layout.triggerBottom + 7)
+  expect(layout.submenuLeft).toBeGreaterThanOrEqual(0)
+  expect(layout.submenuRight).toBeLessThanOrEqual(layout.viewportWidth)
+  expect(layout.submenuVisibleOnTop).toBe(true)
+  expect(layout.menuTop).toBeGreaterThanOrEqual(0)
+  expect(layout.menuBottom).toBeLessThanOrEqual(layout.viewportHeight)
+})
+
+test('iPhone 17 插件配置关闭按钮避开顶部安全区且易于点击', async ({ page }) => {
+  await page.goto('/#/plugins')
+  await page.getByText('手机配置测试', { exact: true }).click()
+  const modal = page.locator('.modal.modal-wide')
+  const close = modal.getByRole('button', { name: '关闭' })
+  await expect(modal).toBeVisible()
+  await expect(close).toBeVisible()
+  const geometry = await page.evaluate(() => {
+    const modal = document.querySelector('.modal.modal-wide')
+    const close = modal.querySelector('.modal-head .close')
+    const modalBox = modal.getBoundingClientRect()
+    const closeBox = close.getBoundingClientRect()
+    return {
+      width: closeBox.width,
+      height: closeBox.height,
+      topGap: closeBox.top - modalBox.top,
+      closeTop: closeBox.top,
+      closeRight: closeBox.right,
+      viewportWidth: innerWidth,
+    }
+  })
+  expect(geometry.width).toBeGreaterThanOrEqual(44)
+  expect(geometry.height).toBeGreaterThanOrEqual(44)
+  expect(geometry.topGap).toBeGreaterThanOrEqual(8)
+  expect(geometry.closeTop).toBeGreaterThanOrEqual(0)
+  expect(geometry.closeRight).toBeLessThanOrEqual(geometry.viewportWidth)
+  await close.click()
+  await expect(modal).toBeHidden()
 })
 
 test('iPhone 17 横屏仍可使用顶部与底部菜单', async ({ page }) => {

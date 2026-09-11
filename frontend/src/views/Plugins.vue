@@ -3002,7 +3002,19 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .modal.modal-wide {
     width: 100vw !important; max-width: 100vw !important;
     height: 100dvh !important; max-height: 100dvh !important;
+    padding-top: max(var(--modal-pad), calc(env(safe-area-inset-top) + 8px));
+    padding-bottom: max(var(--modal-pad), env(safe-area-inset-bottom));
     border-radius: 0;
+  }
+  .modal.modal-wide .modal-head .close {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    justify-content: center;
+    padding: 0;
+    margin: -6px -6px -6px 6px;
+    border-radius: 12px;
+    touch-action: manipulation;
   }
 }
 </style>

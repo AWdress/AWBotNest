@@ -1628,7 +1628,7 @@ onBeforeRouteLeave(async () => {
     </div>
 
     <div v-if="loading" class="muted center">加载中…</div>
-    <div v-else-if="s" class="panel">
+    <div v-else-if="s" class="panel" :class="{ 'panel-ai': tab === 'ai' }">
       <div v-if="err" class="alert err">{{ err }}</div>
       <!-- 保存后需重启：给一键重启入口 -->
       <div v-if="restartHint" class="restart-banner">
@@ -4153,6 +4153,7 @@ onBeforeRouteLeave(async () => {
 @media (max-width: 768px) {
   .settings-page,
   .toolbar { min-width: 0; width: 100%; }
+  .settings-page { max-width: 100%; overflow-x: clip; }
   .toolbar { flex-direction: column; align-items: stretch; gap: 12px; }
   .toolbar > .row { width: 100%; flex-wrap: wrap; }
   .toolbar > .row .btn { flex: 1 1 140px; }
@@ -4165,7 +4166,8 @@ onBeforeRouteLeave(async () => {
     width: 100%; min-width: 0; min-height: 44px; justify-content: center;
     padding: 8px 6px; white-space: nowrap; font-size: 13px;
   }
-  .panel { max-width: 100%; }
+  .panel { min-width: 0; max-width: 100%; overflow-x: clip; }
+  .panel-ai > .card { min-width: 0; width: 100%; padding-right: 10px; padding-left: 10px; }
   .ai-library-toolbar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ai-activity-head { align-items: stretch; flex-direction: column; }
   .ai-activity-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; width: 100%; }
@@ -4176,6 +4178,7 @@ onBeforeRouteLeave(async () => {
     gap: 7px 10px;
     padding: 12px;
   }
+  .ai-call-row > * { min-width: 0; }
   .ai-call-status { grid-row: 1 / span 2; }
   .ai-call-identity { grid-column: 2; }
   .ai-call-transport { grid-column: 2; }

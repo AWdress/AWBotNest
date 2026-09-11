@@ -14,6 +14,7 @@ from ..market import PluginMarket
 from ..open_api import register_open_api
 from ..resources import ResourceSampler
 from .accounts import create_router as accounts_router
+from .docs import register_api_docs
 from .operations import create_router as operations_router
 from .plugin_routes import create_router as plugin_routes_router
 from .plugins import create_router as plugins_router
@@ -38,7 +39,12 @@ class ApiDependencies:
 def create_app(settings: Settings, accounts, runtime, scheduler, routes,
                restart_event: asyncio.Event | None = None,
                market: PluginMarket | None = None) -> FastAPI:
-    app = FastAPI(title="AWBotNest API", version=__version__)
+    app = FastAPI(
+        title="AWBotNest API",
+        version=__version__,
+        docs_url=None,
+        redoc_url=None,
+    )
     app.state.platform_ready = False
     app.state.platform_startup_error = ""
     market = market or PluginMarket(settings)
@@ -52,6 +58,7 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
     app.include_router(accounts_router(deps))
     app.include_router(plugins_router(deps))
     app.include_router(operations_router(deps, list_plugins))
+    register_api_docs(app, __version__)
     static_dir = APP_ROOT / "static"
     if static_dir.exists():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="webui")

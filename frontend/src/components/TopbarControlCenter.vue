@@ -526,11 +526,13 @@ onUnmounted(() => {
         <div><small>管理员</small><strong>{{ profile.username }}</strong></div>
       </div>
       <div class="user-menu">
-        <button class="menu-action theme-trigger" @click.stop="themeSubmenu = !themeSubmenu"><span class="menu-action-icon">▦</span><span><b>主题</b><small>{{ themeMode === 'transparent' ? '透明 · 垂直' : '深色' }}</small></span><em>›</em></button>
-        <div v-if="themeSubmenu" class="theme-submenu">
-          <button class="theme-sub-action" @click.stop="openModal('theme')">✦　定制主题 <em>›</em></button>
-          <button class="theme-sub-action" :class="{ selected: themeMode === 'transparent' }" @click="themeMode='transparent'; saveAppearance()">◈　透明主题</button>
-          <button class="theme-sub-action" :class="{ selected: themeMode === 'dark' }" @click="themeMode='dark'; saveAppearance()">◐　深色主题</button>
+        <div class="theme-menu-group">
+          <button class="menu-action theme-trigger" @click.stop="themeSubmenu = !themeSubmenu"><span class="menu-action-icon">▦</span><span><b>主题</b><small>{{ themeMode === 'transparent' ? '透明 · 垂直' : '深色' }}</small></span><em>›</em></button>
+          <div v-if="themeSubmenu" class="theme-submenu">
+            <button class="theme-sub-action" @click.stop="openModal('theme')">✦　定制主题 <em>›</em></button>
+            <button class="theme-sub-action" :class="{ selected: themeMode === 'transparent' }" @click="themeMode='transparent'; saveAppearance()">◈　透明主题</button>
+            <button class="theme-sub-action" :class="{ selected: themeMode === 'dark' }" @click="themeMode='dark'; saveAppearance()">◐　深色主题</button>
+          </div>
         </div>
         <button class="menu-action" @click="goSettings"><span class="menu-action-icon">♙</span><span>个人信息</span></button>
         <button class="menu-action" @click.stop="openModal('about')"><span class="menu-action-icon">ⓘ</span><span>关于 AWBotNest</span></button>
@@ -757,11 +759,13 @@ onUnmounted(() => {
 .user-profile small, .user-profile strong { display: block; }
 .user-profile small { color: var(--accent); }
 .user-menu { display: grid; padding: 10px 12px 12px; }
+.theme-menu-group { position: relative; min-width: 0; }
+.theme-trigger { width: 100%; }
 .theme-trigger span:nth-child(2) { display: flex; flex: 1; flex-direction: column; gap: 1px; }
 .theme-trigger b { font-size: 14px; font-weight: 500; }
 .theme-trigger small { color: var(--text-secondary); font-size: 11px; }
 .theme-trigger em { color: var(--text-secondary); font-size: 24px; font-style: normal; line-height: 1; }
-.theme-submenu { position: absolute; top: 104px; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.92); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 2; }
+.theme-submenu { position: absolute; top: 0; right: calc(100% + 12px); width: 290px; padding: 12px; border: 1px solid var(--border-light); border-radius: 14px; background: rgba(13,22,35,.92); box-shadow: var(--shadow-float); backdrop-filter: blur(28px); -webkit-backdrop-filter: blur(28px); z-index: 5; }
 .theme-sub-action { width: 100%; display: flex; align-items: center; gap: 6px; padding: 12px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--text-primary); text-align: left; font: inherit; cursor: pointer; }
 .theme-sub-action em { margin-left: auto; font-size: 20px; font-style: normal; color: var(--text-secondary); }
 .theme-sub-action:hover, .theme-sub-action.selected { background: var(--bg-hover); color: var(--text-primary); }
@@ -947,21 +951,26 @@ onUnmounted(() => {
   .about-current { margin-left: 0; }
   .version-row { align-items: flex-start; flex-direction: column; }
   .version-row .btn { width: 100%; }
-  /* Keep the theme choices in the viewport instead of extending the user menu
-     below the fold on narrow phones. The panel overlays the menu rows while
-     retaining the same visual treatment as the desktop flyout. */
-  .theme-submenu {
+  .control-pop.user-pop {
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  /* 手机端仍使用悬浮层，并直接锚定在“主题”按钮下方。 */
+  .user-pop .theme-submenu {
     position: absolute;
-    top: 104px;
-    left: 8px;
-    right: 8px;
+    top: calc(100% + 6px);
+    right: 0;
+    left: 35px;
     width: auto;
     max-width: none;
-    max-height: calc(100dvh - 180px);
+    max-height: none;
     margin: 0;
+    padding: 6px;
     box-sizing: border-box;
-    overflow-y: auto;
-    z-index: 3;
+    overflow: visible;
+    box-shadow: var(--shadow-float);
+    z-index: 6;
   }
 }
 </style>
