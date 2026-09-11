@@ -1924,7 +1924,9 @@ onUnmounted(() => {
               <input class="input" v-model="r.url"
                      placeholder="例如 AWdress/AWBotNest-Plugins"
                      @blur="normalizeRepoRow(r)" />
-              <button class="btn sm btn-danger" @click="delRepo(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+              <button type="button" class="btn sm btn-danger repo-delete"
+                      :aria-label="`删除第 ${i + 1} 个仓库`" :title="`删除第 ${i + 1} 个仓库`"
+                      @click="delRepo(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
             <div class="hint muted">仓库名必须是 AWBotNest-Plugins，例如 AWdress/AWBotNest-Plugins。</div>
@@ -2626,8 +2628,9 @@ onUnmounted(() => {
   color: var(--text-muted);
   font-size: 12px;
 }
-.repo-row { display: flex; gap: 8px; margin-bottom: 8px; }
-.repo-row .input { flex: 1; }
+.repo-row { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; margin-bottom: 8px; }
+.repo-row .input { min-width: 0; width: 100%; }
+.repo-delete { width: 40px; height: 40px; min-width: 40px; padding: 0; justify-content: center; }
 
 /* Webhook 区（配置弹窗内） */
 .webhook-box {
@@ -2977,8 +2980,8 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .grid { grid-template-columns: 1fr; }
   .grid.compact { grid-template-columns: 1fr; }
   .plugin-card, .grid.compact .plugin-card { min-height: 0; padding: 15px; }
-  .repo-row { flex-wrap: wrap; }
-  .repo-row .btn { flex: 1 1 120px; }
+  .repo-row { grid-template-columns: minmax(0, 1fr) 44px; }
+  .repo-delete { width: 44px; height: 44px; min-width: 44px; }
   .modal { --modal-pad: 14px; }
   .plugin-search-fab { right: 16px; bottom: 82px; width: 52px; height: 52px; border-radius: 16px; }
   .search-modal {

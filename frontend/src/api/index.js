@@ -221,6 +221,7 @@ export const api = {
   getAiStatus: () => request('GET', '/api/ai/status'),
   getAiUsageRecent: (limit = 50) => request('GET', `/api/ai/usage/recent?limit=${limit}`),
   getAiUsagePlugins: () => request('GET', '/api/ai/usage/plugins'),
+  getAiUsageOverview: (limit = 20) => request('GET', `/api/ai/usage/overview?limit=${limit}`),
   clearAiUsageRecent: () => request('DELETE', '/api/ai/usage/recent'),
   getCookieSettings: () => request('GET', '/api/cookies/settings'),
   saveCookieSettings: (settings) => request('PUT', '/api/cookies/settings', { settings }),

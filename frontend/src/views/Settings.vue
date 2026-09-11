@@ -7,6 +7,7 @@ import { confirm } from '../composables/confirm'
 import { applyUiProfile, uiProfile } from '../composables/uiProfile'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 import SecretInput from '../components/SecretInput.vue'
+import { Sparkles } from '@lucide/vue'
 
 const tab = ref('login')   // login | notify | ai | cookies | api | system | maint
 
@@ -42,12 +43,18 @@ const dirty = computed(() => !!s.value && JSON.stringify(s.value) !== savedSnap.
 const ai = ref(null)
 const aiSavedSnap = ref('')
 const aiLoading = ref(false)
+const aiLoadError = ref('')
 const aiSaving = ref(false)
 const aiStatus = ref(null)
 const aiPlugins = ref([])
+const aiPluginsLoading = ref(false)
+const aiPluginsError = ref('')
 const aiRecent = ref([])
 const aiPluginSummary = ref([])
 const aiUsageLoading = ref(false)
+const aiUsageError = ref('')
+const aiUsageLimit = ref(20)
+const aiUsageTotal = ref(0)
 const aiUsageStatus = ref('all')
 const aiModels = ref({})
 const aiModelSearch = ref('')
@@ -104,7 +111,9 @@ function formatAiTime(value) {
 const filteredAiRecent = computed(() => aiRecent.value.filter((item) =>
   aiUsageStatus.value === 'all' || item.status === aiUsageStatus.value
 ))
+const aiUsageHasMore = computed(() => aiRecent.value.length < aiUsageTotal.value)
 let aiStatusTimer = null
+let aiLoadGeneration = 0
 const cookieSettings = ref(null)
 const cookieSavedSnap = ref('')
 const cookieLoading = ref(false)
@@ -259,20 +268,16 @@ function newAiModel(providerId = '') {
 }
 
 async function loadAiSettings() {
+  const generation = ++aiLoadGeneration
   aiLoading.value = true
+  aiLoadError.value = ''
   try {
-    const [configData, pluginData, recentData, pluginUsageData] = await Promise.all([
-      api.getAiSettings(),
-      api.listAiPlugins(),
-      api.getAiUsageRecent(),
-      api.getAiUsagePlugins(),
-    ])
+    const configData = await api.getAiSettings()
+    if (generation !== aiLoadGeneration) return
     ai.value = configData.settings
     ai.value.providers.forEach((provider) => { provider.api_format ||= 'auto' })
     aiStatus.value = configData.status || {}
-    aiPlugins.value = pluginData.plugins || []
-    aiRecent.value = recentData.items || []
-    aiPluginSummary.value = pluginUsageData.items || []
+    if (tab.value === 'ai') startAiStatusPolling()
     aiModels.value = {}
     aiModelSearch.value = ''
     aiSelectedModels.value = []
@@ -285,27 +290,77 @@ async function loadAiSettings() {
     aiModelPage.value = 1
     aiSavedSnap.value = JSON.stringify(ai.value)
   } catch (e) {
+    if (generation !== aiLoadGeneration) return
+    aiLoadError.value = e.message
     toast.error('读取 AI 设置失败：' + e.message)
   } finally {
-    aiLoading.value = false
+    if (generation === aiLoadGeneration) aiLoading.value = false
+  }
+  if (generation === aiLoadGeneration && ai.value) {
+    // Let Vue paint the editable configuration before starting non-critical requests.
+    window.requestAnimationFrame(() => {
+      if (generation !== aiLoadGeneration || tab.value !== 'ai') return
+      void loadAiPlugins()
+      void loadAiActivity(true)
+    })
+  }
+}
+
+async function loadAiPlugins() {
+  if (aiPluginsLoading.value) return
+  aiPluginsLoading.value = true
+  aiPluginsError.value = ''
+  try {
+    const data = await api.listAiPlugins()
+    aiPlugins.value = data.plugins || []
+  } catch (e) {
+    aiPluginsError.value = e.message
+  } finally {
+    aiPluginsLoading.value = false
+  }
+}
+
+async function loadAiActivity(reset = false) {
+  if (aiUsageLoading.value) return
+  if (reset) aiUsageLimit.value = 20
+  aiUsageLoading.value = true
+  aiUsageError.value = ''
+  try {
+    const data = await api.getAiUsageOverview(aiUsageLimit.value)
+    aiRecent.value = data.items || []
+    aiPluginSummary.value = data.plugins || []
+    aiUsageTotal.value = Number(data.total_items) || aiRecent.value.length
+  } catch (e) {
+    aiUsageError.value = e.message
+  } finally {
+    aiUsageLoading.value = false
   }
 }
 
 async function refreshAiUsage() {
   if (aiUsageLoading.value) return
   aiUsageLoading.value = true
+  aiUsageError.value = ''
   try {
-    const [status, recent, plugins] = await Promise.all([
-      api.getAiStatus(), api.getAiUsageRecent(), api.getAiUsagePlugins(),
+    const [status, overview] = await Promise.all([
+      api.getAiStatus(), api.getAiUsageOverview(aiUsageLimit.value),
     ])
     aiStatus.value = status
-    aiRecent.value = recent.items || []
-    aiPluginSummary.value = plugins.items || []
+    aiRecent.value = overview.items || []
+    aiPluginSummary.value = overview.plugins || []
+    aiUsageTotal.value = Number(overview.total_items) || aiRecent.value.length
   } catch (e) {
+    aiUsageError.value = e.message
     toast.error('刷新调用记录失败：' + e.message)
   } finally {
     aiUsageLoading.value = false
   }
+}
+
+async function loadMoreAiUsage() {
+  if (aiUsageLoading.value || !aiUsageHasMore.value) return
+  aiUsageLimit.value = Math.min(200, aiUsageLimit.value + 20)
+  await loadAiActivity()
 }
 
 async function clearAiUsage() {
@@ -320,6 +375,7 @@ async function clearAiUsage() {
     await api.clearAiUsageRecent()
     aiRecent.value = []
     aiPluginSummary.value = []
+    aiUsageTotal.value = 0
     toast.success('最近调用明细已清空')
   } catch (e) {
     toast.error('清空失败：' + e.message)
@@ -343,12 +399,12 @@ function stopAiStatusPolling() {
 
 function startAiStatusPolling() {
   stopAiStatusPolling()
-  refreshAiStatus()
+  // /api/ai/settings already includes a fresh status snapshot on first load.
   aiStatusTimer = window.setInterval(refreshAiStatus, 4000)
 }
 
 watch(tab, (value) => {
-  if (value === 'ai') startAiStatusPolling()
+  if (value === 'ai' && ai.value) startAiStatusPolling()
   else stopAiStatusPolling()
 })
 
@@ -1523,7 +1579,13 @@ const filteredRoutePlugins = computed(() => {
 function goTab(k) {
   tab.value = k
   if (k === 'notify' && routing.value.plugins.length === 0) loadRouting()
-  if (k === 'ai' && !ai.value && !aiLoading.value) loadAiSettings()
+  if (k === 'ai') {
+    if (!ai.value && !aiLoading.value) loadAiSettings()
+    else if (ai.value) {
+      void loadAiPlugins()
+      void loadAiActivity()
+    }
+  }
   if (k === 'cookies' && !cookieSettings.value && !cookieLoading.value) loadCookieSettings()
 }
 
@@ -1832,11 +1894,17 @@ onBeforeRouteLeave(async () => {
       <!-- AI 服务 -->
       <template v-if="tab === 'ai'">
         <div v-if="aiLoading" class="card center muted">正在读取 AI 设置…</div>
+        <div v-else-if="aiLoadError" class="card ai-inline-state error" role="alert">
+          <span>AI 设置读取失败：{{ aiLoadError }}</span>
+          <button type="button" class="btn sm" @click="loadAiSettings">重新加载</button>
+        </div>
         <template v-else-if="ai">
           <div class="card ai-overview">
             <div class="ai-overview-head">
               <div class="ai-overview-main">
-                <div class="ai-mark">AI</div>
+                <div class="ai-mark" aria-hidden="true">
+                  <Sparkles class="ai-mark-icon" :stroke-width="2" />
+                </div>
                 <div>
                   <div class="card-title">AI 服务</div>
                   <div class="hint muted">
@@ -1896,11 +1964,11 @@ onBeforeRouteLeave(async () => {
             </div>
           </div>
 
-          <div class="card ai-activity" style="margin-top:16px">
+          <div class="card ai-activity" style="margin-top:16px" :aria-busy="aiUsageLoading">
             <div class="row between ai-section-head ai-activity-head">
               <div>
                 <div class="card-title">最近调用</div>
-                <div class="hint muted">保留最近 200 次实际请求，可定位服务、模型、协议和失败原因。</div>
+                <div class="hint muted">保留最近 200 次实际请求，首屏按需加载 20 条，可定位服务、模型、协议和失败原因。</div>
               </div>
               <div class="row gap ai-activity-actions">
                 <select class="select" v-model="aiUsageStatus" aria-label="筛选调用状态">
@@ -1911,11 +1979,18 @@ onBeforeRouteLeave(async () => {
                 <button type="button" class="btn sm" @click="refreshAiUsage" :disabled="aiUsageLoading">
                   {{ aiUsageLoading ? '刷新中…' : '刷新' }}
                 </button>
-                <button type="button" class="btn sm" @click="clearAiUsage" :disabled="!aiRecent.length">清空</button>
+                <button type="button" class="btn sm" @click="clearAiUsage" :disabled="aiUsageLoading || !aiRecent.length">清空</button>
               </div>
             </div>
 
-            <div v-if="filteredAiRecent.length" class="ai-call-list">
+            <div v-if="aiUsageLoading && !aiRecent.length" class="ai-call-skeleton" aria-label="正在加载调用记录">
+              <i v-for="index in 3" :key="index"></i>
+            </div>
+            <div v-else-if="aiUsageError" class="ai-inline-state error" role="alert">
+              <span>调用记录加载失败：{{ aiUsageError }}</span>
+              <button type="button" class="btn sm" @click="loadAiActivity">重试</button>
+            </div>
+            <div v-else-if="filteredAiRecent.length" class="ai-call-list">
               <article v-for="(item, index) in filteredAiRecent" :key="`${item.timestamp}-${index}`"
                        class="ai-call-row" :class="item.status">
                 <span class="ai-call-status">{{ item.status === 'success' ? '成功' : '失败' }}</span>
@@ -1935,7 +2010,13 @@ onBeforeRouteLeave(async () => {
                 <time>{{ formatAiTime(item.timestamp) }}</time>
               </article>
             </div>
-            <div v-else class="ai-activity-empty">暂无符合条件的调用记录</div>
+            <div v-else-if="!aiUsageLoading" class="ai-activity-empty">暂无符合条件的调用记录</div>
+
+            <div v-if="aiUsageHasMore && !aiUsageError" class="ai-load-more">
+              <button type="button" class="btn sm" @click="loadMoreAiUsage" :disabled="aiUsageLoading">
+                {{ aiUsageLoading ? '加载中…' : `再加载 20 条（已显示 ${aiRecent.length}/${aiUsageTotal}）` }}
+              </button>
+            </div>
 
             <div v-if="aiPluginSummary.length" class="ai-plugin-usage">
               <div class="ai-plugin-usage-title">插件调用汇总</div>
@@ -2278,7 +2359,14 @@ onBeforeRouteLeave(async () => {
           <div class="card" style="margin-top:16px">
             <div class="card-title">插件 AI 设置</div>
             <div class="hint muted">可以控制插件使用哪些 AI 能力，并为每种能力指定模型；留空则跟随默认设置。</div>
-            <div v-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无使用 AI 的插件</div>
+            <div v-if="aiPluginsLoading && !aiPlugins.length" class="ai-plugin-skeleton" aria-label="正在识别使用 AI 的插件">
+              <i v-for="index in 2" :key="index"></i>
+            </div>
+            <div v-else-if="aiPluginsError" class="ai-inline-state error" role="alert">
+              <span>插件识别失败：{{ aiPluginsError }}</span>
+              <button type="button" class="btn sm" @click="loadAiPlugins">重试</button>
+            </div>
+            <div v-else-if="aiPlugins.length === 0" class="muted center" style="padding:20px">暂无使用 AI 的插件</div>
             <div v-else class="ai-permission-list">
               <div v-for="plugin in aiPlugins" :key="plugin.id" class="ai-permission-row">
                 <div class="ai-permission-head">
@@ -3609,11 +3697,10 @@ onBeforeRouteLeave(async () => {
   flex: 0 0 auto;
   border-radius: 14px;
   color: #fff;
-  font-weight: 800;
-  letter-spacing: -.04em;
   background: linear-gradient(135deg, #3080f0, #10b080);
   box-shadow: 0 10px 28px rgba(48,128,240,.28);
 }
+.ai-mark-icon { width: 25px; height: 25px; }
 .ai-config-state {
   display: inline-flex;
   align-items: center;
@@ -3730,6 +3817,39 @@ onBeforeRouteLeave(async () => {
 }
 .ai-activity { min-width: 0; }
 .ai-activity-actions .select { width: 124px; min-height: 36px; padding-top: 6px; padding-bottom: 6px; }
+.ai-inline-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 68px;
+  padding: 14px;
+  border: 1px dashed var(--border-light);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.ai-inline-state.error { color: var(--danger); }
+.ai-call-skeleton,
+.ai-plugin-skeleton {
+  display: grid;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--border);
+}
+.ai-call-skeleton i,
+.ai-plugin-skeleton i {
+  display: block;
+  min-height: 62px;
+  background: linear-gradient(100deg, var(--bg-elevated) 20%, rgba(78,88,108,.32) 45%, var(--bg-elevated) 70%);
+  background-size: 220% 100%;
+  animation: ai-skeleton-flow 1.35s ease-in-out infinite;
+}
+.ai-plugin-skeleton { margin-top: 14px; }
+.ai-plugin-skeleton i { min-height: 76px; }
+@keyframes ai-skeleton-flow { to { background-position: -120% 0; } }
 .ai-call-list {
   max-height: 430px;
   overflow-y: auto;
@@ -3784,6 +3904,7 @@ onBeforeRouteLeave(async () => {
   color: var(--text-muted);
   font-size: 12px;
 }
+.ai-load-more { display: flex; justify-content: center; margin-top: 12px; }
 .ai-plugin-usage { margin-top: 16px; }
 .ai-plugin-usage-title { margin-bottom: 9px; color: var(--text-secondary); font-size: 11px; font-weight: 650; }
 .ai-plugin-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
@@ -4172,6 +4293,8 @@ onBeforeRouteLeave(async () => {
   .ai-activity-head { align-items: stretch; flex-direction: column; }
   .ai-activity-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; width: 100%; }
   .ai-activity-actions .select { width: 100%; }
+  .ai-inline-state { align-items: stretch; flex-direction: column; }
+  .ai-inline-state .btn { width: 100%; }
   .ai-call-list { max-height: 480px; }
   .ai-call-row {
     grid-template-columns: auto minmax(0, 1fr) auto;
@@ -4203,5 +4326,10 @@ onBeforeRouteLeave(async () => {
   .input-action .btn { width: 100%; }
   .route-row { align-items: stretch; flex-direction: column; }
   .route-sel { width: 100%; max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-call-skeleton i,
+  .ai-plugin-skeleton i { animation: none; }
 }
 </style>

@@ -197,6 +197,11 @@ def create_router(deps) -> APIRouter:
     async def ai_usage_plugins():
         return {"items": runtime.services.ai.usage.plugin_summary()}
 
+    @router.get("/api/ai/usage/overview", dependencies=[Depends(require_admin)],
+                summary="AI 调用明细概览")
+    async def ai_usage_overview(limit: int = 20):
+        return runtime.services.ai.usage.overview(limit)
+
     @router.delete("/api/ai/usage/recent", dependencies=[Depends(require_admin)])
     async def clear_ai_usage_recent():
         return {"ok": True, "removed": runtime.services.ai.usage.clear_recent()}

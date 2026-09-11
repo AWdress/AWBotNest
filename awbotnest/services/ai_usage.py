@@ -146,32 +146,46 @@ class AIUsageTracker:
         with self._lock:
             return [dict(item) for item in reversed(self._data.get("recent", []))][:max(1, min(limit, 200))]
 
+    def _plugin_summary(self, recent: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        groups: dict[str, dict[str, Any]] = {}
+        for item in recent:
+            plugin_id = str(item.get("plugin_id") or "")
+            if not plugin_id:
+                continue
+            group = groups.setdefault(plugin_id, {
+                "plugin_id": plugin_id,
+                "name": str(item.get("source") or plugin_id).removeprefix("插件:"),
+                "calls": 0, "succeeded": 0, "failed": 0,
+                "fallbacks": 0, "latency_total": 0, "total_tokens": 0,
+            })
+            group["calls"] += 1
+            group["succeeded" if item.get("status") == "success" else "failed"] += 1
+            group["fallbacks"] += int(bool(item.get("used_fallback")))
+            group["latency_total"] += self._counter(item.get("latency_ms"))
+            group["total_tokens"] += self._counter(item.get("total_tokens"))
+        result = []
+        for group in groups.values():
+            calls = max(1, int(group.pop("calls")))
+            latency_total = int(group.pop("latency_total"))
+            group["calls"] = calls
+            group["avg_latency_ms"] = round(latency_total / calls)
+            result.append(group)
+        return sorted(result, key=lambda item: (-int(item["calls"]), str(item["name"])))
+
     def plugin_summary(self) -> list[dict[str, Any]]:
         with self._lock:
-            groups: dict[str, dict[str, Any]] = {}
-            for item in self._data.get("recent", []):
-                plugin_id = str(item.get("plugin_id") or "")
-                if not plugin_id:
-                    continue
-                group = groups.setdefault(plugin_id, {
-                    "plugin_id": plugin_id,
-                    "name": str(item.get("source") or plugin_id).removeprefix("插件:"),
-                    "calls": 0, "succeeded": 0, "failed": 0,
-                    "fallbacks": 0, "latency_total": 0, "total_tokens": 0,
-                })
-                group["calls"] += 1
-                group["succeeded" if item.get("status") == "success" else "failed"] += 1
-                group["fallbacks"] += int(bool(item.get("used_fallback")))
-                group["latency_total"] += self._counter(item.get("latency_ms"))
-                group["total_tokens"] += self._counter(item.get("total_tokens"))
-            result = []
-            for group in groups.values():
-                calls = max(1, int(group.pop("calls")))
-                latency_total = int(group.pop("latency_total"))
-                group["calls"] = calls
-                group["avg_latency_ms"] = round(latency_total / calls)
-                result.append(group)
-            return sorted(result, key=lambda item: (-int(item["calls"]), str(item["name"])))
+            return self._plugin_summary(self._data.get("recent", []))
+
+    def overview(self, limit: int = 20) -> dict[str, Any]:
+        """Return recent calls and their plugin aggregation from one snapshot."""
+        safe_limit = max(1, min(limit, _RECENT_LIMIT))
+        with self._lock:
+            recent = self._data.get("recent", [])
+            return {
+                "items": [dict(item) for item in reversed(recent[-safe_limit:])],
+                "plugins": self._plugin_summary(recent),
+                "total_items": len(recent),
+            }
 
     def clear_recent(self) -> int:
         with self._lock:

@@ -18,7 +18,7 @@ const settings = {
   PIP_INDEX_URL: '', GITHUB_TOKEN: '', DB_INFO: {}, LOG_CLEANER: {
     enabled: true, keep_lines: 1000, hour: 3, minute: 0,
   },
-  WEBHOOK_SECRET: '', API_KEY: '', PLUGIN_REPOS: [],
+  WEBHOOK_SECRET: '', API_KEY: '', PLUGIN_REPOS: ['Example/AWBotNest-Plugins'],
 }
 
 const aiSettings = {
@@ -68,6 +68,23 @@ test.beforeEach(async ({ page }) => {
       } },
     })
     if (path === '/api/ai/plugins') return json(route, { plugins: [] })
+    if (path === '/api/ai/usage/overview') return json(route, {
+      items: [{
+        timestamp: '2026-09-10T21:52:32+08:00', source: '平台', plugin_id: '',
+        capability: 'text', provider: '主 AI 服务', model: 'gpt-test', protocol: 'responses',
+        status: 'success', latency_ms: 1420, total_tokens: 88, error_type: '', error_message: '',
+      }, {
+        timestamp: '2026-09-10T21:50:02+08:00', source: '插件:多站签到', plugin_id: 'pt_multi_checkin',
+        capability: 'vision', provider: '主 AI 服务', model: 'gpt-test', protocol: 'responses',
+        status: 'failed', latency_ms: 2648, total_tokens: 0,
+        error_type: 'invalid_response', error_message: '协议不匹配：接口返回了 HTML 页面',
+      }],
+      plugins: [{
+        plugin_id: 'pt_multi_checkin', name: '多站签到', calls: 1, succeeded: 0,
+        failed: 1, fallbacks: 0, avg_latency_ms: 2648, total_tokens: 0,
+      }],
+      total_items: 2,
+    })
     if (path === '/api/ai/usage/recent') return json(route, { items: [{
       timestamp: '2026-09-10T21:52:32+08:00', source: '平台', plugin_id: '',
       capability: 'text', provider: '主 AI 服务', model: 'gpt-test', protocol: 'responses',
@@ -208,6 +225,7 @@ test('iPhone 17 PWA 独立窗口使用完整屏幕高度', async ({ page, contex
 test('iPhone 17 完整显示 AI 服务、协议和调用明细', async ({ page }) => {
   await page.goto('/#/settings')
   await page.getByRole('button', { name: 'AI 服务', exact: true }).click()
+  await expect(page.locator('.ai-mark svg')).toBeVisible()
   await expect(page.getByText('最近调用', { exact: true })).toBeVisible()
   await expect(page.getByText(/当前识别为 Responses/)).toBeVisible()
   await expect(page.getByText('多站签到', { exact: true })).toBeVisible()
@@ -231,6 +249,32 @@ test('iPhone 17 完整显示 AI 服务、协议和调用明细', async ({ page }
   expect(horizontal.settingsScrollWidth).toBeLessThanOrEqual(horizontal.settingsClientWidth)
   expect(horizontal.outerGap).toBeLessThanOrEqual(10)
   await expectInsideViewport(page)
+})
+
+test('AI 主配置不等待后台统计和插件扫描', async ({ page }) => {
+  let statusRequests = 0
+  let releaseBackground
+  const backgroundGate = new Promise((resolve) => { releaseBackground = resolve })
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname === '/api/ai/status') statusRequests += 1
+  })
+  await page.route('**/api/ai/plugins', async (route) => {
+    await backgroundGate
+    return json(route, { plugins: [] })
+  })
+  await page.route('**/api/ai/usage/overview*', async (route) => {
+    await backgroundGate
+    return json(route, { items: [], plugins: [], total_items: 0 })
+  })
+
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: 'AI 服务', exact: true }).click()
+
+  await expect(page.getByPlaceholder('例如：主 AI 服务')).toHaveValue('主 AI 服务')
+  await expect(page.locator('.ai-call-skeleton')).toBeVisible()
+  expect(statusRequests).toBe(0)
+  releaseBackground()
+  await expect(page.locator('.ai-call-skeleton')).toBeHidden({ timeout: 1500 })
 })
 
 test('iPhone 17 主题选项悬浮在主题菜单正下方', async ({ page }) => {
@@ -303,6 +347,36 @@ test('iPhone 17 插件配置关闭按钮避开顶部安全区且易于点击', a
   expect(geometry.closeRight).toBeLessThanOrEqual(geometry.viewportWidth)
   await close.click()
   await expect(modal).toBeHidden()
+})
+
+test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {
+  await page.goto('/#/plugins')
+  await page.getByRole('button', { name: /插件市场/ }).click()
+  await page.getByRole('button', { name: '设置仓库地址' }).click()
+  const input = page.getByPlaceholder('例如 AWdress/AWBotNest-Plugins')
+  const remove = page.getByRole('button', { name: '删除第 1 个仓库' })
+  await expect(input).toHaveValue('Example/AWBotNest-Plugins')
+  const geometry = await page.evaluate(() => {
+    const row = document.querySelector('.repo-row')
+    const input = row.querySelector('input')
+    const remove = row.querySelector('.repo-delete')
+    const rowBox = row.getBoundingClientRect()
+    const inputBox = input.getBoundingClientRect()
+    const removeBox = remove.getBoundingClientRect()
+    return {
+      display: getComputedStyle(row).display,
+      rowWidth: rowBox.width,
+      inputWidth: inputBox.width,
+      removeWidth: removeBox.width,
+      removeHeight: removeBox.height,
+    }
+  })
+  expect(geometry.display).toBe('grid')
+  expect(geometry.inputWidth).toBeGreaterThan(geometry.rowWidth * 0.75)
+  expect(geometry.removeWidth).toBe(44)
+  expect(geometry.removeHeight).toBe(44)
+  await remove.click()
+  await expect(input).toBeHidden()
 })
 
 test('iPhone 17 横屏仍可使用顶部与底部菜单', async ({ page }) => {
