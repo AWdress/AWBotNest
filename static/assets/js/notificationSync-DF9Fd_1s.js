@@ -1,4 +1,4 @@
-import{i as u,_}from"./index-CPFvxmDG.js";/**
+import{i as u,_}from"./index-YpN6vmej.js";/**
  * @license @lucide/vue v1.29.0 - ISC
  *
  * This source code is licensed under the ISC license.

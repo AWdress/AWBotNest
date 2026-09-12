@@ -2,6 +2,7 @@
 // 根据 config_schema 自动渲染配置表单（分区卡片 + 条件显示 + 丰富字段类型 + 自定义排版）。
 // 每个字段 spec 支持：
 //   type:    string | password | number | boolean | select | multiselect | slider | text | list
+//   format:  cron（type 为 string 时启用平台统一 Cron 编辑器）
 //   default, label, help(说明)
 //   options: select / multiselect 的可选值（["a","b"] 或 [{value,label}]）
 //   min/max/step: number / slider

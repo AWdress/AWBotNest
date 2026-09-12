@@ -164,7 +164,7 @@ Key 非空时才允许发起检查请求，任一条件不满足都必须在本�
 
 ### Vue 模块联邦
 
-V2 同时支持 `config_schema` 原生表单和 `render_mode: "vue"`。Vue 插件必须暴露 `./Config`，并随插件发布 `frontend/dist/remoteEntry.js`；组件通过宿主注入的 `host.getConfig`、`host.saveConfig`、`host.callApi` 访问平台能力。详见 `PLUGIN_GUIDE.md` 的 Vue 章节。
+V2 同时支持 `config_schema` 原生表单和 `render_mode: "vue"`。Cron 配置必须使用 `type: "string", format: "cron"` 显式声明，由平台前后端统一校验；字段名猜测仅作为旧插件兼容。Vue 插件必须暴露 `./Config`，并随插件发布 `frontend/dist/remoteEntry.js`；组件通过宿主注入的 `host.getConfig`、`host.saveConfig`、`host.callApi` 访问平台能力，并可从 `host.ui.CronInput` 复用平台 Cron 组件。详见 `PLUGIN_GUIDE.md` 的 Vue 章节。
 
 ### 发布清单
 

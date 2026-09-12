@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import asyncio
+import re
 from pathlib import Path
 
 from .config import PLUGINS_DIR, Settings, save_settings
@@ -17,6 +18,34 @@ from .notifier import NotificationService
 from .plugin_runtime import LoadedPlugin, PluginLoader, PluginMeta, PluginResolver, PluginScanner
 
 logger = logging.getLogger("awbotnest.plugins")
+
+_CRON_TOKEN = re.compile(r"^[0-9A-Za-z*?/,#LW-]+$")
+_CRON_NAMES = re.compile(
+    r"JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC|MON|TUE|WED|THU|FRI|SAT|SUN",
+    re.IGNORECASE,
+)
+
+
+def _valid_cron_expression(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text or len(text) > 512:
+        return False
+    parts = text.split()
+    if len(parts) not in {5, 6}:
+        return False
+    bounds = (
+        ((0, 59), (0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+        if len(parts) == 6
+        else ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
+    )
+    for part, (minimum, maximum) in zip(parts, bounds, strict=True):
+        if not _CRON_TOKEN.fullmatch(part):
+            return False
+        if not re.fullmatch(r"[0-9*?/,#LW-]+", _CRON_NAMES.sub("", part), re.IGNORECASE):
+            return False
+        if any(not minimum <= int(number) <= maximum for number in re.findall(r"\d+", part)):
+            return False
+    return True
 
 
 class PluginRuntime:
@@ -317,7 +346,7 @@ class PluginRuntime:
     @staticmethod
     def validate_config(schema: dict[str, object], values: dict[str, object], *, allow_extra: bool = False) -> None:
         expected = {"string": str, "integer": int, "number": (int, float), "boolean": bool,
-                    "array": list, "object": dict}
+                    "array": list, "object": dict, "cron": str}
         unknown = set(values) - set(schema)
         if schema and unknown and not allow_extra:
             raise ValueError(f"包含未声明的配置项：{', '.join(sorted(unknown))}")
@@ -332,6 +361,8 @@ class PluginRuntime:
             invalid_boolean_number = type_name in {"integer", "number"} and isinstance(values[key], bool)
             if target and (not isinstance(values[key], target) or invalid_boolean_number):
                 raise ValueError(f"配置项 {key} 应为 {type_name}")
+            if (spec.get("format") == "cron" or type_name == "cron") and not _valid_cron_expression(values[key]):
+                raise ValueError(f"配置项 {key} 应为 5 位或 6 位 Cron 表达式")
             choices = spec.get("enum")
             if isinstance(choices, list) and values[key] not in choices:
                 raise ValueError(f"配置项 {key} 不在允许范围内")

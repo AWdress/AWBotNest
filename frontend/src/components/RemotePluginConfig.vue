@@ -11,6 +11,8 @@ import {
 } from '__federation__'
 import { api, getToken } from '../api'
 import { toast } from '../composables/toast'
+import CronInput from './CronInput.vue'
+import { describeCron, isValidCron } from '../utils/cron'
 
 const props = defineProps({
   pluginId: { type: String, required: true },
@@ -35,6 +37,11 @@ const host = {
   callApi: (path, opts = {}) =>
     api.callPluginApi(props.pluginId, path, opts.method || 'GET', opts.body),
   toast,
+  // Vue 插件复用平台控件，避免各插件重复打包并维护不同版本的 Cron 编辑器。
+  ui: Object.freeze({
+    CronInput: markRaw(CronInput),
+    cron: Object.freeze({ isValid: isValidCron, describe: describeCron }),
+  }),
 }
 
 async function loadRemote() {

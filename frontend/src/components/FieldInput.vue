@@ -1,6 +1,7 @@
 <script setup>
 // 单个配置字段的渲染（递归组件）。顶层字段与 list 行内子字段都用它。
 // 支持 type：string | password | number | boolean | select | multiselect | slider | text | list | chat | action | info
+// Cron 使用 {type: 'string', format: 'cron'}，由平台统一组件渲染和校验。
 //   list：可增删行，每行一组子字段（spec.fields）
 //   chat：会话选择器，从账号的群/频道/私聊里挑（multi 多选；chat_types 过滤；session 指定账号）
 //   action：动作按钮，点击触发插件 ctx.action(name) 注册的函数（spec.action 为动作名；danger 需确认）
@@ -177,7 +178,7 @@ const infoText = computed(() => {
 })
 
 const showHead = computed(() => props.spec.type !== 'action')
-const cronField = computed(() => isCronField(props.spec, props.name, props.value))
+const cronField = computed(() => isCronField(props.spec, props.name))
 
 // 框型单控件（文本/密码/数字/下拉/多行）用 outlined 浮动 label；
 // 其余（开关/滑块/多选/会话/列表/说明/按钮）保持 label 在上或各自样式
@@ -186,7 +187,7 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 </script>
 
 <template>
-  <div class="field" :class="{ inline: spec.type === 'boolean', box: isBoxField }">
+  <div class="field" :class="{ inline: spec.type === 'boolean', box: isBoxField, cron: cronField }">
     <div v-if="showHead" class="field-head">
       <label class="field-label">{{ spec.label || spec.title || name }}<span v-if="spec.required" class="req">*</span></label>
       <!-- boolean → 开关（跟随标签行内） -->
@@ -319,12 +320,11 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 .field.box .input,
 .field.box .select,
 .field.box .textarea { background: transparent; }
-.field.box :deep(.cron-trigger) { background: transparent; }
 .field.box:focus-within .field-label { color: var(--accent); }
+.field.box.cron:focus-within .field-label { color: var(--v2-violet); font-size: 13px; }
 .field.box:focus-within .input,
 .field.box:focus-within .select,
 .field.box:focus-within .textarea { border-color: var(--accent); }
-.field.box:focus-within :deep(.cron-trigger) { border-color: var(--accent); }
 .req { color: var(--danger, #e5484d); margin-left: 2px; }
 .field-err { font-size: 12px; color: var(--danger, #e5484d); }
 .muted-sm { font-size: 12px; color: var(--text-muted); }

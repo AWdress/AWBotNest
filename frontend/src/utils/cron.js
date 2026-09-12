@@ -30,7 +30,7 @@ export function isValidCron(value) {
 }
 
 export function isCronField(spec = {}, name = '') {
-  if (spec.type === 'cron' || spec.format === 'cron') return true
+  if (spec.type === 'cron' || spec.format === 'cron' || spec.ui === 'cron') return true
   if (!['', 'string', 'text'].includes(String(spec.type || ''))) return false
   const key = String(name || '')
   const label = String(spec.label || spec.title || '')

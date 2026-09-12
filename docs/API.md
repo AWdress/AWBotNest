@@ -83,7 +83,7 @@ PUT /api/v1/plugins/{plugin_id}/config
 {"config": {"keyword": "hi"}}
 ```
 
-平台按插件 `config_schema` 校验。已加载插件保存后会自动重载；重载失败返回 `409`，不得把该响应当作配置已经正常生效。
+平台按插件 `config_schema` 校验。字符串字段声明 `"format": "cron"` 时，平台同时校验其为 5 位或 6 位 Cron 表达式；Schema 页面和 Vue 页面的 `host.saveConfig()` 使用同一规则。已加载插件保存后会自动重载；重载失败返回 `409`，不得把该响应当作配置已经正常生效。
 
 ## 插件 KV 数据
 

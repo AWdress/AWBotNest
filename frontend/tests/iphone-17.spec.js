@@ -116,9 +116,10 @@ test.beforeEach(async ({ page }) => {
     if (path === '/api/plugins/mobile_config_test/config') return json(route, {
       schema: {
         enabled: { type: 'boolean', label: '启用测试功能' },
+        schedule: { type: 'string', format: 'cron', label: '执行周期' },
         access_token: { type: 'password', label: '访问令牌' },
       },
-      values: { enabled: true, access_token: '********' }, render_mode: 'schema', has_frontend: false,
+      values: { enabled: true, schedule: '6 3 * * *', access_token: '********' }, render_mode: 'schema', has_frontend: false,
     })
     if (path === '/api/plugins/mobile_config_test/config/reveal') return json(route, {
       field: 'access_token', value: 'mobile-real-secret',
@@ -380,6 +381,28 @@ test('iPhone 17 插件配置关闭按钮避开顶部安全区且易于点击', a
   expect(geometry.closeRight).toBeLessThanOrEqual(geometry.viewportWidth)
   await close.click()
   await expect(modal).toBeHidden()
+})
+
+test('Schema Cron 接口显示参考图式规则编辑器', async ({ page }) => {
+  await page.goto('/#/plugins')
+  await page.getByText('手机配置测试', { exact: true }).click()
+
+  const modal = page.locator('.modal.modal-wide')
+  const expression = modal.getByRole('textbox', { name: 'Cron 表达式', exact: true })
+  await expect(expression).toHaveValue('6 3 * * *')
+  await expression.click()
+
+  const sentence = modal.locator('.cron-sentence')
+  await expect(sentence).toBeVisible()
+  await expect(modal.getByRole('combobox', { name: '月份', exact: true })).toHaveValue('*')
+  await expect(modal.getByRole('combobox', { name: '日期', exact: true })).toHaveValue('*')
+  await expect(modal.getByRole('combobox', { name: '星期', exact: true })).toHaveValue('*')
+  await expect(modal.getByRole('combobox', { name: '小时', exact: true })).toHaveValue('3')
+  await expect(modal.getByRole('combobox', { name: '分钟', exact: true })).toHaveValue('6')
+
+  await modal.getByRole('combobox', { name: '小时', exact: true }).selectOption('8')
+  await modal.getByRole('combobox', { name: '分钟', exact: true }).selectOption('15')
+  await expect(expression).toHaveValue('15 8 * * *')
 })
 
 test('iPhone 17 输入法弹出后配置输入框仍位于可见区域', async ({ page }) => {

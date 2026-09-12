@@ -104,6 +104,7 @@ V2 默认使用 `config_schema` 自动生成配置界面。需要自定义 Vue �
 - 必须暴露：`./Config`
 - `Config` 接收 `pluginId` 与 `host` props；通过 `host.getConfig`、`host.saveConfig` 读写配置，通过 `host.callApi` 调用插件 API
 - `host.getConfig()` 对敏感字段只返回 `********`；需要在管理员配置页显示某个已声明的敏感字段时，使用 `await host.revealSecret(field)` 按字段读取真实值
+- `host.ui.CronInput` 是平台统一 Cron 编辑器；`host.ui.cron.isValid(value)` 与 `host.ui.cron.describe(value)` 可用于自定义校验和说明
 - 宿主会按插件 ID 动态注册远程模块，并在每次打开配置时刷新入口缓存
 
 该接口是 V2 的正式插件扩展点，不依赖或修改 V1 前端；插件仍可选择使用 `config_schema`。
@@ -298,6 +299,48 @@ HTTP、SQLite、AI 或 Browser 操作。
 ```
 
 界面类型：`string`、`password`、`number`、`boolean`、`select`、`multiselect`、`slider`、`text`、`list`、`chat`、`info`、`action`。
+
+Cron 字段沿用字符串类型，通过标准 `format` 显式声明。平台会显示统一的可视化编辑器，并在前端和服务端共同校验 5 位或 6 位表达式；不要再依赖字段名包含 `cron` 或 `schedule` 的自动猜测：
+
+```python
+"schedule": {
+    "type": "string",
+    "format": "cron",
+    "default": "6 3 * * *",
+    "label": "执行周期",
+    "help": "按 Asia/Shanghai 时区执行",
+}
+```
+
+旧插件的 `type: "cron"` 仍兼容，但新插件应使用 `type: "string", format: "cron"`，这样服务端也能同时执行字符串类型校验。
+
+自定义 Vue 配置页继续使用既有的 `host` prop，不需要调用新的 HTTP 接口。平台组件支持 Vue `v-model`，也兼容 `value` / `update`：
+
+```vue
+<script setup>
+import { computed, reactive } from 'vue'
+
+const props = defineProps({ host: { type: Object, required: true } })
+const form = reactive({ schedule: '6 3 * * *' })
+const CronInput = computed(() => props.host.ui.CronInput)
+
+async function save() {
+  if (!props.host.ui.cron.isValid(form.schedule)) {
+    props.host.toast.error('执行周期格式不正确')
+    return
+  }
+  await props.host.saveConfig(form)
+}
+</script>
+
+<template>
+  <label>执行周期</label>
+  <component :is="CronInput" v-model="form.schedule" />
+  <button type="button" @click="save">保存</button>
+</template>
+```
+
+Vue 插件仍应在 `config_schema` 中为该字段声明 `type: "string", format: "cron"`。这样 `host.saveConfig()` 会经过平台服务端校验，不能仅依赖插件页面自己的前端判断。
 
 常用属性包括 `default`、`label/title`、`help`、`required`、`options`、`min/max/step`、`section`、`order`、`cols`、`show_if`。`list` 使用 `fields`；`chat` 使用 `multi/chat_types/session`；`action` 使用 `action/danger`。
 
