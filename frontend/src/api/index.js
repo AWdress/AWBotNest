@@ -214,6 +214,8 @@ export const api = {
   getSettings: () => request('GET', '/api/settings'),
   saveSettings: (settings) => request('PUT', '/api/settings', { settings }),
   revealSecret: (kind, field, id = '') => request('POST', '/api/settings/reveal-secret', { kind, field, id }),
+  getBrowserStatus: () => request('GET', '/api/browser/status'),
+  updateCloakBrowser: () => request('POST', '/api/browser/cloakbrowser/update'),
   saveNotificationChannels: (channels) => request('PUT', '/api/settings/notification-channels', { channels }),
   getAiSettings: () => request('GET', '/api/ai/settings'),
   saveAiSettings: (settings) => request('PUT', '/api/ai/settings', { settings }),

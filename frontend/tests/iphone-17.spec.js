@@ -18,6 +18,7 @@ const settings = {
   PIP_INDEX_URL: '', GITHUB_TOKEN: '', DB_INFO: {}, LOG_CLEANER: {
     enabled: true, keep_lines: 1000, hour: 3, minute: 0,
   },
+  BROWSER_ENGINE: 'chromium', CLOAKBROWSER_USE_FREE_KEY: false, CLOAKBROWSER_LICENSE_KEY: '',
   WEBHOOK_SECRET: '', API_KEY: '', PLUGIN_REPOS: ['Example/AWBotNest-Plugins'],
 }
 
@@ -60,6 +61,13 @@ test.beforeEach(async ({ page }) => {
     if (path === '/api/ui/profile') return json(route, { username: 'mobile-admin', avatar_url: '' })
     if (path === '/api/status') return json(route, status)
     if (path === '/api/settings') return json(route, { settings })
+    if (path === '/api/browser/status') return json(route, {
+      engine: 'chromium', cloakbrowser_installed: true, cloakbrowser_version: '0.5.10',
+      key_configured: false, key_enabled: false, key_active: false,
+      binary_mode: 'legacy_free',
+      queue_enabled: false, active: false, waiting: 0,
+      maintenance: false, cooldown_seconds: 0,
+    })
     if (path === '/api/ai/settings') return json(route, {
       settings: aiSettings,
       status: { configured: true, detected_protocols: { primary: 'responses' }, usage: {
@@ -255,6 +263,25 @@ test('iPhone 17 完整显示 AI 服务、协议和调用明细', async ({ page }
   expect(horizontal.settingsScrollWidth).toBeLessThanOrEqual(horizontal.settingsClientWidth)
   expect(horizontal.outerGap).toBeLessThanOrEqual(10)
   await expectInsideViewport(page)
+})
+
+test('iPhone 17 可选择浏览器仿真并配置 CloakBrowser Key', async ({ page }) => {
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: '运行环境', exact: true }).click()
+  await expect(page.getByRole('radio', { name: /Chromium/ })).toBeChecked()
+  await expect(page.getByText('CloakBrowser', { exact: true })).toBeVisible()
+  await page.getByRole('radio', { name: /CloakBrowser/ }).check()
+  await expect(page.getByText(/免费 Key 已关闭，使用旧版免费内核/)).toBeVisible()
+  await page.getByRole('button', { name: '使用免费 Key 获取最新版' }).click()
+  await expect(page.getByPlaceholder('cb_你的完整 Key')).toBeVisible()
+  await expect(page.getByText('CloakBrowser 0.5.10')).toBeVisible()
+  await expect(page.getByText(/尚未填写 Key，将使用旧版免费内核/)).toBeVisible()
+  await expectInsideViewport(page)
+  const overflow = await page.evaluate(() => ({
+    viewport: document.documentElement.clientWidth,
+    page: document.documentElement.scrollWidth,
+  }))
+  expect(overflow.page).toBeLessThanOrEqual(overflow.viewport)
 })
 
 test('AI 主配置不等待后台统计和插件扫描', async ({ page }) => {

@@ -22,10 +22,15 @@ from .notifier import NotificationService
 from .backup import BackupManager
 from .activity import activity
 from .market import PluginMarket
+from .cloak_proxy import reset_cloakbrowser_runtime
+from .cloak_updates import check_cloakbrowser_update
 
 
 async def run_once() -> bool:
     logger = logging.getLogger("awbotnest.main")
+    # 更新接口会在重载前阻止新 CloakBrowser 会话。AWBotNest 的“重启”
+    # 是进程内热重载，因此必须在新一轮生命周期开始时明确解除维护锁。
+    reset_cloakbrowser_runtime()
     logger.info("  AWBotNest v%s (Python %s)", __version__, platform.python_version())
 
     restored = BackupManager.apply_pending()
@@ -129,6 +134,20 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
         hour=0, minute=0,
     )
     logger.info("插件仓库自动发现已注册：每天 0:00 执行")
+
+    async def check_cloakbrowser_updates_job():
+        # The checker itself repeats these local guards before any HTTP call.
+        # Keeping the job registered lets a saved setting change take effect
+        # without requiring the platform scheduler to be rebuilt.
+        return await check_cloakbrowser_update(settings, services.http)
+
+    scheduler.add_interval(
+        "__platform__", "CloakBrowser 更新检查", check_cloakbrowser_updates_job,
+        seconds=24 * 60 * 60,
+    )
+    runtime.cloak_update_task = asyncio.create_task(
+        check_cloakbrowser_updates_job(), name="cloakbrowser-update-check",
+    )
     cookie_settings = settings.cookie_settings
     if cookie_settings.get("remote_enabled"):
         async def sync_remote_cookiecloud() -> None:
@@ -222,6 +241,10 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         if startup_refresh is not None:
             startup_refresh.cancel()
             await asyncio.gather(startup_refresh, return_exceptions=True)
+        cloak_update_task = getattr(runtime, "cloak_update_task", None)
+        if cloak_update_task is not None:
+            cloak_update_task.cancel()
+            await asyncio.gather(cloak_update_task, return_exceptions=True)
         server.should_exit = True
         try:
             if not server_task.done():

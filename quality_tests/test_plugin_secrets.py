@@ -70,3 +70,35 @@ class PluginSecretTests(unittest.IsolatedAsyncioTestCase):
                 json={"field": "endpoint"},
             )
             self.assertEqual(ordinary.status_code, 400)
+
+    async def test_system_cloakbrowser_key_is_masked_and_revealed_without_cache(self):
+        settings = Settings(
+            admin_token="plugin-secret-token",
+            cloakbrowser_license_key="cb_real_platform_secret",
+        )
+        scheduler = PluginScheduler()
+        self.addCleanup(scheduler.stop)
+        app = create_app(
+            settings,
+            SimpleNamespace(),
+            SimpleNamespace(),
+            scheduler,
+            PluginRoutes(),
+            market=SimpleNamespace(clear_cache=lambda: None),
+        )
+        headers = {"Authorization": "Bearer plugin-secret-token"}
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app), base_url="http://test",
+        ) as client:
+            masked = await client.get("/api/settings", headers=headers)
+            self.assertEqual(
+                masked.json()["settings"]["CLOAKBROWSER_LICENSE_KEY"], "********",
+            )
+            revealed = await client.post(
+                "/api/settings/reveal-secret",
+                headers=headers,
+                json={"kind": "system", "field": "CLOAKBROWSER_LICENSE_KEY"},
+            )
+            self.assertEqual(revealed.json()["value"], "cb_real_platform_secret")
+            self.assertEqual(revealed.headers["cache-control"], "no-store")
+            self.assertEqual(revealed.headers["pragma"], "no-cache")

@@ -24,6 +24,11 @@ from ..activity import activity
 from ..auth import token_matches
 from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
+from ..deps import DependencyManager
+from ..cloak_proxy import (
+    begin_cloak_update, cancel_cloak_update, cloak_session_status,
+)
+from ..cloak_updates import cloak_update_status, mark_cloakbrowser_updated
 from ..logs import memory_logs
 from ..market import normalize_repo
 from ..routing import WebhookRequest
@@ -90,6 +95,9 @@ def create_router(deps) -> APIRouter:
                 "proxy_set": {"proxy_enable": bool(settings.proxy_url), "PROXY_URL": current["proxy_url"], "proxy": {}},
                 "PIP_INDEX_URL": settings.pip_index_url,
                 "GITHUB_TOKEN": "********" if settings.github_token else "",
+                "BROWSER_ENGINE": settings.browser_engine,
+                "CLOAKBROWSER_USE_FREE_KEY": settings.cloakbrowser_use_free_key,
+                "CLOAKBROWSER_LICENSE_KEY": "********" if settings.cloakbrowser_license_key else "",
                 "DB_INFO": {"dbset": "SQLite", "db_name": "awbotnest"},
                 "LOG_CLEANER": dict(settings.log_cleaner),
                 "WEBHOOK_SECRET": "********" if settings.webhook_secret else "",
@@ -468,6 +476,15 @@ def create_router(deps) -> APIRouter:
         if isinstance(raw.get("settings"), dict):
             legacy = raw["settings"]
             proxy = legacy.get("proxy_set") or {}
+            legacy_cloak_key = legacy.get(
+                "CLOAKBROWSER_LICENSE_KEY",
+                "********" if settings.cloakbrowser_license_key else "",
+            )
+            legacy_cloak_key_enabled = (
+                settings.cloakbrowser_use_free_key
+                if legacy_cloak_key == "********"
+                else bool(str(legacy_cloak_key or "").strip())
+            )
             raw = {
                 "api_id": legacy.get("API_ID", settings.api_id),
                 "api_hash": legacy.get("API_HASH", "********" if settings.api_hash else ""),
@@ -488,6 +505,11 @@ def create_router(deps) -> APIRouter:
                 "api_key": legacy.get("API_KEY", "********" if settings.api_key else ""),
                 "pip_index_url": legacy.get("PIP_INDEX_URL", settings.pip_index_url),
                 "github_token": legacy.get("GITHUB_TOKEN", "********" if settings.github_token else ""),
+                "browser_engine": legacy.get("BROWSER_ENGINE", settings.browser_engine),
+                "cloakbrowser_use_free_key": legacy.get(
+                    "CLOAKBROWSER_USE_FREE_KEY", legacy_cloak_key_enabled,
+                ),
+                "cloakbrowser_license_key": legacy_cloak_key,
                 "log_cleaner": legacy.get("LOG_CLEANER", settings.log_cleaner),
             }
         try:
@@ -563,6 +585,15 @@ def create_router(deps) -> APIRouter:
             }
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail="日志清理设置格式不正确") from exc
+        if body.browser_engine == "cloakbrowser":
+            try:
+                await DependencyManager(body).ensure(
+                    ["cloakbrowser>=0.5.10,<0.6"],
+                    plugin_name="CloakBrowser 浏览器引擎",
+                    target_only=True,
+                )
+            except Exception as exc:
+                raise HTTPException(status_code=502, detail=f"CloakBrowser 安装失败：{exc}") from exc
         settings.api_id = body.api_id
         if body.api_hash != "********":
             settings.api_hash = body.api_hash.strip()
@@ -595,6 +626,12 @@ def create_router(deps) -> APIRouter:
         settings.pip_index_url = pip_index_url
         if body.github_token != "********":
             settings.github_token = body.github_token.strip()
+        settings.browser_engine = body.browser_engine
+        if body.cloakbrowser_license_key != "********":
+            settings.cloakbrowser_license_key = body.cloakbrowser_license_key.strip()
+        settings.cloakbrowser_use_free_key = bool(
+            body.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
+        )
         settings.log_cleaner = normalized_cleaner
         save_settings(settings)
         market.clear_cache()
@@ -673,13 +710,16 @@ def create_router(deps) -> APIRouter:
         return {"ok": True, "channels": masked_channels(), "restart_required": True}
 
     @router.post("/api/settings/reveal-secret", dependencies=[Depends(require_admin)])
-    async def reveal_secret(request: Request):
+    async def reveal_secret(request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Pragma"] = "no-cache"
         raw = await request.json()
         kind, field, item_id = str(raw.get("kind") or ""), str(raw.get("field") or ""), str(raw.get("id") or "")
         value = ""
         if kind == "system":
             value = {"API_HASH": settings.api_hash, "BOT_TOKEN": settings.bot_token,
                      "GITHUB_TOKEN": settings.github_token,
+                     "CLOAKBROWSER_LICENSE_KEY": settings.cloakbrowser_license_key,
                      "API_KEY": settings.api_key,
                      "WEBHOOK_SECRET": settings.webhook_secret}.get(field, "")
         elif kind == "ai":
@@ -697,6 +737,70 @@ def create_router(deps) -> APIRouter:
         if not value:
             raise HTTPException(status_code=404, detail="密钥不存在")
         return {"value": value}
+
+    @router.get("/api/browser/status", dependencies=[Depends(require_admin)],
+                summary="浏览器仿真状态")
+    async def browser_status():
+        manager = DependencyManager(settings)
+        key_active = bool(
+            settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
+        )
+        return {
+            "engine": settings.browser_engine,
+            "cloakbrowser_installed": bool(manager.target_version("cloakbrowser")),
+            "cloakbrowser_version": manager.target_version("cloakbrowser"),
+            "key_configured": bool(settings.cloakbrowser_license_key),
+            "key_enabled": settings.cloakbrowser_use_free_key,
+            "key_active": key_active,
+            "binary_mode": "latest" if key_active else "legacy_free",
+            "update_check": cloak_update_status(settings),
+            **cloak_session_status(),
+        }
+
+    @router.post("/api/browser/cloakbrowser/update", dependencies=[Depends(require_admin)],
+                 summary="更新 CloakBrowser")
+    async def update_cloakbrowser():
+        if settings.browser_engine != "cloakbrowser":
+            raise HTTPException(status_code=400, detail="请先选择并保存 CloakBrowser")
+        try:
+            begin_cloak_update()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        manager = DependencyManager(settings)
+        try:
+            await manager.ensure(
+                ["cloakbrowser>=0.5.10,<0.6"],
+                plugin_name="CloakBrowser 浏览器引擎",
+                target_only=True,
+                upgrade=True,
+            )
+            version = manager.target_version("cloakbrowser")
+            mark_cloakbrowser_updated(settings, version)
+        except Exception as exc:
+            cancel_cloak_update()
+            raise HTTPException(status_code=502, detail=f"CloakBrowser 更新失败：{exc}") from exc
+        will_restart = restart_event is not None
+        key_active = bool(
+            settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
+        )
+        if will_restart:
+            asyncio.get_running_loop().call_later(0.8, restart_event.set)
+        else:
+            # 嵌入式调用和 API 单元测试可以不提供平台重启事件。
+            # 依赖已经更新完成，此时由宿主在方便时自行重启即可。
+            cancel_cloak_update()
+        return {
+            "ok": True,
+            "version": version,
+            "restarting": will_restart,
+            "message": (
+                "CloakBrowser 组件已更新，平台正在重启；"
+                if will_restart else "CloakBrowser 组件已更新；重启宿主后生效，"
+            ) + (
+                "最新版内核将在下次调用时自动检查。"
+                if key_active else "当前未启用免费 Key，后续调用仍使用旧版免费内核。"
+            ),
+        }
 
     @router.post("/api/settings/test_proxy", dependencies=[Depends(require_admin)])
     async def test_proxy(request: Request):

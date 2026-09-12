@@ -149,6 +149,15 @@ Delivery 是可选治理能力，不封装或禁止 Telethon 原生 `event.reply
 
 业务配置只能放在插件自己的 `config_schema`、异步 `ctx.storage`（或其兼容别名 `ctx.kv`）和 `ctx.data_dir`。Cookie 必须声明 `cookie_domains`；浏览器、AI、通知和 HTTP 使用平台托管的 `ctx.browser`、`ctx.ai`、`ctx.notify`、`ctx.http`，不得自行保存平台密钥或 Telegram Session。
 
+平台浏览器默认使用内置 Chromium。管理员选择 CloakBrowser 时，平台把依赖安装到持久化的
+`data/plugin_deps`，License Key 仅由系统设置保存，不通过 Compose 环境变量或插件配置传递。只有管理员开启
+免费 Key 模式且 Key 非空时才可在调用时注入，并以进程级单会话队列治理 CloakBrowser `launch*` 调用，
+以 Browser/Context 的正常关闭作为放行条件；异常关闭后等待服务端席位释放。关闭开关或删除 Key 时必须停止
+注入并恢复旧版免费内核，不得选择遗留的最新版缓存或改变原有并发行为。组件更新必须等待队列空闲，
+只更新持久化依赖目录中的兼容版本，并通过平台重启切换代码；内核在下次调用时更新到持久化缓存。
+平台每天只读检查一次兼容组件版本，并可在启动后异步检查；只有 CloakBrowser 已选中、免费 Key 模式开启且
+Key 非空时才允许发起检查请求，任一条件不满足都必须在本地静默跳过。定时检查不得自动安装或替换组件。
+
 ### Vue 模块联邦
 
 V2 同时支持 `config_schema` 原生表单和 `render_mode: "vue"`。Vue 插件必须暴露 `./Config`，并随插件发布 `frontend/dist/remoteEntry.js`；组件通过宿主注入的 `host.getConfig`、`host.saveConfig`、`host.callApi` 访问平台能力。详见 `PLUGIN_GUIDE.md` 的 Vue 章节。

@@ -38,6 +38,9 @@ class SettingsBody(BaseModel):
     api_key: str = Field(default="", max_length=512)
     pip_index_url: str = Field(default="", max_length=1024)
     github_token: str = Field(default="", max_length=512, pattern=r"^[^\s]*$")
+    browser_engine: str = Field(default="chromium", pattern=r"^(cloakbrowser|chromium)$")
+    cloakbrowser_use_free_key: bool = False
+    cloakbrowser_license_key: str = Field(default="", max_length=512, pattern=r"^[^\s]*$")
     log_cleaner: dict[str, object] = Field(default_factory=dict)
 
 class PluginConfigBody(BaseModel):

@@ -2489,6 +2489,48 @@
         ]
       }
     },
+    "/api/browser/status": {
+      "get": {
+        "summary": "浏览器仿真状态",
+        "operationId": "browser_status_api_browser_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/browser/cloakbrowser/update": {
+      "post": {
+        "summary": "更新 CloakBrowser",
+        "operationId": "update_cloakbrowser_api_browser_cloakbrowser_update_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/settings/test_proxy": {
       "post": {
         "summary": "Test Proxy",

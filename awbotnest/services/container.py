@@ -22,10 +22,12 @@ from .http import HttpService
 
 class PlatformServices:
     def __init__(self, settings: Settings) -> None:
+        from ..cloak_proxy import bind_cloakbrowser_settings
         from ..governance import PluginGovernor
         # Resolve through the public compatibility module so existing platform tests and
         # embedders that override awbotnest.services.DATA_DIR retain their old behavior.
         from . import DATA_DIR as services_data_dir
+        bind_cloakbrowser_settings(settings)
         self.governor = PluginGovernor(services_data_dir / "plugin_events.jsonl")
         self.http = HttpService(settings)
         self.cookies = CookieService()

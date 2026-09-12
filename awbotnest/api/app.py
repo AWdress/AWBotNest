@@ -47,6 +47,17 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
     )
     app.state.platform_ready = False
     app.state.platform_startup_error = ""
+
+    @app.middleware("http")
+    async def prevent_stale_pwa_shell(request, call_next):
+        response = await call_next(request)
+        if request.url.path in {"/", "/index.html", "/sw.js"}:
+            # PWA 入口和 Service Worker 必须每次向平台确认版本；带内容
+            # 指纹的 /assets 文件仍由浏览器和 Service Worker 长期缓存。
+            response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            response.headers["Pragma"] = "no-cache"
+        return response
+
     market = market or PluginMarket(settings)
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
                            admin_dependency(settings), time.monotonic(), ResourceSampler())

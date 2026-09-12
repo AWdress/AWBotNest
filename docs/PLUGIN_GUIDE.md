@@ -404,9 +404,13 @@ description = await ctx.ai.vision("screenshot.png", "识别图片中的文字")
 generated = await ctx.ai.generate_image("一张蓝绿色的极简海报")
 ```
 
-插件声明 `cloakbrowser` 依赖并直接调用其 `launch*` 接口时，未传 `proxy` 参数会自动继承平台代理；
-内核、许可证和 GeoIP 资源请求也使用本次启动所选代理且失败后不会静默直连。插件传入自己的 `proxy` 时以该值为准，
-显式传 `proxy=None`（或 `False`）可选择直连。代理凭据不会写入进程级代理环境变量。
+`ctx.browser` 跟随平台选择的浏览器引擎。插件不应读取或保存平台的浏览器密钥，也不应自行安装
+平台浏览器引擎。
+
+插件声明 `cloakbrowser` 依赖并直接调用其 `launch*` 接口时，免费 Key 模式可能由平台串行调度。
+插件必须在 `finally` 中调用 `browser.close()` 或 `context.close()`；只关闭 Page 不会释放浏览器会话，
+可能阻塞其他插件。未传 `proxy` 参数时自动继承平台代理；插件显式传入的 `proxy` 优先，传入
+`proxy=None`（或 `False`）可选择直连。
 
 Cookie 接口是插件作用域内的只读能力，不提供 `ctx.cookies.set()`。`get(domain, path="/", names=None)` 返回 Cookie 对象列表，而非键值字典；`header(domain, path="/", names=None)` 返回请求头字符串。按域名、hostOnly、路径边界和有效期筛选，长路径优先；同名请求头使用优先匹配值。`playwright(domain, path="/")` 保留浏览器 Cookie 属性。CookieCloud 同步保留路径及过期等属性。旧 V2 键值缓存只能按根路径读取，需重新同步才能恢复原始路径信息。
 

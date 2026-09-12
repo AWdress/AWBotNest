@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .config import DATA_DIR, Settings
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.utils import canonicalize_name
 
 logger = logging.getLogger("awbotnest.deps")
 
@@ -25,20 +26,34 @@ class DependencyManager:
             sys.path.append(target_text)
         self._lock = asyncio.Lock()
 
-    def missing(self, requirements: list[str]) -> list[str]:
+    def missing(self, requirements: list[str], *, target_only: bool = False) -> list[str]:
         result = []
+        target_versions = {
+            canonicalize_name(distribution.metadata.get("Name") or ""): distribution.version
+            for distribution in importlib.metadata.distributions(path=[str(self.target)])
+        } if target_only else {}
         for requirement in requirements:
             parsed = Requirement(requirement)
             name = parsed.name
             if not name:
                 continue
             try:
-                version = importlib.metadata.version(name)
+                version = (target_versions.get(canonicalize_name(name))
+                           if target_only else importlib.metadata.version(name))
+                if version is None:
+                    raise importlib.metadata.PackageNotFoundError(name)
                 if parsed.specifier and not parsed.specifier.contains(version, prereleases=True):
                     result.append(requirement)
             except importlib.metadata.PackageNotFoundError:
                 result.append(requirement)
         return result
+
+    def target_version(self, package: str) -> str:
+        wanted = canonicalize_name(package)
+        for distribution in importlib.metadata.distributions(path=[str(self.target)]):
+            if canonicalize_name(distribution.metadata.get("Name") or "") == wanted:
+                return distribution.version
+        return ""
 
     @staticmethod
     def validate(requirements: list[str]) -> None:
@@ -52,14 +67,16 @@ class DependencyManager:
             if parsed.url or parsed.marker:
                 raise ValueError(f"插件依赖声明不合法：{requirement}")
 
-    async def ensure(self, requirements: list[str], *, plugin_name: str = "插件") -> None:
+    async def ensure(self, requirements: list[str], *, plugin_name: str = "插件",
+                     target_only: bool = False, upgrade: bool = False) -> None:
         self.validate(requirements)
-        missing = self.missing(requirements)
+        missing = list(requirements) if upgrade else self.missing(requirements, target_only=target_only)
         if not missing:
             return
         logger.info("%s 需要安装依赖：%s", plugin_name, ", ".join(missing))
         async with self._lock:
-            missing = self.missing(requirements)
+            missing = (list(requirements) if upgrade
+                       else self.missing(requirements, target_only=target_only))
             if not missing:
                 return
             command = [
@@ -101,7 +118,7 @@ class DependencyManager:
                 logger.error("%s 依赖安装失败：%s", plugin_name, tail)
                 raise RuntimeError(f"插件依赖安装失败：{tail}")
             importlib.invalidate_caches()
-            remaining = self.missing(requirements)
+            remaining = self.missing(requirements, target_only=target_only)
             if remaining:
                 raise RuntimeError("依赖安装后版本仍不满足（可能与平台依赖冲突）：" + ", ".join(remaining))
             logger.info("%s 依赖已安装：%s", plugin_name, ", ".join(missing))

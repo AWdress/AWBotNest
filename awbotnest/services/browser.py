@@ -40,27 +40,43 @@ class BrowserService:
         return result
 
     def _run_sync(self, url, action, *, headless, timeout, cookies, user_agent, proxy):
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as playwright:
-            options = {"headless": headless}
-            if proxy:
-                options["proxy"] = proxy
+        options = {"headless": headless}
+        if proxy:
+            options["proxy"] = proxy
+        if self.engine == "cloakbrowser":
+            from ..cloak_proxy import configure_cloakbrowser
+            configure_cloakbrowser(self.settings)
+            from cloakbrowser import launch
+            browser = launch(**options)
+            playwright = None
+        else:
+            from playwright.sync_api import sync_playwright
+            playwright = sync_playwright().start()
             browser = playwright.chromium.launch(**options)
+        try:
+            context = browser.new_context(**({"user_agent": user_agent} if user_agent else {}))
             try:
-                context = browser.new_context(**({"user_agent": user_agent} if user_agent else {}))
-                try:
-                    if isinstance(cookies, str):
-                        context.set_extra_http_headers({"Cookie": cookies})
-                    elif cookies:
-                        context.add_cookies(cookies)
-                    page = context.new_page()
-                    page.set_default_timeout(timeout * 1000)
-                    page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-                    return action(page)
-                finally:
-                    context.close()
+                if isinstance(cookies, str):
+                    context.set_extra_http_headers({"Cookie": cookies})
+                elif cookies:
+                    context.add_cookies(cookies)
+                page = context.new_page()
+                page.set_default_timeout(timeout * 1000)
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                return action(page)
             finally:
+                context.close()
+        finally:
+            try:
                 browser.close()
+            finally:
+                if playwright is not None:
+                    playwright.stop()
+
+    @property
+    def engine(self) -> str:
+        value = str(getattr(self.settings, "browser_engine", "chromium") or "chromium")
+        return value if value in {"cloakbrowser", "chromium"} else "chromium"
 
     async def run(self, url: str, action: Callable[[Any], Any], *, headless: bool = True,
                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
@@ -79,34 +95,46 @@ class BrowserService:
                     # 等待工作线程释放浏览器，避免停用返回后仍在执行浏览器操作。
                     await asyncio.gather(task, return_exceptions=True)
                     raise
+        launch_args: dict[str, object] = {"headless": headless}
+        if resolved_proxy:
+            launch_args["proxy"] = resolved_proxy
+        playwright = None
         try:
-            from playwright.async_api import async_playwright
+            if self.engine == "cloakbrowser":
+                from ..cloak_proxy import configure_cloakbrowser
+                configure_cloakbrowser(self.settings)
+                from cloakbrowser import launch_async
+                browser = await launch_async(**launch_args)
+            else:
+                from playwright.async_api import async_playwright
+                playwright = await async_playwright().start()
+                browser = await playwright.chromium.launch(**launch_args)
         except ImportError as exc:
-            raise RuntimeError("浏览器能力未安装，请安装 playwright") from exc
-        async with async_playwright() as playwright:
-            launch_args: dict[str, object] = {"headless": headless}
-            if resolved_proxy:
-                launch_args["proxy"] = resolved_proxy
-            browser = await playwright.chromium.launch(**launch_args)
-            context_args = {"user_agent": user_agent} if user_agent else {}
-            context = None
+            name = "CloakBrowser" if self.engine == "cloakbrowser" else "Playwright"
+            raise RuntimeError(f"浏览器能力未安装，请安装 {name}") from exc
+        context_args = {"user_agent": user_agent} if user_agent else {}
+        context = None
+        try:
+            context = await browser.new_context(**context_args)
+            if isinstance(cookies, str):
+                await context.set_extra_http_headers({"Cookie": cookies})
+            elif cookies:
+                await context.add_cookies(cookies)
+            page = await context.new_page()
+            page.set_default_timeout(timeout * 1000)
+            await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            value = action(page)
+            return await asyncio.wait_for(value, timeout=timeout) if isinstance(value, Awaitable) else value
+        finally:
             try:
-                context = await browser.new_context(**context_args)
-                if isinstance(cookies, str):
-                    await context.set_extra_http_headers({"Cookie": cookies})
-                elif cookies:
-                    await context.add_cookies(cookies)
-                page = await context.new_page()
-                page.set_default_timeout(timeout * 1000)
-                await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-                value = action(page)
-                return await asyncio.wait_for(value, timeout=timeout) if isinstance(value, Awaitable) else value
+                if context is not None:
+                    await context.close()
             finally:
                 try:
-                    if context is not None:
-                        await context.close()
-                finally:
                     await browser.close()
+                finally:
+                    if playwright is not None:
+                        await playwright.stop()
 
     async def page_source(self, url: str, **kwargs: Any) -> str:
         def source(page):

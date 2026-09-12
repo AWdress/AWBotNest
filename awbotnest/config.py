@@ -15,6 +15,8 @@ CONFIG_FILE = DATA_DIR / "config.json"
 
 # 在插件导入 CloakBrowser 前配置缓存；尊重管理员显式指定的目录。
 os.environ.setdefault("CLOAKBROWSER_CACHE_DIR", str(DATA_DIR / "cloakbrowser"))
+# License Key 只由系统设置管理，忽略容器或宿主机注入的同名环境变量。
+os.environ.pop("CLOAKBROWSER_LICENSE_KEY", None)
 
 
 def validate_config_format(value: object) -> None:
@@ -65,6 +67,9 @@ class Settings:
     api_key: str = ""
     pip_index_url: str = ""
     github_token: str = ""
+    browser_engine: str = "chromium"
+    cloakbrowser_use_free_key: bool = False
+    cloakbrowser_license_key: str = ""
     log_cleaner: dict[str, object] = field(default_factory=lambda: {
         "enabled": True, "keep_lines": 1000, "hour": 3, "minute": 0,
     })
@@ -106,6 +111,10 @@ def load_settings(*, persist_defaults: bool = True) -> Settings:
         for item in raw_bots if isinstance(item, dict) and str(item.get("id") or "").strip()
     ]
     generated_admin_token = not bool(str(raw.get("admin_token") or "").strip())
+    stored_cloak_key = str(raw.get("cloakbrowser_license_key") or "").strip()
+    stored_cloak_key_enabled = raw.get(
+        "cloakbrowser_use_free_key", bool(stored_cloak_key),
+    ) is True
     settings = Settings(
         api_id=int(_env("api_id", raw.get("api_id", 0)) or 0),
         api_hash=str(_env("api_hash", raw.get("api_hash", "")) or ""),
@@ -161,6 +170,11 @@ def load_settings(*, persist_defaults: bool = True) -> Settings:
         api_key=str(_env("api_key", raw.get("api_key", "")) or "").strip(),
         pip_index_url=str(_env("pip_index_url", raw.get("pip_index_url", "")) or "").strip(),
         github_token=str(_env("github_token", raw.get("github_token", "")) or "").strip(),
+        browser_engine=(str(raw.get("browser_engine") or "chromium").strip()
+                        if str(raw.get("browser_engine") or "chromium").strip()
+                        in {"cloakbrowser", "chromium"} else "chromium"),
+        cloakbrowser_use_free_key=stored_cloak_key_enabled and bool(stored_cloak_key),
+        cloakbrowser_license_key=stored_cloak_key,
         log_cleaner=dict(raw.get("log_cleaner") or {
             "enabled": True, "keep_lines": 1000, "hour": 3, "minute": 0,
         }) if isinstance(raw.get("log_cleaner") or {}, dict) else {

@@ -151,6 +151,16 @@ const anyDirty = computed(() => dirty.value || aiDirty.value || cookieDirty.valu
 // 保存后需重启提示
 const restartHint = ref(false)
 const restarting = ref(false)
+const browserStatus = ref(null)
+const browserStatusError = ref('')
+const browserStatusLoading = ref(false)
+const browserUpdating = ref(false)
+const cloakFreeKeyActive = computed(() => Boolean(
+  s.value?.CLOAKBROWSER_USE_FREE_KEY
+  && String(s.value?.CLOAKBROWSER_LICENSE_KEY || '').trim()
+))
+const savedCloakFreeKeyActive = computed(() => Boolean(browserStatus.value?.key_active))
+let browserStatusTimer = null
 let restartTimer = null   // 重启轮询定时器；提升为模块级以便组件卸载时清理
 const notificationSyncSource = `settings_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
@@ -406,6 +416,14 @@ function startAiStatusPolling() {
 watch(tab, (value) => {
   if (value === 'ai' && ai.value) startAiStatusPolling()
   else stopAiStatusPolling()
+  if (value === 'system') {
+    void loadBrowserStatus()
+    if (browserStatusTimer) clearInterval(browserStatusTimer)
+    browserStatusTimer = window.setInterval(loadBrowserStatus, 4000)
+  } else if (browserStatusTimer) {
+    clearInterval(browserStatusTimer)
+    browserStatusTimer = null
+  }
 })
 
 async function saveAiSettings() {
@@ -931,6 +949,11 @@ async function load(silent = false) {
     s.value.proxy_set.proxy = s.value.proxy_set.proxy || {}
     if (s.value.PIP_INDEX_URL === undefined) s.value.PIP_INDEX_URL = ''
     if (s.value.GITHUB_TOKEN === undefined) s.value.GITHUB_TOKEN = ''
+    if (s.value.BROWSER_ENGINE === undefined) s.value.BROWSER_ENGINE = 'chromium'
+    if (s.value.CLOAKBROWSER_USE_FREE_KEY === undefined) {
+      s.value.CLOAKBROWSER_USE_FREE_KEY = Boolean(s.value.CLOAKBROWSER_LICENSE_KEY)
+    }
+    if (s.value.CLOAKBROWSER_LICENSE_KEY === undefined) s.value.CLOAKBROWSER_LICENSE_KEY = ''
     s.value.DB_INFO = s.value.DB_INFO || {}
     s.value.ACCOUNTS = s.value.ACCOUNTS || []
     s.value.BOTS = Array.isArray(s.value.BOTS) ? s.value.BOTS : []
@@ -1008,6 +1031,7 @@ async function save() {
     }
     // Bot 列表可能变化 → 刷新推送路由的可选项
     if (tab.value === 'notify') await loadRouting()
+    if (tab.value === 'system') await loadBrowserStatus()
     return true
   } catch (e) {
     toast.error('保存失败：' + e.message)
@@ -1015,20 +1039,61 @@ async function save() {
   } finally { saving.value = false }
 }
 
+function waitForPlatformRestart() {
+  restartHint.value = false
+  let tries = 0
+  if (restartTimer) clearInterval(restartTimer)
+  restartTimer = setInterval(async () => {
+    tries++
+    try { await api.status(true); clearInterval(restartTimer); restartTimer = null; location.reload() }
+    catch {
+      if (tries > 30) {
+        clearInterval(restartTimer)
+        restartTimer = null
+        restarting.value = false
+        browserUpdating.value = false
+        toast.error('平台重启等待超时，请手动刷新页面检查状态')
+      }
+    }
+  }, 2000)
+}
+
 async function doRestart() {
   restarting.value = true
   try {
     await api.restartPlatform()
     toast.success('正在重启，十几秒后自动刷新')
-    restartHint.value = false
-    let tries = 0
-    if (restartTimer) clearInterval(restartTimer)
-    restartTimer = setInterval(async () => {
-      tries++
-      try { await api.status(); clearInterval(restartTimer); restartTimer = null; location.reload() }
-      catch { if (tries > 30) { clearInterval(restartTimer); restartTimer = null; restarting.value = false } }
-    }, 2000)
+    waitForPlatformRestart()
   } catch (e) { toast.error('重启请求失败：' + e.message); restarting.value = false }
+}
+
+async function loadBrowserStatus() {
+  if (browserStatusLoading.value || browserUpdating.value || document.hidden) return
+  browserStatusLoading.value = true
+  browserStatusError.value = ''
+  try {
+    browserStatus.value = await api.getBrowserStatus()
+  } catch (e) {
+    browserStatusError.value = e.message
+  } finally {
+    browserStatusLoading.value = false
+  }
+}
+
+async function updateCloakBrowser() {
+  if (browserUpdating.value || restarting.value) return
+  if (dirty.value && !(await save())) return
+  browserUpdating.value = true
+  try {
+    const result = await api.updateCloakBrowser()
+    restarting.value = true
+    toast.success(result.message || 'CloakBrowser 已更新，平台正在重启')
+    waitForPlatformRestart()
+  } catch (e) {
+    browserUpdating.value = false
+    toast.error('更新失败：' + e.message)
+    await loadBrowserStatus()
+  }
 }
 
 // ── 连接测试（代理 / 数据库）──
@@ -1641,6 +1706,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopNotificationSync?.()
   stopAiStatusPolling()
+  if (browserStatusTimer) { clearInterval(browserStatusTimer); browserStatusTimer = null }
   if (restartTimer) { clearInterval(restartTimer); restartTimer = null }
 })
 
@@ -2720,6 +2786,91 @@ onBeforeRouteLeave(async () => {
         </div>
       </div>
 
+      <!-- 浏览器仿真 -->
+      <div v-if="tab === 'system'" class="card" style="margin-top:16px">
+        <div class="card-title">浏览器仿真</div>
+        <div class="browser-engine-options" role="radiogroup" aria-label="浏览器仿真引擎">
+          <label class="browser-engine-option" :class="{ selected: s.BROWSER_ENGINE === 'chromium' }">
+            <input v-model="s.BROWSER_ENGINE" type="radio" value="chromium" />
+            <span class="browser-engine-copy">
+              <span class="browser-engine-name">Chromium <span class="badge">默认</span></span>
+              <span class="hint muted">使用平台现有 Chromium，兼容所有现有插件浏览器调用。</span>
+            </span>
+          </label>
+          <label class="browser-engine-option" :class="{ selected: s.BROWSER_ENGINE === 'cloakbrowser' }">
+            <input v-model="s.BROWSER_ENGINE" type="radio" value="cloakbrowser" />
+            <span class="browser-engine-copy">
+              <span class="browser-engine-name">CloakBrowser</span>
+              <span class="hint muted">提供浏览器指纹仿真和反检测能力，首次保存时自动安装。</span>
+            </span>
+          </label>
+        </div>
+        <div v-if="s.BROWSER_ENGINE === 'cloakbrowser'" class="browser-key-mode">
+          <div class="browser-key-mode-copy">
+            <strong>使用免费 Key 获取最新版</strong>
+            <span class="hint muted">
+              开启后使用最新版内核并启用单会话排队；关闭后使用旧版免费内核，已保存的 Key 不会传给 CloakBrowser。
+            </span>
+          </div>
+          <button type="button" class="toggle" :class="{ on: s.CLOAKBROWSER_USE_FREE_KEY }"
+                  :aria-pressed="s.CLOAKBROWSER_USE_FREE_KEY" aria-label="使用免费 Key 获取最新版"
+                  @click="s.CLOAKBROWSER_USE_FREE_KEY = !s.CLOAKBROWSER_USE_FREE_KEY"></button>
+        </div>
+        <div v-if="s.BROWSER_ENGINE === 'cloakbrowser' && s.CLOAKBROWSER_USE_FREE_KEY"
+             class="field browser-license-field">
+          <label>CloakBrowser License Key</label>
+          <SecretInput v-model="s.CLOAKBROWSER_LICENSE_KEY" mono
+                       @reveal="revealSystemSecret('CLOAKBROWSER_LICENSE_KEY', (value, secret) => { value.CLOAKBROWSER_LICENSE_KEY = secret })"
+                       placeholder="cb_你的完整 Key" />
+          <div class="hint muted small">
+            平台保存后直接提供给 CloakBrowser；依赖自动安装到持久化插件依赖目录。
+            <a href="https://cloakbrowser.dev/free" target="_blank" rel="noopener noreferrer">获取免费 Key</a>
+          </div>
+        </div>
+        <div v-if="s.BROWSER_ENGINE === 'cloakbrowser'" class="browser-runtime" aria-live="polite">
+          <div class="browser-runtime-copy">
+            <strong v-if="browserStatusError" class="browser-runtime-error">状态读取失败</strong>
+            <strong v-else>
+              CloakBrowser {{ browserStatus?.cloakbrowser_version || '尚未安装' }}
+            </strong>
+            <span v-if="browserStatusError" class="hint muted">{{ browserStatusError }}</span>
+            <span v-else-if="cloakFreeKeyActive && savedCloakFreeKeyActive" class="hint muted">
+              免费 Key 单会话排队已开启
+              <template v-if="browserStatus?.active"> · 1 个会话运行中</template>
+              <template v-if="browserStatus?.waiting"> · {{ browserStatus.waiting }} 个调用等待中</template>
+              <template v-if="browserStatus?.cooldown_seconds"> · 异常会话释放等待 {{ browserStatus.cooldown_seconds }} 秒</template>
+            </span>
+            <span v-else-if="cloakFreeKeyActive" class="hint muted">
+              保存设置后使用最新版内核并启用单会话排队。
+            </span>
+            <span v-else-if="s.CLOAKBROWSER_USE_FREE_KEY" class="hint muted">
+              尚未填写 Key，将使用旧版免费内核且不启用单会话排队。
+            </span>
+            <span v-else-if="savedCloakFreeKeyActive" class="hint muted">
+              保存设置后关闭免费 Key，并切回旧版免费内核。
+            </span>
+            <span v-else class="hint muted">
+              免费 Key 已关闭，使用旧版免费内核；已下载的最新版不会被调用。
+            </span>
+            <span v-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'checking'"
+                  class="browser-update-state muted">正在检查组件更新…</span>
+            <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'update_available'"
+                  class="browser-update-state browser-update-available">
+              发现组件新版 {{ browserStatus.update_check.latest_version }}
+            </span>
+            <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'current'"
+                  class="browser-update-state muted">组件已是兼容范围内最新版</span>
+            <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'error'"
+                  class="browser-update-state browser-runtime-error"
+                  :title="browserStatus.update_check.error">自动检查失败，稍后将重试</span>
+          </div>
+          <button class="btn sm" @click="updateCloakBrowser"
+                  :disabled="browserUpdating || restarting || browserStatus?.active || browserStatus?.waiting || browserStatus?.maintenance">
+            {{ browserUpdating ? '更新中…' : (restarting ? '正在重启…' : '检查并更新') }}
+          </button>
+        </div>
+      </div>
+
 
       <!-- 数据库 -->
       <div v-if="tab === 'system'" class="card" style="margin-top:16px">
@@ -3177,6 +3328,63 @@ onBeforeRouteLeave(async () => {
 .field label { font-size: 12px; color: var(--text-secondary); }
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
+.browser-engine-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.browser-engine-option {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+.browser-engine-option:hover { border-color: var(--border-light); }
+.browser-engine-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 5px 16px color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.browser-engine-option:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.browser-engine-option input { margin-top: 3px; accent-color: var(--accent); }
+.browser-engine-copy { display: flex; min-width: 0; flex-direction: column; gap: 5px; }
+.browser-engine-name { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.browser-engine-name .badge { margin-left: 5px; color: var(--accent); background: var(--accent-dim); }
+.browser-key-mode {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.browser-key-mode-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.browser-key-mode-copy strong { color: var(--text-primary); font-size: 13px; }
+.browser-key-mode .toggle { flex: 0 0 auto; }
+.browser-license-field { padding-top: 2px; }
+.browser-license-field a { color: var(--accent); text-underline-offset: 3px; }
+.browser-runtime {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.browser-runtime-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.browser-runtime-copy strong { color: var(--text-primary); font-size: 13px; }
+.browser-runtime-error { color: var(--danger) !important; }
+.browser-update-state { font-size: 12px; line-height: 1.45; }
+.browser-update-available { color: var(--accent); font-weight: 650; }
+.browser-runtime .btn { flex: 0 0 auto; }
 
 /* 通知：Bot 卡片网格 + 推送路由表 */
 .btn.sm { padding: 6px 12px; font-size: 13px; }
@@ -4234,6 +4442,10 @@ onBeforeRouteLeave(async () => {
 
 @media (max-width: 600px) {
   .grid2 { grid-template-columns: 1fr; }
+  .browser-engine-options { grid-template-columns: 1fr; }
+  .browser-key-mode { align-items: flex-start; }
+  .browser-runtime { align-items: stretch; flex-direction: column; }
+  .browser-runtime .btn { width: 100%; min-height: 42px; }
   .profile-settings { align-items: flex-start; }
   .profile-avatar { width: 68px; height: 68px; flex-basis: 68px; border-radius: 15px; }
   .profile-actions { align-items: flex-start; flex-direction: column; }
