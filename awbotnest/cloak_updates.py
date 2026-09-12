@@ -62,15 +62,58 @@ def _platform_tag() -> str:
         raise RuntimeError(f"当前平台不支持 CloakBrowser 内核：{key[0]} {key[1]}") from exc
 
 
-def kernel_binary_path(version: str) -> Path:
-    root = DATA_DIR / "cloakbrowser" / f"chromium-{version}-pro"
+def kernel_binary_path(version: str, *, pro: bool = True) -> Path:
+    suffix = "-pro" if pro else ""
+    root = DATA_DIR / "cloakbrowser" / f"chromium-{version}{suffix}"
     if platform.system() == "Darwin":
         return root / "Chromium.app" / "Contents" / "MacOS" / "Chromium"
     return root / ("chrome.exe" if platform.system() == "Windows" else "chrome")
 
 
-def kernel_binary_installed(version: str) -> bool:
-    return bool(version and kernel_binary_path(version).is_file())
+def kernel_binary_installed(version: str, *, pro: bool = True) -> bool:
+    return bool(version and kernel_binary_path(version, pro=pro).is_file())
+
+
+def current_kernel_versions(*, key_active: bool) -> list[dict[str, str]]:
+    """Return browser kernels that CloakBrowser can currently launch.
+
+    Pro launches are channel-specific, so their marker files are the source of
+    truth.  Legacy free launches have no reliable active marker on a fresh
+    install; in that mode the newest complete non-Pro binary is the effective
+    local choice.
+    """
+    cache_dir = DATA_DIR / "cloakbrowser"
+    if key_active:
+        try:
+            platform_tag = _platform_tag()
+        except RuntimeError:
+            return []
+        kernels: list[dict[str, str]] = []
+        for channel in KERNEL_CHANNELS:
+            prefix = "latest_pro_version_preview" if channel == "preview" else "latest_pro_version"
+            marker = cache_dir / f"{prefix}_{platform_tag}"
+            try:
+                version = marker.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if version and kernel_binary_installed(version):
+                kernels.append({"channel": channel, "version": version})
+        return kernels
+
+    versions: list[Version] = []
+    for root in cache_dir.glob("chromium-*"):
+        if not root.is_dir() or root.name.endswith("-pro"):
+            continue
+        raw_version = root.name.removeprefix("chromium-")
+        try:
+            version = Version(raw_version)
+        except InvalidVersion:
+            continue
+        if kernel_binary_installed(raw_version, pro=False):
+            versions.append(version)
+    if not versions:
+        return []
+    return [{"channel": "legacy_free", "version": str(max(versions))}]
 
 
 def required_kernel_channels() -> tuple[str, ...]:

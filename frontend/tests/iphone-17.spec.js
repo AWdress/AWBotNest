@@ -63,8 +63,10 @@ test.beforeEach(async ({ page }) => {
     if (path === '/api/settings') return json(route, { settings })
     if (path === '/api/browser/status') return json(route, {
       engine: 'chromium', cloakbrowser_installed: true, cloakbrowser_version: '0.5.10',
+      cloakbrowser_kernels: [{ channel: 'legacy_free', version: '146.0.7680.177.5' }],
       key_configured: false, key_enabled: false, key_active: false,
       binary_mode: 'legacy_free',
+      update_check: { status: 'disabled', update_available: false },
       queue_enabled: false, active: false, waiting: 0,
       maintenance: false, cooldown_seconds: 0,
     })
@@ -275,7 +277,8 @@ test('iPhone 17 可选择浏览器仿真并配置 CloakBrowser Key', async ({ pa
   await expect(page.getByText(/免费 Key 已关闭，使用旧版免费内核/)).toBeVisible()
   await page.getByRole('button', { name: '使用免费 Key 获取最新版' }).click()
   await expect(page.getByPlaceholder('cb_你的完整 Key')).toBeVisible()
-  await expect(page.getByText('CloakBrowser 0.5.10')).toBeVisible()
+  await expect(page.getByLabel('CloakBrowser 版本信息')).toContainText('组件0.5.10')
+  await expect(page.getByLabel('CloakBrowser 版本信息')).toContainText('免费内核146.0.7680.177.5')
   await expect(page.getByText(/尚未填写 Key，将使用旧版免费内核/)).toBeVisible()
   await expectInsideViewport(page)
   const overflow = await page.evaluate(() => ({
@@ -283,6 +286,33 @@ test('iPhone 17 可选择浏览器仿真并配置 CloakBrowser Key', async ({ pa
     page: document.documentElement.scrollWidth,
   }))
   expect(overflow.page).toBeLessThanOrEqual(overflow.viewport)
+})
+
+test('CloakBrowser 分开显示组件和内核版本，最新时按钮明确标识', async ({ page }) => {
+  await page.route('**/api/settings', (route) => json(route, { settings: {
+    ...settings,
+    BROWSER_ENGINE: 'cloakbrowser',
+    CLOAKBROWSER_USE_FREE_KEY: true,
+    CLOAKBROWSER_LICENSE_KEY: '********',
+  } }))
+  await page.route('**/api/browser/status', (route) => json(route, {
+    engine: 'cloakbrowser', cloakbrowser_installed: true, cloakbrowser_version: '0.5.10',
+    cloakbrowser_kernels: [{ channel: 'stable', version: '152.0.7977.82.1' }],
+    key_configured: true, key_enabled: true, key_active: true, binary_mode: 'latest',
+    update_check: {
+      status: 'current', update_available: false, required_kernel_channels: ['stable'],
+      kernel_channels: [{ channel: 'stable', latest_version: '152.0.7977.82.1', update_available: false }],
+    },
+    queue_enabled: true, active: false, waiting: 0, maintenance: false, cooldown_seconds: 0,
+  }))
+
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: '运行环境', exact: true }).click()
+  const versions = page.getByLabel('CloakBrowser 版本信息')
+  await expect(versions).toContainText('组件0.5.10')
+  await expect(versions).toContainText('Stable 内核152.0.7977.82.1')
+  await expect(page.getByRole('button', { name: '已是最新', exact: true })).toBeDisabled()
+  await expectInsideViewport(page)
 })
 
 test('AI 主配置不等待后台统计和插件扫描', async ({ page }) => {

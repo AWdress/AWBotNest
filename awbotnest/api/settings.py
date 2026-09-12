@@ -30,7 +30,8 @@ from ..cloak_proxy import (
     configure_cloakbrowser, unload_cloakbrowser_modules,
 )
 from ..cloak_updates import (
-    check_cloakbrowser_update, cloak_update_status, kernel_binary_installed,
+    check_cloakbrowser_update, cloak_update_status, current_kernel_versions,
+    kernel_binary_installed,
     mark_cloakbrowser_updated, update_cloakbrowser_kernel,
 )
 from ..services.http import HttpService
@@ -754,6 +755,7 @@ def create_router(deps) -> APIRouter:
             "engine": settings.browser_engine,
             "cloakbrowser_installed": bool(manager.target_version("cloakbrowser")),
             "cloakbrowser_version": manager.target_version("cloakbrowser"),
+            "cloakbrowser_kernels": current_kernel_versions(key_active=key_active),
             "key_configured": bool(settings.cloakbrowser_license_key),
             "key_enabled": settings.cloakbrowser_use_free_key,
             "key_active": key_active,

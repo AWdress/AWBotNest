@@ -160,8 +160,28 @@ const cloakFreeKeyActive = computed(() => Boolean(
   && String(s.value?.CLOAKBROWSER_LICENSE_KEY || '').trim()
 ))
 const savedCloakFreeKeyActive = computed(() => Boolean(browserStatus.value?.key_active))
+const cloakKernelVersions = computed(() => Array.isArray(browserStatus.value?.cloakbrowser_kernels)
+  ? browserStatus.value.cloakbrowser_kernels
+  : [])
+const cloakUpdateCurrent = computed(() => Boolean(
+  !browserStatusError.value
+  && savedCloakFreeKeyActive.value
+  && browserStatus.value?.update_check?.status === 'current'
+  && !browserStatus.value?.update_check?.update_available
+))
+const cloakUpdateButtonLabel = computed(() => {
+  if (browserUpdating.value) return '更新中…'
+  if (restarting.value) return '正在重启…'
+  if (browserStatusLoading.value && !browserStatus.value) return '读取状态…'
+  return cloakUpdateCurrent.value ? '已是最新' : '检查并更新'
+})
 function cloakChannelLabel(channel) {
   return channel === 'preview' ? 'Preview 内核' : 'Stable 内核'
+}
+function installedKernelLabel(channel) {
+  if (channel === 'preview') return 'Preview 内核'
+  if (channel === 'stable') return 'Stable 内核'
+  return '免费内核'
 }
 const cloakUpdateSummary = computed(() => {
   const status = browserStatus.value?.update_check
@@ -2847,9 +2867,18 @@ onBeforeRouteLeave(async () => {
         <div v-if="s.BROWSER_ENGINE === 'cloakbrowser'" class="browser-runtime" aria-live="polite">
           <div class="browser-runtime-copy">
             <strong v-if="browserStatusError" class="browser-runtime-error">状态读取失败</strong>
-            <strong v-else>
-              CloakBrowser {{ browserStatus?.cloakbrowser_version || '尚未安装' }}
-            </strong>
+            <template v-else>
+              <strong>CloakBrowser</strong>
+              <div class="browser-version-list" aria-label="CloakBrowser 版本信息">
+                <span><span>组件</span><b>{{ browserStatus?.cloakbrowser_version || '尚未安装' }}</b></span>
+                <span v-for="item in cloakKernelVersions" :key="`${item.channel}-${item.version}`">
+                  <span>{{ installedKernelLabel(item.channel) }}</span><b>{{ item.version }}</b>
+                </span>
+                <span v-if="browserStatus?.cloakbrowser_installed && !cloakKernelVersions.length">
+                  <span>浏览器内核</span><b>尚未下载</b>
+                </span>
+              </div>
+            </template>
             <span v-if="browserStatusError" class="hint muted">{{ browserStatusError }}</span>
             <span v-else-if="cloakFreeKeyActive && savedCloakFreeKeyActive" class="hint muted">
               免费 Key 单会话排队已开启
@@ -2889,9 +2918,11 @@ onBeforeRouteLeave(async () => {
                   class="browser-update-state browser-runtime-error"
                   :title="browserStatus.update_check.error">部分更新通道检查失败，稍后将重试</span>
           </div>
-          <button class="btn sm" @click="updateCloakBrowser"
-                  :disabled="browserUpdating || restarting || browserStatus?.active || browserStatus?.waiting || browserStatus?.maintenance">
-            {{ browserUpdating ? '更新中…' : (restarting ? '正在重启…' : '检查并更新') }}
+          <button class="btn sm" :class="{ current: cloakUpdateCurrent }" @click="updateCloakBrowser"
+                  :disabled="browserUpdating || restarting || cloakUpdateCurrent
+                    || (browserStatusLoading && !browserStatus) || browserStatus?.active
+                    || browserStatus?.waiting || browserStatus?.maintenance">
+            {{ cloakUpdateButtonLabel }}
           </button>
         </div>
       </div>
@@ -3406,10 +3437,14 @@ onBeforeRouteLeave(async () => {
 }
 .browser-runtime-copy { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
 .browser-runtime-copy strong { color: var(--text-primary); font-size: 13px; }
+.browser-version-list { display: flex; flex-wrap: wrap; gap: 5px 14px; }
+.browser-version-list > span { display: inline-flex; align-items: baseline; gap: 5px; color: var(--text-muted); font-size: 12px; }
+.browser-version-list b { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .browser-runtime-error { color: var(--danger) !important; }
 .browser-update-state { font-size: 12px; line-height: 1.45; }
 .browser-update-available { color: var(--accent); font-weight: 650; }
 .browser-runtime .btn { flex: 0 0 auto; }
+.browser-runtime .btn.current:disabled { color: var(--success); border-color: color-mix(in srgb, var(--success) 34%, var(--border)); opacity: 1; }
 
 /* 通知：Bot 卡片网格 + 推送路由表 */
 .btn.sm { padding: 6px 12px; font-size: 13px; }

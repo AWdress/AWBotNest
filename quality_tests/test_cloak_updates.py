@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest import IsolatedAsyncioTestCase
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, Mock, patch
 
-from awbotnest.cloak_updates import check_cloakbrowser_update
+from awbotnest.cloak_updates import check_cloakbrowser_update, current_kernel_versions
 
 
 def _settings(**overrides):
@@ -108,3 +110,38 @@ class CloakUpdateTests(IsolatedAsyncioTestCase):
         self.assertEqual(
             [item["channel"] for item in result["kernel_channels"]], ["preview"],
         )
+
+
+class CloakKernelVersionTests(TestCase):
+    def test_key_mode_reports_the_channel_markers_plugins_actually_launch(self):
+        with TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "cloakbrowser"
+            cache.mkdir()
+            (cache / "latest_pro_version_linux-x64").write_text(
+                "152.0.7977.82.1", encoding="utf-8",
+            )
+            (cache / "latest_pro_version_preview_linux-x64").write_text(
+                "153.0.8000.1.2", encoding="utf-8",
+            )
+            with patch("awbotnest.cloak_updates.DATA_DIR", Path(temporary)), \
+                 patch("awbotnest.cloak_updates._platform_tag", return_value="linux-x64"), \
+                 patch("awbotnest.cloak_updates.kernel_binary_installed",
+                       side_effect=lambda version: version.startswith("152.")):
+                result = current_kernel_versions(key_active=True)
+
+        self.assertEqual(result, [
+            {"channel": "stable", "version": "152.0.7977.82.1"},
+        ])
+
+    def test_legacy_mode_ignores_downloaded_pro_kernels(self):
+        with TemporaryDirectory() as temporary:
+            cache = Path(temporary) / "cloakbrowser"
+            (cache / "chromium-146.0.1").mkdir(parents=True)
+            (cache / "chromium-152.0.1-pro").mkdir()
+            with patch("awbotnest.cloak_updates.DATA_DIR", Path(temporary)), \
+                 patch("awbotnest.cloak_updates.kernel_binary_installed", return_value=True):
+                result = current_kernel_versions(key_active=False)
+
+        self.assertEqual(result, [
+            {"channel": "legacy_free", "version": "146.0.1"},
+        ])
