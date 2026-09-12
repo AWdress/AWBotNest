@@ -27,8 +27,13 @@ from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings,
 from ..deps import DependencyManager
 from ..cloak_proxy import (
     begin_cloak_update, cancel_cloak_update, cloak_session_status,
+    configure_cloakbrowser, unload_cloakbrowser_modules,
 )
-from ..cloak_updates import cloak_update_status, mark_cloakbrowser_updated
+from ..cloak_updates import (
+    check_cloakbrowser_update, cloak_update_status, kernel_binary_installed,
+    mark_cloakbrowser_updated, update_cloakbrowser_kernel,
+)
+from ..services.http import HttpService
 from ..logs import memory_logs
 from ..market import normalize_repo
 from ..routing import WebhookRequest
@@ -767,6 +772,7 @@ def create_router(deps) -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         manager = DependencyManager(settings)
+        update_status: dict[str, Any] = {"required_kernel_channels": []}
         try:
             await manager.ensure(
                 ["cloakbrowser>=0.5.10,<0.6"],
@@ -775,14 +781,53 @@ def create_router(deps) -> APIRouter:
                 upgrade=True,
             )
             version = manager.target_version("cloakbrowser")
+            # pip may have replaced files belonging to modules already loaded by a
+            # plugin.  Reload the optional package before asking it to install the
+            # newly discovered browser kernels.
+            unload_cloakbrowser_modules()
+            configure_cloakbrowser(settings)
+
+            key_active = bool(
+                settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
+            )
+            if key_active:
+                channels = (
+                    runtime.cloakbrowser_channels()
+                    if callable(getattr(runtime, "cloakbrowser_channels", None)) else ()
+                )
+                update_status = await check_cloakbrowser_update(
+                    settings, HttpService(settings), channels,
+                )
+                failed_channels = [
+                    item for item in update_status.get("kernel_channels", [])
+                    if item.get("status") == "error"
+                ]
+                if failed_channels:
+                    details = "；".join(
+                        f"{str(item.get('channel') or '').title()}：{item.get('error') or '检查失败'}"
+                        for item in failed_channels
+                    )
+                    raise RuntimeError(f"浏览器内核版本检查失败：{details}")
+                for item in update_status.get("kernel_channels", []):
+                    if not item.get("update_available"):
+                        continue
+                    channel = str(item.get("channel") or "")
+                    downloaded = await asyncio.to_thread(
+                        update_cloakbrowser_kernel,
+                        settings.cloakbrowser_license_key,
+                        channel,
+                    )
+                    expected = str(downloaded or item.get("latest_version") or "")
+                    if not kernel_binary_installed(expected):
+                        raise RuntimeError(
+                            f"{channel.title()} 内核更新完成后未找到浏览器文件"
+                        )
             mark_cloakbrowser_updated(settings, version)
         except Exception as exc:
             cancel_cloak_update()
             raise HTTPException(status_code=502, detail=f"CloakBrowser 更新失败：{exc}") from exc
         will_restart = restart_event is not None
-        key_active = bool(
-            settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
-        )
+        key_active = bool(settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key)
         if will_restart:
             asyncio.get_running_loop().call_later(0.8, restart_event.set)
         else:
@@ -794,11 +839,12 @@ def create_router(deps) -> APIRouter:
             "version": version,
             "restarting": will_restart,
             "message": (
-                "CloakBrowser 组件已更新，平台正在重启；"
-                if will_restart else "CloakBrowser 组件已更新；重启宿主后生效，"
-            ) + (
-                "最新版内核将在下次调用时自动检查。"
-                if key_active else "当前未启用免费 Key，后续调用仍使用旧版免费内核。"
+                ("CloakBrowser 组件和插件所需浏览器内核已更新"
+                 if key_active and update_status.get("required_kernel_channels")
+                 else "CloakBrowser 组件已更新，暂无启用插件需要下载内核"
+                 if key_active
+                 else "CloakBrowser 组件已更新，浏览器内核保持原有逻辑")
+                + ("，平台正在重启。" if will_restart else "；重启宿主后生效。")
             ),
         }
 

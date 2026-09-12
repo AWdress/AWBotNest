@@ -48,6 +48,9 @@ class PluginRuntime:
     def uses_platform_ai(self, plugin_id: str) -> bool:
         return self.scanner.uses_platform_ai(plugin_id)
 
+    def cloakbrowser_channels(self) -> tuple[str, ...]:
+        return self.scanner.cloakbrowser_channels()
+
     @staticmethod
     def _source_uses_platform_ai(path: Path) -> bool:
         return PluginScanner.source_uses_platform_ai(path)

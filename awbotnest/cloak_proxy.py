@@ -199,6 +199,11 @@ def cancel_cloak_update() -> None:
 def reset_cloakbrowser_runtime() -> None:
     """Finish a hot reload and force the next import to use updated files."""
     cancel_cloak_update()
+    unload_cloakbrowser_modules()
+
+
+def unload_cloakbrowser_modules() -> None:
+    """Discard imported CloakBrowser modules without changing maintenance state."""
     for name in tuple(sys.modules):
         if name == "cloakbrowser" or name.startswith("cloakbrowser."):
             sys.modules.pop(name, None)

@@ -160,6 +160,23 @@ const cloakFreeKeyActive = computed(() => Boolean(
   && String(s.value?.CLOAKBROWSER_LICENSE_KEY || '').trim()
 ))
 const savedCloakFreeKeyActive = computed(() => Boolean(browserStatus.value?.key_active))
+function cloakChannelLabel(channel) {
+  return channel === 'preview' ? 'Preview 内核' : 'Stable 内核'
+}
+const cloakUpdateSummary = computed(() => {
+  const status = browserStatus.value?.update_check
+  if (!status) return ''
+  const parts = []
+  if (status.component_update_available && status.latest_version) {
+    parts.push(`组件 ${status.latest_version}`)
+  }
+  for (const item of status.kernel_channels || []) {
+    if (item.update_available && item.latest_version) {
+      parts.push(`${cloakChannelLabel(item.channel)} ${item.latest_version}`)
+    }
+  }
+  return parts.join('、')
+})
 let browserStatusTimer = null
 let restartTimer = null   // 重启轮询定时器；提升为模块级以便组件卸载时清理
 const notificationSyncSource = `settings_${Math.random().toString(36).slice(2)}`
@@ -2853,16 +2870,24 @@ onBeforeRouteLeave(async () => {
               免费 Key 已关闭，使用旧版免费内核；已下载的最新版不会被调用。
             </span>
             <span v-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'checking'"
-                  class="browser-update-state muted">正在检查组件更新…</span>
+                  class="browser-update-state muted">正在检查组件和插件所需内核…</span>
             <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'update_available'"
                   class="browser-update-state browser-update-available">
-              发现组件新版 {{ browserStatus.update_check.latest_version }}
+              发现更新：{{ cloakUpdateSummary }}
             </span>
             <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'current'"
-                  class="browser-update-state muted">组件已是兼容范围内最新版</span>
+                  class="browser-update-state muted">
+              {{ browserStatus?.update_check?.required_kernel_channels?.length
+                ? '组件和插件所需内核均已是最新'
+                : '组件已是最新；暂无启用插件需要预下载内核' }}
+            </span>
             <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'error'"
                   class="browser-update-state browser-runtime-error"
                   :title="browserStatus.update_check.error">自动检查失败，稍后将重试</span>
+            <span v-if="savedCloakFreeKeyActive && browserStatus?.update_check?.error
+                         && browserStatus?.update_check?.status !== 'error'"
+                  class="browser-update-state browser-runtime-error"
+                  :title="browserStatus.update_check.error">部分更新通道检查失败，稍后将重试</span>
           </div>
           <button class="btn sm" @click="updateCloakBrowser"
                   :disabled="browserUpdating || restarting || browserStatus?.active || browserStatus?.waiting || browserStatus?.maintenance">

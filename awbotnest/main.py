@@ -139,7 +139,9 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
         # The checker itself repeats these local guards before any HTTP call.
         # Keeping the job registered lets a saved setting change take effect
         # without requiring the platform scheduler to be rebuilt.
-        return await check_cloakbrowser_update(settings, services.http)
+        return await check_cloakbrowser_update(
+            settings, services.http, runtime.cloakbrowser_channels(),
+        )
 
     scheduler.add_interval(
         "__platform__", "CloakBrowser 更新检查", check_cloakbrowser_updates_job,

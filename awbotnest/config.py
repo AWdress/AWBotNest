@@ -15,6 +15,9 @@ CONFIG_FILE = DATA_DIR / "config.json"
 
 # 在插件导入 CloakBrowser 前配置缓存；尊重管理员显式指定的目录。
 os.environ.setdefault("CLOAKBROWSER_CACHE_DIR", str(DATA_DIR / "cloakbrowser"))
+# 浏览器内核更新由平台统一检查和执行，关闭 CloakBrowser 自带的启动时后台更新。
+# 首次没有可用内核时，CloakBrowser 仍会下载当前调用所需的内核。
+os.environ["CLOAKBROWSER_AUTO_UPDATE"] = "false"
 # License Key 只由系统设置管理，忽略容器或宿主机注入的同名环境变量。
 os.environ.pop("CLOAKBROWSER_LICENSE_KEY", None)
 
