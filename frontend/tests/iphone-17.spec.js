@@ -382,6 +382,44 @@ test('iPhone 17 插件配置关闭按钮避开顶部安全区且易于点击', a
   await expect(modal).toBeHidden()
 })
 
+test('iPhone 17 输入法弹出后配置输入框仍位于可见区域', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, 'standalone', { configurable: true, value: true })
+  })
+  await page.goto('/#/plugins')
+  await page.getByText('手机配置测试', { exact: true }).click()
+
+  const modal = page.locator('.modal.modal-wide')
+  const secret = modal.locator('.secret-input input').first()
+  await expect(secret).toBeVisible()
+  await secret.evaluate((input) => {
+    input.closest('.field').style.marginTop = '620px'
+    input.focus({ preventScroll: true })
+  })
+  await page.setViewportSize({ width: 402, height: 500 })
+  await expect(page.locator('html')).toHaveClass(/keyboard-open/)
+  await page.waitForTimeout(350)
+
+  const geometry = await page.evaluate(() => {
+    const field = document.activeElement
+    const modal = document.querySelector('.modal.modal-wide')
+    const appLayout = document.querySelector('#app > .layout')
+    const fieldBox = field.getBoundingClientRect()
+    const modalBox = modal.getBoundingClientRect()
+    return {
+      fieldBottom: fieldBox.bottom,
+      modalTop: modalBox.top,
+      modalHeight: modalBox.height,
+      layoutHeight: appLayout?.getBoundingClientRect().height || 0,
+      visibleHeight: window.visualViewport?.height || window.innerHeight,
+    }
+  })
+  expect(geometry.fieldBottom).toBeLessThanOrEqual(geometry.visibleHeight - 16)
+  expect(geometry.modalTop).toBeGreaterThanOrEqual(0)
+  expect(geometry.modalHeight).toBeLessThanOrEqual(geometry.visibleHeight + 1)
+  expect(geometry.layoutHeight).toBeGreaterThan(geometry.visibleHeight)
+})
+
 test('插件敏感配置只在点击显示后读取真实值', async ({ page }) => {
   await page.goto('/#/plugins')
   await page.locator('.plugin-card').first().click()

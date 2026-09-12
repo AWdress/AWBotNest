@@ -10,6 +10,8 @@ import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
 import SecretInput from './SecretInput.vue'
+import CronInput from './CronInput.vue'
+import { isCronField } from '../utils/cron'
 
 const props = defineProps({
   spec: { type: Object, required: true },
@@ -175,6 +177,7 @@ const infoText = computed(() => {
 })
 
 const showHead = computed(() => props.spec.type !== 'action')
+const cronField = computed(() => isCronField(props.spec, props.name, props.value))
 
 // 框型单控件（文本/密码/数字/下拉/多行）用 outlined 浮动 label；
 // 其余（开关/滑块/多选/会话/列表/说明/按钮）保持 label 在上或各自样式
@@ -279,6 +282,9 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
                  @reveal="revealSecret"
                  @update:model-value="set" />
 
+    <!-- Cron → 平台自动识别的可视化编辑器，最终仍保存原字符串 -->
+    <CronInput v-else-if="cronField" :value="value" @update="set" />
+
     <!-- text 多行 -->
     <textarea v-else-if="spec.type === 'text'" class="textarea"
               :value="value" @input="set($event.target.value)"></textarea>
@@ -313,10 +319,12 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 .field.box .input,
 .field.box .select,
 .field.box .textarea { background: transparent; }
+.field.box :deep(.cron-trigger) { background: transparent; }
 .field.box:focus-within .field-label { color: var(--accent); }
 .field.box:focus-within .input,
 .field.box:focus-within .select,
 .field.box:focus-within .textarea { border-color: var(--accent); }
+.field.box:focus-within :deep(.cron-trigger) { border-color: var(--accent); }
 .req { color: var(--danger, #e5484d); margin-left: 2px; }
 .field-err { font-size: 12px; color: var(--danger, #e5484d); }
 .muted-sm { font-size: 12px; color: var(--text-muted); }

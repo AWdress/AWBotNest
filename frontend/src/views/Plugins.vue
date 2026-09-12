@@ -1780,7 +1780,7 @@ onUnmounted(() => {
 
     <!-- 配置弹窗 -->
     <Teleport to="#app">
-    <div v-if="configOpen" class="modal-mask" @click.self="configOpen=false">
+    <div v-if="configOpen" class="modal-mask config-modal-mask" @click.self="configOpen=false">
       <div class="modal card modal-wide">
         <div class="modal-head">
           <div class="config-modal-title">
@@ -3041,6 +3041,18 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
     padding-top: max(var(--modal-pad), calc(env(safe-area-inset-top) + 8px));
     padding-bottom: max(var(--modal-pad), env(safe-area-inset-bottom));
     border-radius: 0;
+    overscroll-behavior: contain;
+    scroll-padding-top: calc(env(safe-area-inset-top) + 76px);
+    scroll-padding-bottom: 24px;
+  }
+  :global(html.keyboard-open) .config-modal-mask {
+    inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+    height: var(--visual-viewport-height, 100dvh);
+    align-items: flex-start;
+  }
+  :global(html.keyboard-open) .config-modal-mask .modal.modal-wide {
+    height: var(--visual-viewport-height, 100dvh) !important;
+    max-height: var(--visual-viewport-height, 100dvh) !important;
   }
   .modal.modal-wide .modal-head .close {
     width: 44px;

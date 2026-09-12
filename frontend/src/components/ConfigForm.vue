@@ -12,6 +12,7 @@
 //   order: 排序权重，数字越小越靠前（同 section 内有效）
 import { ref, watch, computed } from 'vue'
 import FieldInput from './FieldInput.vue'
+import { isCronField, isValidCron } from '../utils/cron'
 
 const props = defineProps({
   schema: { type: Object, default: () => ({}) },
@@ -50,6 +51,10 @@ function validate() {
         ? (Array.isArray(v) ? v.length === 0 : !v)
         : (v === undefined || v === null || v === '' || (Array.isArray(v) && v.length === 0))
       if (empty) { errs[key] = '此项必填'; continue }
+    }
+    if (v !== undefined && v !== null && v !== '' && isCronField(spec, key, v) && !isValidCron(v)) {
+      errs[key] = 'Cron 应为 5 位或 6 位表达式，例如 6 3 * * *'
+      continue
     }
     if ((spec.type === 'number' || spec.type === 'slider') && v !== '' && v !== null && v !== undefined) {
       if (spec.min !== undefined && v < spec.min) errs[key] = `不能小于 ${spec.min}`
