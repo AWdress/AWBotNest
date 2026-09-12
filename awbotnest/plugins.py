@@ -11,6 +11,7 @@ from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .services import PlatformServices
 from .deps import DependencyManager
+from .cloak_proxy import configure_cloakbrowser, requirements_use_cloakbrowser
 from .routing import PluginRoutes
 from .notifier import NotificationService
 from .plugin_runtime import LoadedPlugin, PluginLoader, PluginMeta, PluginResolver, PluginScanner
@@ -130,6 +131,8 @@ class PluginRuntime:
             return meta
         try:
             await self.deps.ensure(meta.requirements or [], plugin_name=meta.name)
+            if requirements_use_cloakbrowser(meta.requirements or []):
+                configure_cloakbrowser(self.settings)
             module = self._import(entry, plugin_id)
         except Exception as exc:
             meta.error = f"{type(exc).__name__}: {exc}"

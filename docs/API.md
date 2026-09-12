@@ -186,7 +186,7 @@ GET /api/v1/status
 
 ```json
 {
-  "version": "2.0.0.1",
+  "version": "2.0.0.2",
   "bot_connected": true,
   "user_accounts_count": 1,
   "total_plugins": 5,

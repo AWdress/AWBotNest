@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 const status = {
-  version: '2.0.0.1', telegram_configured: false, clients: [], accounts: [],
+  version: '2.0.0.2', telegram_configured: false, clients: [], accounts: [],
   user_count: 0, bot_connected: false, uptime_seconds: 120,
   resources: { cpu_percent: 8, memory_percent: 21, memory_used_mb: 128 },
   scheduler_jobs: [], plugin_names: {},
