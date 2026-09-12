@@ -103,6 +103,7 @@ V2 默认使用 `config_schema` 自动生成配置界面。需要自定义 Vue �
 - 入口文件：`remoteEntry.js`（可位于 `dist/` 或 `dist/assets/`）
 - 必须暴露：`./Config`
 - `Config` 接收 `pluginId` 与 `host` props；通过 `host.getConfig`、`host.saveConfig` 读写配置，通过 `host.callApi` 调用插件 API
+- `host.getConfig()` 对敏感字段只返回 `********`；需要在管理员配置页显示某个已声明的敏感字段时，使用 `await host.revealSecret(field)` 按字段读取真实值
 - 宿主会按插件 ID 动态注册远程模块，并在每次打开配置时刷新入口缓存
 
 该接口是 V2 的正式插件扩展点，不依赖或修改 V1 前端；插件仍可选择使用 `config_schema`。

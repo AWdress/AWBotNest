@@ -22,6 +22,20 @@ const emit = defineEmits(['update'])
 
 function set(v) { emit('update', v) }
 
+const secretLoading = ref(false)
+async function revealSecret() {
+  if (!props.pluginId || props.value !== '********' || secretLoading.value) return
+  secretLoading.value = true
+  try {
+    const data = await api.revealPluginSecret(props.pluginId, props.name)
+    set(String(data.value ?? ''))
+  } catch (e) {
+    toast.error(e.message || '读取敏感配置失败')
+  } finally {
+    secretLoading.value = false
+  }
+}
+
 function normOptions(opts) {
   return (opts || []).map((o) =>
     typeof o === 'object' ? { value: o.value, label: o.label ?? o.value } : { value: o, label: o })
@@ -261,6 +275,8 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
     <!-- password -->
     <SecretInput v-else-if="spec.type === 'password'"
                  :model-value="String(value ?? '')"
+                 :disabled="secretLoading"
+                 @reveal="revealSecret"
                  @update:model-value="set" />
 
     <!-- text 多行 -->

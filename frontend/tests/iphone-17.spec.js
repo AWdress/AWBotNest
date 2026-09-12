@@ -106,8 +106,14 @@ test.beforeEach(async ({ page }) => {
     })
     if (path === '/api/plugins') return json(route, { plugins: [configurablePlugin] })
     if (path === '/api/plugins/mobile_config_test/config') return json(route, {
-      schema: { enabled: { type: 'boolean', label: '启用测试功能' } },
-      values: { enabled: true }, render_mode: 'schema', has_frontend: false,
+      schema: {
+        enabled: { type: 'boolean', label: '启用测试功能' },
+        access_token: { type: 'password', label: '访问令牌' },
+      },
+      values: { enabled: true, access_token: '********' }, render_mode: 'schema', has_frontend: false,
+    })
+    if (path === '/api/plugins/mobile_config_test/config/reveal') return json(route, {
+      field: 'access_token', value: 'mobile-real-secret',
     })
     if (path === '/api/bots/routing') return json(route, {
       bots: [{ id: 'default', name: '主要通知渠道', type: 'telegram', is_default: true }],
@@ -347,6 +353,18 @@ test('iPhone 17 插件配置关闭按钮避开顶部安全区且易于点击', a
   expect(geometry.closeRight).toBeLessThanOrEqual(geometry.viewportWidth)
   await close.click()
   await expect(modal).toBeHidden()
+})
+
+test('插件敏感配置只在点击显示后读取真实值', async ({ page }) => {
+  await page.goto('/#/plugins')
+  await page.locator('.plugin-card').first().click()
+  const secret = page.locator('.modal.modal-wide .secret-input input').first()
+  await expect(secret).toBeVisible()
+  await expect(secret).toHaveAttribute('type', 'password')
+  await expect(secret).toHaveValue('********')
+  await page.getByRole('button', { name: '显示内容' }).click()
+  await expect(secret).toHaveAttribute('type', 'text')
+  await expect(secret).toHaveValue('mobile-real-secret')
 })
 
 test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {

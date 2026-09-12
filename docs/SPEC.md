@@ -86,7 +86,7 @@ Platform Services / Scheduler / Governance
 ## 配置与生命周期
 
 1. 原生 schema 表单的用户配置必须在 `config_schema` 声明；自定义 Vue 配置页允许保存额外业务字段，已声明字段仍执行类型及必填校验。敏感字段仍必须声明以便平台脱敏。
-2. 敏感字段使用 `password` 类型，不得回显到公开接口。
+2. 敏感字段使用 `password` 类型，不得回显到公开接口。管理端插件配置默认只返回掩码；原生表单的显示按钮和自定义 Vue 配置的 `host.revealSecret(field)` 可以按字段受控读取真实值。
 3. 配置变化后插件必须能够安全重载。
 4. `setup` 失败不得终止平台或影响其他插件。
 5. `teardown` 应可重复调用，并释放插件自行申请的资源。

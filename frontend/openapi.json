@@ -3859,6 +3859,48 @@
         }
       }
     },
+    "/api/plugins/{plugin_id}/config/reveal": {
+      "post": {
+        "summary": "Reveal Plugin Config Secret",
+        "operationId": "reveal_plugin_config_secret_api_plugins__plugin_id__config_reveal_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "plugin_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Plugin Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/plugins/{plugin_id}/fe/{path}": {
       "get": {
         "summary": "Plugin Frontend Asset",

@@ -102,6 +102,7 @@ export const api = {
   replayPluginEvent: (id, eventId) => request('POST', `/api/plugins/${id}/events/${eventId}/replay`),
   deletePlugin: (id) => request('DELETE', `/api/plugins/${id}`),
   getPluginConfig: (id) => request('GET', `/api/plugins/${id}/config`),
+  revealPluginSecret: (id, field) => request('POST', `/api/plugins/${id}/config/reveal`, { field }),
   setPluginConfig: (id, values) => request('PUT', `/api/plugins/${id}/config`, { values }),
   getPluginAccounts: (id) => request('GET', `/api/plugins/${id}/accounts`),
   setPluginAccounts: (id, sessions) => request('PUT', `/api/plugins/${id}/accounts`, { sessions }),

@@ -315,6 +315,27 @@ def create_router(deps) -> APIRouter:
             "has_frontend": runtime.has_frontend(plugin_id),
         }
 
+    @router.post("/api/plugins/{plugin_id}/config/reveal", dependencies=[Depends(require_admin)])
+    async def reveal_plugin_config_secret(plugin_id: str, request: Request):
+        meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
+        if meta is None:
+            raise HTTPException(status_code=404, detail="插件不存在")
+        raw = await request.json()
+        field = str(raw.get("field") or "").strip()
+        if not field or len(field) > 200:
+            raise HTTPException(status_code=400, detail="敏感字段名称无效")
+        spec = (meta.config_schema or {}).get(field)
+        if not runtime.secret_field(spec):
+            raise HTTPException(status_code=400, detail="该字段不是已声明的敏感配置")
+        values = settings.plugin_config.get(plugin_id, {})
+        if field not in values or values[field] in (None, ""):
+            raise HTTPException(status_code=404, detail="敏感配置不存在")
+        logger.info("插件配置敏感字段已由管理员读取：插件=%s 字段=%s", meta.name, field)
+        return JSONResponse(
+            {"field": field, "value": values[field]},
+            headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
+        )
+
     @router.get("/api/plugins/{plugin_id}/fe/{path:path}")
     async def plugin_frontend_asset(plugin_id: str, path: str, request: Request):
         resource_token = request.cookies.get("awbotnest_resource", "")

@@ -28,6 +28,8 @@ const host = {
   get token() { return getToken() },
   // 标准配置读写（沿用统一存储，ctx.config 可直接读到）
   getConfig: async () => (await api.getPluginConfig(props.pluginId)).values,
+  // 敏感字段默认仍为掩码；只有插件配置页明确请求某个已声明字段时才读取真实值。
+  revealSecret: async (field) => (await api.revealPluginSecret(props.pluginId, field)).value,
   saveConfig: (values) => api.setPluginConfig(props.pluginId, values),
   // 调用插件 ctx.on_api 注册的端点：callApi('/status') / callApi('/run', {method:'POST', body})
   callApi: (path, opts = {}) =>
