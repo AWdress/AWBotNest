@@ -330,7 +330,8 @@ def create_router(deps) -> APIRouter:
         values = settings.plugin_config.get(plugin_id, {})
         if field not in values or values[field] in (None, ""):
             raise HTTPException(status_code=404, detail="敏感配置不存在")
-        logger.info("插件配置敏感字段已由管理员读取：插件=%s 字段=%s", meta.name, field)
+        # 敏感字段读取属于正常的 UI 操作，不应以 INFO 刷屏；异常仍由接口状态码和前端提示反馈。
+        logger.debug("插件配置敏感字段已由管理员读取：插件=%s 字段=%s", meta.name, field)
         return JSONResponse(
             {"field": field, "value": values[field]},
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
