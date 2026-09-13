@@ -2169,7 +2169,7 @@ onBeforeRouteLeave(async () => {
                   </select>
                   <div class="hint muted small">
                     {{ provider.api_format === 'auto'
-                      ? `调用时自动识别并记住可用协议${aiStatus?.detected_protocols?.[provider.id] ? `，当前为 ${aiProtocolLabel(aiStatus.detected_protocols[provider.id])}` : ''}`
+                      ? `调用时自动识别并记住可用协议${aiStatus?.detected_protocols?.[provider.id] ? `，当前识别为 ${aiProtocolLabel(aiStatus.detected_protocols[provider.id])}` : ''}`
                       : '固定使用所选协议，不再自动尝试' }}
                   </div>
                 </div>
