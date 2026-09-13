@@ -124,7 +124,7 @@ async function loadNotifications() {
 async function markAllRead() {
   if (notificationAction.value) return
   if (!unread.value) {
-    toast.info('当前没有未读通知')
+    toast.info('暂无未读通知')
     return
   }
   const count = unread.value

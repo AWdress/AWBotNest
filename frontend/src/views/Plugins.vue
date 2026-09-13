@@ -1519,7 +1519,7 @@ onUnmounted(() => {
         <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">可安装</div>
         <div v-if="storeAvailable.length === 0 && storeUpdatable.length === 0" class="empty card">
           <p class="muted" v-if="storeErr">当前仓库没有适用于此版本的插件，请确认仓库根目录有 manifest_v2.json。</p>
-          <p class="muted" v-else>没有可安装的新插件；也可能是还没有添加额外仓库。</p>
+          <p class="muted" v-else>暂无可安装的新插件；也可能还没有添加额外仓库。</p>
         </div>
         <div v-else-if="storeAvailable.length" class="grid" :class="{ compact: density === 'compact' }">
         <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card">
@@ -1618,7 +1618,7 @@ onUnmounted(() => {
           <div v-if="storeBusy && searchablePlugins.length === 0" class="search-empty">正在读取插件…</div>
           <div v-else-if="searchResults.length === 0" class="search-empty">
             <template v-if="searchQuery.trim()">没有找到“{{ searchQuery.trim() }}”相关的插件</template>
-            <template v-else>暂时没有可搜索的插件</template>
+            <template v-else>暂无可搜索的插件</template>
           </div>
           <div v-for="(p, index) in searchResults" :key="p.id" class="search-item"
                :class="{ actionable: p.installed && !p.updateAvailable, active: index === searchActiveIndex }"
@@ -1662,7 +1662,7 @@ onUnmounted(() => {
         </div>
         <div class="search-foot">
           <span>可搜索插件名称、作者、说明或英文标识。</span>
-          <span><kbd>↑↓</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Esc</kbd> 关闭</span>
+          <span><kbd>↑↓</kbd> 选择，<kbd>Enter</kbd> 打开，<kbd>Esc</kbd> 关闭</span>
         </div>
       </div>
     </div>
@@ -1885,7 +1885,7 @@ onUnmounted(() => {
         <div v-if="configTarget?.webhook" class="webhook-box">
           <div class="webhook-title">Webhook 入站地址</div>
           <div class="hint muted small">
-            外部服务可 POST 到此地址触发本插件。密钥统一在「系统设置 → 通知渠道」生成，
+            外部服务可 POST 到此地址触发本插件。密钥在「系统设置 → 通知渠道」中生成，
             所有插件共用。插件启用并实现对应处理器后，Webhook 才会生效。
           </div>
           <template v-if="webhookSecret">
@@ -1943,7 +1943,7 @@ onUnmounted(() => {
         </div>
         <div v-if="repoErr" class="alert">{{ repoErr }}</div>
         <div class="form">
-          <div class="muted small">官方仓库已内置。需要使用其他仓库时，可在这里添加。</div>
+          <div class="muted small">官方仓库已内置。需要使用其他仓库时，可在此处添加。</div>
           <div class="field">
             <label>额外公开插件仓库（可加多个）</label>
             <div v-for="(r, i) in repoList" :key="i" class="repo-row">

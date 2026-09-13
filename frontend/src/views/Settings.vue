@@ -1822,7 +1822,7 @@ onBeforeRouteLeave(async () => {
                       @click="profileAvatarInput?.click()">
                 {{ profileAvatarBusy ? '上传中…' : '上传新头像' }}
               </button>
-              <span class="hint muted">支持 JPG、PNG、GIF、WebP，最大 2 MB</span>
+              <span class="hint muted">支持 JPG、PNG、GIF 和 WebP，单个文件最大 2 MB。</span>
             </div>
             <input ref="profileAvatarInput" type="file"
                    accept="image/png,image/jpeg,image/webp,image/gif"
@@ -1842,7 +1842,7 @@ onBeforeRouteLeave(async () => {
 
       <div v-if="tab === 'login'" class="card">
         <div class="card-title">登录设置</div>
-        <div class="hint muted">在这里修改登录用户名和密码。</div>
+        <div class="hint muted">可在此处修改登录用户名和密码。</div>
         <div v-if="credErr" class="alert err">{{ credErr }}</div>
         <div v-if="credMsg" class="alert ok">{{ credMsg }}</div>
         <div class="grid2">
@@ -1965,10 +1965,10 @@ onBeforeRouteLeave(async () => {
           为每个插件选择通知渠道，修改会立即生效。未单独选择时使用默认渠道。
         </div>
         <div v-if="routingLoading" class="muted small">加载中…</div>
-        <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
+        <div v-else-if="routing.plugins.length === 0" class="muted small">暂无插件。</div>
         <template v-else>
           <input class="input route-search" v-model="routeSearch" placeholder="搜索插件名称 / id…" style="margin-bottom:12px" />
-          <div v-if="filteredRoutePlugins.length === 0" class="muted small">没有匹配的插件。</div>
+          <div v-if="filteredRoutePlugins.length === 0" class="muted small">暂无匹配的插件。</div>
           <div v-else class="route-table-multi">
             <div v-for="p in filteredRoutePlugins" :key="p.id" class="route-row-multi">
               <div class="route-plugin-info">
@@ -2053,7 +2053,7 @@ onBeforeRouteLeave(async () => {
               <section class="ai-token-summary" aria-label="Token 用量">
                 <div class="ai-usage-section-head">
                   <span>Token 用量</span>
-                  <small>服务商返回</small>
+                  <small>服务商返回的 Token</small>
                 </div>
                 <div class="ai-token-total">
                   <strong :title="formatAiUsage(aiUsage.total_tokens)">{{ formatAiUsage(aiUsage.total_tokens) }}</strong>
@@ -2268,7 +2268,7 @@ onBeforeRouteLeave(async () => {
               </div>
 
               <div v-if="filteredAiLibraryModels.length === 0" class="ai-library-empty">
-                <span>没有符合当前条件的模型</span>
+                <span>暂无符合条件的模型</span>
                 <button type="button" class="btn sm" @click="clearAiLibraryFilters">清除筛选</button>
               </div>
 
@@ -2287,11 +2287,11 @@ onBeforeRouteLeave(async () => {
                       <span class="ai-model-summary-content">
                         <span class="ai-model-identity">
                           <strong>{{ model.name || model.model || '未命名模型' }}</strong>
-                          <small class="mono">{{ model.model || '尚未填写真实模型名' }}</small>
+                          <small class="mono">{{ model.model || '未填写真实模型名' }}</small>
                         </span>
                         <span class="ai-model-origin">
                           <span>{{ aiProviderName(model.provider_id) }}</span>
-                          <small class="mono">{{ model.alias || '无调用别名' }}</small>
+                          <small class="mono">{{ model.alias || '未设置调用别名' }}</small>
                         </span>
                         <span class="ai-model-tags">
                           <span :class="['ai-model-state', model.enabled ? 'enabled' : 'disabled']">
@@ -2397,7 +2397,7 @@ onBeforeRouteLeave(async () => {
           <div class="card" style="margin-top:16px">
             <div class="card-title">模型分工</div>
             <div class="hint muted">
-              未指定模型的插件会使用这里的默认模型；也可以通过别名选择模型库中的其他模型。
+              未指定模型的插件会使用默认模型；也可以通过别名选择模型库中的其他模型。
             </div>
             <div class="ai-capability-grid">
               <div v-for="capability in AI_CAPABILITIES" :key="capability.key" class="ai-capability-card">
@@ -2570,7 +2570,7 @@ onBeforeRouteLeave(async () => {
                           @click="copyCookieValue(cookieSettings.password, '加密密码')">复制</button>
                 </div>
                 <div v-if="cookieSettings.password === '********'" class="hint muted small">
-                  密码已安全保存。点击输入框右侧的眼睛即可查看并复制。
+                  密码已安全保存。
                 </div>
               </div>
               <div class="field">
@@ -2621,7 +2621,7 @@ onBeforeRouteLeave(async () => {
                 <SecretInput v-model="cookieSettings.remote_password" mono @reveal="revealCookieSecret('remote_password')"
                        autocomplete="new-password" placeholder="CookieCloud 浏览器扩展中的加密密码" />
                 <div v-if="cookieSettings.remote_password === '********'" class="hint muted small">
-                  远程密码已安全保存，点击输入框右侧的眼睛可以查看。
+                  远程密码已安全保存。
                 </div>
               </div>
               <div class="field">
@@ -2700,10 +2700,10 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-history">
               <div class="cookie-history-title">
                 <strong>最近同步记录</strong>
-                <span class="muted small">最多保留 50 条，容器重启后仍可查看</span>
+                <span class="muted small">最多保留 50 条，重启系统后仍可查看。</span>
               </div>
               <div v-if="!cookieHistory.length" class="cookie-history-empty muted">
-                完成首次同步后，这里会显示同步结果。
+                完成首次同步后，这里会显示结果。
               </div>
               <div v-else class="cookie-history-list">
                 <div v-for="(item, index) in cookieHistory" :key="`${item.time}-${index}`"
@@ -2896,7 +2896,7 @@ onBeforeRouteLeave(async () => {
               保存设置后关闭免费 Key，并切回旧版免费内核。
             </span>
             <span v-else class="hint muted">
-              免费 Key 已关闭，使用旧版免费内核；已下载的最新版不会被调用。
+              免费 Key 已关闭，使用旧版免费内核；已下载的最新版不会使用。
             </span>
             <span v-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'checking'"
                   class="browser-update-state muted">正在检查组件和插件所需内核…</span>
@@ -2908,7 +2908,7 @@ onBeforeRouteLeave(async () => {
                   class="browser-update-state muted">
               {{ browserStatus?.update_check?.required_kernel_channels?.length
                 ? '组件和插件所需内核均已是最新'
-                : '组件已是最新；暂无启用插件需要预下载内核' }}
+                : '组件已是最新，当前没有启用插件需要预下载内核' }}
             </span>
             <span v-else-if="savedCloakFreeKeyActive && browserStatus?.update_check?.status === 'error'"
                   class="browser-update-state browser-runtime-error"
@@ -2962,7 +2962,7 @@ onBeforeRouteLeave(async () => {
       <div v-if="tab === 'maint'" class="card">
         <div class="card-title">维护</div>
         <div class="hint muted">
-          可在这里设置日志清理，或导入、导出系统与插件配置。配置包不包含账号会话、Cookie、日志和插件程序。
+          可在此处设置日志清理，或导入、导出系统与插件配置。配置包不包含账号会话、Cookie、日志和插件程序。
           导入前会先校验并保存当前快照，重启后再应用配置，避免影响运行中的数据库。
         </div>
 
@@ -3120,7 +3120,7 @@ onBeforeRouteLeave(async () => {
             <label>Bot Token</label>
             <SecretInput v-model="channelForm.config.token" @reveal="revealChannelSecret('token')"
                    placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
-            <div class="hint muted small">Telegram机器人token，格式：123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11</div>
+            <div class="hint muted small">Telegram 机器人 Token，格式：123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11。</div>
           </div>
           <div class="field">
             <label>Chat ID（可选）</label>
@@ -3136,19 +3136,19 @@ onBeforeRouteLeave(async () => {
             <label>企业ID</label>
             <input class="input" v-model="channelForm.config.corpid"
                    placeholder="企业微信后台企业信息中的企业ID" />
-            <div class="hint muted small">企业微信后台企业信息中的企业ID</div>
+            <div class="hint muted small">填写企业微信后台的企业 ID。</div>
           </div>
           <div class="field">
             <label>应用AgentId</label>
             <input class="input" v-model="channelForm.config.agentid"
                    placeholder="企业微信自建应用的AgentId" />
-            <div class="hint muted small">企业微信自建应用的AgentId</div>
+            <div class="hint muted small">填写企业微信自建应用的 AgentId。</div>
           </div>
           <div class="field">
             <label>应用Secret</label>
             <SecretInput v-model="channelForm.config.secret" @reveal="revealChannelSecret('secret')"
                    placeholder="企业微信自建应用的Secret" />
-            <div class="hint muted small">企业微信自建应用的Secret</div>
+            <div class="hint muted small">填写企业微信自建应用的 Secret。</div>
           </div>
           <div class="field">
             <label>代理地址（可选）</label>
@@ -3170,13 +3170,13 @@ onBeforeRouteLeave(async () => {
             <label>服务器地址</label>
             <input class="input" v-model="channelForm.config.server"
                    placeholder="https://api.day.app" />
-            <div class="hint muted small">Bark 服务器地址，如 https://api.day.app</div>
+            <div class="hint muted small">填写 Bark 服务器地址，例如 https://api.day.app。</div>
           </div>
           <div class="field">
             <label>设备密钥</label>
             <SecretInput v-model="channelForm.config.device_key" @reveal="revealChannelSecret('device_key')"
                    placeholder="从 Bark App 中获取" />
-            <div class="hint muted small">从 Bark App 中获取的设备密钥</div>
+            <div class="hint muted small">填写从 Bark App 获取的设备密钥。</div>
           </div>
         </template>
       </div>
