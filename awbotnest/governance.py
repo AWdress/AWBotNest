@@ -143,7 +143,7 @@ class EventJournal:
                     with self.path.open("a", encoding="utf-8") as stream:
                         stream.write(line)
                 except OSError as exc:
-                    logger.warning("写入插件事件记录失败: %r", exc)
+                    logger.debug("写入插件事件记录失败: %r", exc)
             self._events.append(event)
         return event
 

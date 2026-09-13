@@ -846,7 +846,7 @@ def create_router(deps) -> APIRouter:
                  else "CloakBrowser 组件已更新，暂无启用插件需要下载内核"
                  if key_active
                  else "CloakBrowser 组件已更新，浏览器内核保持原有逻辑")
-                + ("，平台正在重启。" if will_restart else "；重启宿主后生效。")
+                + ("，系统正在重启。" if will_restart else "；重启宿主后生效。")
             ),
         }
 
@@ -866,5 +866,5 @@ def create_router(deps) -> APIRouter:
 
     @router.post("/api/settings/test_db", dependencies=[Depends(require_admin)])
     async def test_db():
-        return {"ok": True, "detail": "2.0 使用平台内置 SQLite 存储"}
+        return {"ok": True, "detail": "2.0 使用系统内置 SQLite 存储"}
     return router

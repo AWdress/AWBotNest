@@ -130,7 +130,7 @@ class AIService:
             self._plugin_names[plugin_id] = plugin_name.strip() or plugin_id
 
     def _audit_source(self, plugin_id: str) -> str:
-        return f"插件:{self._plugin_names.get(plugin_id, plugin_id)}" if plugin_id else "平台"
+        return f"插件:{self._plugin_names.get(plugin_id, plugin_id)}" if plugin_id else "系统"
 
     @staticmethod
     def _provider_host(base_url: str) -> str:

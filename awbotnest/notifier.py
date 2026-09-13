@@ -47,7 +47,7 @@ class NotificationService:
             temporary.write_text(json.dumps(values[-100:], ensure_ascii=False), encoding="utf-8")
             temporary.replace(self.history_path)
         except OSError:
-            logging.getLogger("awbotnest.notifier").exception("通知历史保存失败，继续投递通知")
+            logging.getLogger("awbotnest.notifier").debug("通知历史保存失败，继续投递通知", exc_info=True)
 
     def read_at(self) -> float:
         try:

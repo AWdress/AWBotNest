@@ -107,7 +107,7 @@ class TelegramAccounts:
     async def start(self) -> None:
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         if not self.telegram_available:
-            logger.info("未配置 Telegram API_ID/API_HASH，平台以独立模式启动")
+            logger.info("未配置 Telegram API_ID/API_HASH，系统以独立模式启动")
             return
         async with self._lock:
             for bot_spec in self.settings.bot_specs():
@@ -133,7 +133,7 @@ class TelegramAccounts:
                 except Exception:
                     if bot is not None:
                         await bot.disconnect()
-                    logger.exception("Telethon Bot [%s] 连接失败，平台继续启动", bot_spec.name)
+                    logger.exception("Telethon Bot [%s] 连接失败，系统继续启动", bot_spec.name)
 
             for session_name in self.settings.user_sessions:
                 await self._start_user(session_name)

@@ -76,7 +76,7 @@ class _FreeSessionGate:
         ticket = object()
         with self._condition:
             if self._maintenance:
-                raise RuntimeError("CloakBrowser 正在更新，请等待平台重启")
+                raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
             if not _platform_license_key():
                 return None
             self._queue.append(ticket)
@@ -86,7 +86,7 @@ class _FreeSessionGate:
                     return None
                 if self._maintenance:
                     self._remove(ticket)
-                    raise RuntimeError("CloakBrowser 正在更新，请等待平台重启")
+                    raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
                 now = time.monotonic()
                 if self._queue and self._queue[0] is ticket and not self._active \
                         and now >= self._cooldown_until:
@@ -447,7 +447,7 @@ def _patch_geoip_download(module: Any) -> None:
                     for chunk in response.iter_bytes(chunk_size=65_536):
                         stream.write(chunk)
             os.replace(temp_path, dest)
-            logger.info("CloakBrowser GeoIP 数据库已通过平台代理下载")
+            logger.info("CloakBrowser GeoIP 数据库已通过系统代理下载")
         except BaseException:
             if file_descriptor >= 0:
                 os.close(file_descriptor)
@@ -479,4 +479,4 @@ def configure_cloakbrowser(settings: Settings) -> None:
         _patch_httpx(importlib.import_module(name))
     _patch_geoip_download(importlib.import_module("cloakbrowser.geoip"))
 
-    logger.info("CloakBrowser 已接入平台浏览器设置（插件显式参数优先）")
+    logger.info("CloakBrowser 已接入系统浏览器设置（插件显式参数优先）")

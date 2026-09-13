@@ -132,7 +132,7 @@ async def track_call(plugin_id, callback):
             activity.record(plugin_id, success, event_id)
             activity.flush()
         except (OSError, ValueError, TypeError):
-            logging.getLogger(__name__).warning('插件活动统计保存失败', exc_info=True)
+            logging.getLogger(__name__).debug('插件活动统计保存失败', exc_info=True)
     record(False)
     try:
         value = callback()

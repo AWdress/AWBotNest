@@ -76,18 +76,18 @@ class PluginResolver:
         if meta.scope in {"user", "both"} and not telegram_configured:
             return "未配置 Telegram API_ID/API_HASH"
         if meta.plugin_api_version > 2:
-            return f"插件需要接口版本 {meta.plugin_api_version}，当前平台支持 2"
+            return f"插件需要接口版本 {meta.plugin_api_version}，当前系统支持 2"
         try:
             if meta.min_platform_version and Version(__version__) < Version(meta.min_platform_version.lstrip("vV")):
-                return f"插件要求平台不低于 {meta.min_platform_version}"
+                return f"插件要求系统不低于 {meta.min_platform_version}"
             if meta.max_platform_version and Version(__version__) > Version(meta.max_platform_version.lstrip("vV")):
-                return f"插件只兼容到平台 {meta.max_platform_version}"
+                return f"插件只兼容到系统 {meta.max_platform_version}"
         except InvalidVersion:
-            return "插件声明的平台兼容版本格式不正确"
+            return "插件声明的系统兼容版本格式不正确"
         missing_plugins = [display_name(item) for item in meta.requires_plugins if item not in loaded_plugins]
         if missing_plugins:
             return "请先启用依赖插件：" + "、".join(missing_plugins)
         missing_capabilities = [item for item in meta.requires_capabilities if item not in capabilities]
         if missing_capabilities:
-            return "缺少平台能力：" + "、".join(missing_capabilities)
+            return "缺少系统能力：" + "、".join(missing_capabilities)
         return ""

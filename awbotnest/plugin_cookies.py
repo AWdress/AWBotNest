@@ -33,7 +33,7 @@ class PluginCookies:
                    for pattern in self._domains):
             raise PermissionError(f"插件未声明 Cookie 域名权限: {requested}")
         if require_enabled and not self._settings.cookie_settings.get("enabled"):
-            raise RuntimeError("平台 Cookie 同步尚未启用")
+            raise RuntimeError("系统 Cookie 同步尚未启用")
         return requested
 
     async def get(self, domain, *, path="/", names=None):

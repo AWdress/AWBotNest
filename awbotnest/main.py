@@ -45,10 +45,10 @@ async def run_once() -> bool:
         cleaner_hour = max(0, min(int(cleaner.get("hour", 3)), 23))
         cleaner_minute = max(0, min(int(cleaner.get("minute", 0)), 59))
         async def clean_logs_job():
-            logger.info("定时任务开始：日志自动清理")
+            logger.debug("日志自动清理开始")
             try:
                 removed = memory_logs.trim(int(cleaner.get("keep_lines", 1000)))
-                logger.info("定时任务完成：日志自动清理（清理 %d 条）", removed)
+                logger.debug("日志自动清理完成：清理 %d 条", removed)
                 return removed
             except Exception:
                 logger.exception("定时任务失败：日志自动清理")
@@ -101,10 +101,10 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
             raise
 
     async def refresh_market_at_startup():
-        logger.info("启动任务开始：刷新插件市场")
+        logger.debug("启动时刷新插件市场")
         try:
             await poll_plugin_market()
-            logger.info("启动任务完成：插件市场刷新")
+            logger.debug("启动时插件市场刷新完成")
         except Exception:
             logger.exception("启动任务失败：插件市场刷新")
 
@@ -157,7 +157,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
             cookie_settings = settings.cookie_settings
             if not cookie_settings.get("remote_enabled"):
                 return
-            logger.info("定时任务开始：远程 CookieCloud 同步")
+            logger.debug("远程 CookieCloud 同步开始")
             try:
                 values = await pull(
                     str(cookie_settings.get("remote_url") or ""),
@@ -170,7 +170,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
                 await services.cookies.replace(values)
                 count = sum(len(item) for item in values.values())
                 record_sync("remote", "success", "远程 CookieCloud 自动同步完成", len(values), count)
-                logger.info("远程 CookieCloud 同步完成：%d 个 Cookie，%d 个域名", count, len(values))
+                logger.debug("远程 CookieCloud 同步完成：%d 个 Cookie，%d 个域名", count, len(values))
             except Exception as exc:
                 record_sync("remote", "error", f"自动同步失败：{exc}")
                 logger.exception("定时任务失败：远程 CookieCloud 同步")
@@ -232,7 +232,7 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
             await platform_task  # Propagate startup failures; do not leave a half-started server.
         await server_task
     except Exception:
-        logger.exception("平台后台任务异常，正在停止服务")
+        logger.exception("系统后台任务异常，正在停止服务")
         raise
     finally:
         app.state.platform_ready = False
@@ -293,7 +293,7 @@ async def run() -> None:
         root_logger.addHandler(file_handler)
     try:
         while await run_once():
-            logging.getLogger("awbotnest.main").info("平台正在重新加载配置并启动")
+            logging.getLogger("awbotnest.main").info("系统正在重新加载配置并启动")
     finally:
         root_logger.removeHandler(memory_logs)
         if file_handler is not None:

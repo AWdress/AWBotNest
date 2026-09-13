@@ -194,7 +194,7 @@ class PluginContext:
     @property
     def _services(self) -> PlatformServices:
         if self.services is None:
-            raise RuntimeError("平台服务尚未初始化")
+            raise RuntimeError("系统服务尚未初始化")
         return self.services
 
     def update_config(self, values: dict[str, object]) -> dict[str, object]:

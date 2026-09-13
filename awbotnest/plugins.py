@@ -281,7 +281,7 @@ class PluginRuntime:
                                 self._errors[plugin_id] = meta.error
                                 logger.error("恢复插件失败：%s（%s）", meta.name, meta.error)
                 except Exception:
-                    logger.exception("恢复插件失败，平台继续启动：%s", self.display_name(plugin_id))
+                    logger.exception("恢复插件失败，系统继续启动：%s", self.display_name(plugin_id))
                 pending.pop(plugin_id)
                 progressed = True
             if not progressed:

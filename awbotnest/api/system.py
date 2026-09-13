@@ -79,7 +79,7 @@ def create_router(deps) -> APIRouter:
                 **job,
                 "name": system_job_names.get(short_name or owner, short_name or owner),
                 "plugin_id": None if owner == "__platform__" else owner,
-                "plugin": "平台服务" if owner == "__platform__" else plugin_names.get(owner, owner),
+                "plugin": "系统服务" if owner == "__platform__" else plugin_names.get(owner, owner),
                 "next_run_at": job.get("next_run"),
                 "running": job.get("running", False),
             })
@@ -279,7 +279,7 @@ def create_router(deps) -> APIRouter:
         bot_online = any(item.get("connected") and item.get("kind") == "bot" for item in states)
         user_online = sum(bool(item.get("connected")) for item in user_states)
         return {"checks": [
-            {"id": "platform", "name": "平台服务", "ok": True, "detail": "运行正常"},
+            {"id": "platform", "name": "系统服务", "ok": True, "detail": "运行正常"},
             {"id": "scheduler", "name": "定时任务", "ok": scheduler.scheduler.running,
              "detail": f"已注册 {len(scheduler.jobs())} 个任务"},
             {"id": "telegram", "name": "Telegram", "ok": (not settings.telegram_configured) or any(item["connected"] for item in states),

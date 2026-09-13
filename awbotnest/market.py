@@ -398,7 +398,7 @@ class PluginMarket:
                 # 真实网络错误仍保留，方便用户排查仓库不可达问题。
                 if MANIFEST_NAME in str(exc) and "缺少" in str(exc):
                     if repo.casefold() not in self._skipped_manifest_logged:
-                        logger.info("插件仓库提示：已跳过不含 V2 清单的仓库 %s", repo)
+                        logger.debug("已跳过不含 V2 清单的插件仓库：%s", repo)
                         self._skipped_manifest_logged.add(repo.casefold())
                     continue
                 errors.append(f"{repo}: {exc}")

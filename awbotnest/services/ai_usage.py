@@ -73,7 +73,7 @@ class AIUsageTracker:
             temporary.replace(self.path)
         except OSError as exc:
             # Telemetry must never make an otherwise valid AI request fail.
-            logger.warning("AI 使用统计保存失败：%s", type(exc).__name__)
+            logger.debug("AI 使用统计保存失败：%s", type(exc).__name__)
 
     def begin(self) -> None:
         with self._lock:

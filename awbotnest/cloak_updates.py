@@ -59,7 +59,7 @@ def _platform_tag() -> str:
     try:
         return _PLATFORM_TAGS[key]
     except KeyError as exc:
-        raise RuntimeError(f"当前平台不支持 CloakBrowser 内核：{key[0]} {key[1]}") from exc
+        raise RuntimeError(f"当前系统不支持 CloakBrowser 内核：{key[0]} {key[1]}") from exc
 
 
 def kernel_binary_path(version: str, *, pro: bool = True) -> Path:
@@ -177,7 +177,7 @@ def _latest_compatible(payload: dict[str, Any]) -> str:
             continue
         candidates.append(version)
     if not candidates:
-        raise ValueError("没有找到平台兼容的 CloakBrowser 组件版本")
+        raise ValueError("没有找到系统兼容的 CloakBrowser 组件版本")
     return str(max(candidates))
 
 

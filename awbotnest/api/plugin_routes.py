@@ -168,7 +168,7 @@ def create_router(deps) -> APIRouter:
         except RuntimeError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
         except Exception as exc:
-            logger.exception("平台 Webhook 通知失败")
+            logger.exception("系统 Webhook 通知失败")
             raise HTTPException(status_code=502, detail="Webhook 通知投递失败") from exc
         return {"ok": True}
 

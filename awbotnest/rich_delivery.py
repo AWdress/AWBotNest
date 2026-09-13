@@ -31,7 +31,7 @@ async def send_rich(client, target, rich, plain, *, token='', proxy='', rich_for
             return data.get('result')
         if data.get('error_code') not in {400, 404}:
             raise RuntimeError(f'原生富文本投递失败（状态码 {data.get("error_code", "未知")}）')
-        logger.warning('Bot 原生富文本被拒绝，改用兼容文本')
+        logger.debug('Bot 原生富文本不可用，改用兼容文本')
     else:
         me = await client.get_me()
         if getattr(me, 'bot', False) or getattr(me, 'premium', False):
@@ -47,9 +47,9 @@ async def send_rich(client, target, rich, plain, *, token='', proxy='', rich_for
                 except Exception as exc:
                     if type(exc).__name__ not in {'PremiumAccountRequiredError', 'RichMessageInvalidError', 'MessageEmptyError'}:
                         raise
-                    logger.warning('用户账号原生富文本不可用，改用兼容文本')
+                    logger.debug('用户账号原生富文本不可用，改用兼容文本')
             else:
-                logger.warning('当前 Telethon 未提供原生富文本接口，用户账号改用兼容文本')
+                logger.debug('当前 Telethon 未提供原生富文本接口，用户账号改用兼容文本')
     fallback = dict(kwargs)
     reply = fallback.pop('reply_to', None)
     if reply is not None:

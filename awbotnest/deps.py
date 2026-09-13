@@ -73,7 +73,6 @@ class DependencyManager:
         missing = list(requirements) if upgrade else self.missing(requirements, target_only=target_only)
         if not missing:
             return
-        logger.info("%s 需要安装依赖：%s", plugin_name, ", ".join(missing))
         async with self._lock:
             missing = (list(requirements) if upgrade
                        else self.missing(requirements, target_only=target_only))
@@ -120,5 +119,5 @@ class DependencyManager:
             importlib.invalidate_caches()
             remaining = self.missing(requirements, target_only=target_only)
             if remaining:
-                raise RuntimeError("依赖安装后版本仍不满足（可能与平台依赖冲突）：" + ", ".join(remaining))
-            logger.info("%s 依赖已安装：%s", plugin_name, ", ".join(missing))
+                raise RuntimeError("依赖安装后版本仍不满足（可能与系统依赖冲突）：" + ", ".join(remaining))
+            logger.info("%s 依赖安装完成：%s", plugin_name, ", ".join(missing))
