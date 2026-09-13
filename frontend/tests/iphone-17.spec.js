@@ -174,6 +174,26 @@ test('iPhone 17 外壳保留悬浮导航且内容不被遮挡', async ({ page })
   await expectInsideViewport(page)
 })
 
+test('无图标插件的 Logo 占位底色与边界可分辨', async ({ page }) => {
+  await page.goto('/#/plugins')
+  const icon = page.locator('.plugin-card .store-icon-fallback').first()
+  await expect(icon).toBeVisible()
+  const style = await icon.evaluate((element) => {
+    const computed = getComputedStyle(element)
+    return {
+      borderStyle: computed.borderStyle,
+      borderColor: computed.borderColor,
+      backgroundColor: computed.backgroundColor,
+      padding: computed.padding,
+    }
+  })
+  expect(style.borderStyle).toBe('solid')
+  expect(style.borderColor).not.toBe('rgba(0, 0, 0, 0)')
+  expect(style.backgroundColor).not.toBe('rgba(0, 0, 0, 0)')
+  expect(style.padding).toBe('2px')
+  await expectInsideViewport(page)
+})
+
 test('iPhone 17 根画布与页面背景连续铺满', async ({ page }) => {
   await page.goto('/#/status')
   await expect(page.locator('.layout')).toBeVisible()

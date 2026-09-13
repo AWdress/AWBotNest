@@ -2205,8 +2205,9 @@ onUnmounted(() => {
 .store-icon { width: 38px; height: 38px; border-radius: 12px; object-fit: contain; flex-shrink: 0; }
 .store-icon-fallback {
   object-fit: contain;
-  padding: 6px;
-  background-color: var(--bg-elevated);
+  padding: 2px;
+  background-color: #f7f5ef;
+  border: 1px solid #d9d5cb;
 }
 .store-card:hover {
   border-color: var(--accent-dim);
@@ -2503,7 +2504,12 @@ onUnmounted(() => {
   width: 42px; height: 42px; border-radius: 12px; object-fit: contain;
   background: var(--bg-elevated); border: 1px solid var(--border);
 }
-.search-icon.fallback { object-fit: contain; padding: 7px; }
+.search-icon.fallback {
+  object-fit: contain;
+  padding: 2px;
+  background-color: #f7f5ef;
+  border-color: #d9d5cb;
+}
 .search-info { min-width: 0; }
 .search-name-row { display: flex; align-items: center; gap: 7px; min-width: 0; }
 .search-name { font-size: 14px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2557,7 +2563,11 @@ onUnmounted(() => {
   border-radius: 11px; object-fit: contain;
   background: var(--bg-elevated);
 }
-.config-plugin-icon-fallback { padding: 6px; }
+.config-plugin-icon-fallback {
+  padding: 2px;
+  background-color: #f7f5ef;
+  border-color: #d9d5cb;
+}
 .modal-head .close { border: 0; background: transparent; cursor: pointer; font-size: 22px; color: var(--text-muted); display: inline-flex; align-items: center; }
 .modal-head .close .x-ico { width: 20px; height: 20px; }
 .modal-foot {
@@ -2702,7 +2712,12 @@ onUnmounted(() => {
 .changelog-header { padding-bottom: 16px; border-bottom: 1px solid var(--border); }
 .changelog-plugin-info { display: flex; align-items: center; gap: 12px; }
 .changelog-icon { width: 48px; height: 48px; border-radius: 10px; object-fit: contain; }
-.changelog-icon-fallback { filter: brightness(0.7); }
+.changelog-icon-fallback {
+  filter: none;
+  background-color: #f7f5ef;
+  border-color: #d9d5cb;
+  padding: 2px;
+}
 .changelog-plugin-name { font-size: 16px; font-weight: 600; color: var(--text-primary); }
 .changelog-plugin-version { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
 .changelog-content { margin-top: 16px; }
