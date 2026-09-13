@@ -125,7 +125,7 @@ function getColSpan(spec) {
       </div>
     </div>
 
-    <div v-if="!hasFields" class="empty muted">此插件没有可配置项。</div>
+    <div v-if="!hasFields" class="empty muted">该插件暂无可配置项。</div>
   </div>
 </template>
 

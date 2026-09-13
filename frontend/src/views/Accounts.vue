@@ -157,7 +157,7 @@ onMounted(load)
 <template>
   <div>
     <div class="toolbar">
-      <div class="muted">用户账号登录、上线/下线。登录后已启用的插件会自动挂到新账号上。</div>
+      <div class="muted">登录并管理用户账号。账号上线后，已启用的插件会自动使用它。</div>
       <div class="row gap">
         <button class="btn" @click="load">刷新</button>
         <button v-if="telegramConfigured" class="btn btn-primary" @click="openWizard">+ 登录新账号</button>
@@ -177,12 +177,12 @@ onMounted(load)
 
     <div v-else-if="!telegramConfigured" class="card center">
       <p>Telegram 用户账号功能尚未启用。</p>
-      <p class="muted">请先到「系统设置 → Telegram 凭据」填写 API_ID 和 API_HASH。</p>
+      <p class="muted">请先在「系统设置 → Telegram 凭据」填写 API_ID 和 API_HASH。</p>
     </div>
 
     <div v-else-if="accounts.length === 0" class="card center">
-      <p>还没有账号。</p>
-      <p class="muted">点右上角「登录新账号」开始。</p>
+      <p>暂无账号。</p>
+      <p class="muted">点击右上角「登录新账号」开始登录。</p>
     </div>
 
     <div v-else class="grid">
@@ -270,7 +270,7 @@ onMounted(load)
 
         <!-- 两步密码 -->
         <div v-else-if="step==='password'" class="form">
-          <p class="muted hint-text">该账号开启了两步验证（2FA），请输入你设置的两步验证密码。<br>普通账号不会走到这一步。</p>
+          <p class="muted hint-text">该账号已开启两步验证，请输入 Telegram 两步验证密码。<br>未开启两步验证的账号无需填写。</p>
           <div class="field">
             <label>两步验证密码</label>
             <input class="input" type="password" v-model="form.password" @keyup.enter="submitPassword" />

@@ -9,7 +9,7 @@ export function jobDisplayName(job = {}) {
 }
 
 export function jobOwnerLabel(job = {}, pluginNames = {}) {
-  if (!job.plugin_id || job.plugin_id === '__platform__') return job.plugin || '平台服务'
+  if (!job.plugin_id || job.plugin_id === '__platform__') return job.plugin || '系统服务'
   const [pluginId, account] = String(job.plugin_id).split('@')
   const name = pluginNames[pluginId] || (job.plugin !== job.plugin_id ? job.plugin : '') || '插件任务'
   return account ? `${name} · ${account}` : name

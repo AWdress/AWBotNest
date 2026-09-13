@@ -1361,11 +1361,11 @@ onUnmounted(() => {
     <template v-if="tab === 'mine'">
       <div v-if="loading" class="muted center">加载中…</div>
       <div v-else-if="plugins.length === 0" class="empty card">
-        <p>还没有插件。</p>
-        <p class="muted">去「插件市场」安装，或把 .py 文件拖到这里 / 点「上传插件」。</p>
+        <p>暂无插件。</p>
+        <p class="muted">请到「插件市场」安装插件，或拖入 .py 文件上传。</p>
       </div>
       <div v-else-if="filteredPlugins.length === 0" class="empty card filter-empty">
-        <p>没有符合当前筛选条件的插件。</p>
+        <p>没有符合筛选条件的插件。</p>
         <button class="btn" @click="pluginFilter='all'">查看全部插件</button>
       </div>
       <div v-else class="grid">
@@ -1456,7 +1456,7 @@ onUnmounted(() => {
 
     <!-- ════ 插件市场 ════ -->
     <template v-else>
-      <div class="hint muted store-hint">来自官方仓库与你配置的 GitHub 仓库。点「安装」拉到本地（不自动启用），安装后到「我的插件」开启。</div>
+      <div class="hint muted store-hint">插件来自官方仓库和你添加的 GitHub 仓库。安装后不会自动启用，请到「我的插件」手动开启。</div>
       <div v-if="storeErr" class="alert">{{ storeErr }} <button type="button" aria-label="关闭提示" @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
       <div v-if="storeBusy && store.length === 0" class="muted center">加载市场…</div>
@@ -1518,8 +1518,8 @@ onUnmounted(() => {
 
         <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">可安装</div>
         <div v-if="storeAvailable.length === 0 && storeUpdatable.length === 0" class="empty card">
-          <p class="muted" v-if="storeErr">当前仓库没有可供本版本安装的插件，请确认仓库根目录包含 manifest_v2.json。</p>
-          <p class="muted" v-else>市场里没有可安装的新插件（仓库里的都已安装），或还没配置额外仓库。</p>
+          <p class="muted" v-if="storeErr">当前仓库没有适用于此版本的插件，请确认仓库根目录有 manifest_v2.json。</p>
+          <p class="muted" v-else>没有可安装的新插件；也可能是还没有添加额外仓库。</p>
         </div>
         <div v-else-if="storeAvailable.length" class="grid" :class="{ compact: density === 'compact' }">
         <div v-for="p in storeAvailable" :key="p.id" class="card plugin-card store-card">
@@ -1661,7 +1661,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="search-foot">
-          <span>支持搜索名称、作者、说明和英文标识</span>
+          <span>可搜索插件名称、作者、说明或英文标识。</span>
           <span><kbd>↑↓</kbd> 选择 <kbd>Enter</kbd> 打开 <kbd>Esc</kbd> 关闭</span>
         </div>
       </div>
@@ -1706,7 +1706,7 @@ onUnmounted(() => {
         <div class="modal-body governance-body">
           <div v-if="dependencyBusy" class="muted center">正在整理依赖关系…</div>
           <template v-else>
-            <div v-if="!dependencyData.edges.length" class="empty-inline">所有插件均未通过元数据声明依赖。</div>
+            <div v-if="!dependencyData.edges.length" class="empty-inline">当前没有插件声明依赖关系。</div>
             <div v-for="node in dependencyData.nodes" :key="node.id" class="dependency-node">
               <div><strong>{{ node.name }}</strong><small v-if="node.version">版本 {{ node.version }}</small></div>
               <div class="dependency-links">
@@ -1798,7 +1798,7 @@ onUnmounted(() => {
                     :plugin-id="configTarget?.id" :has-frontend="configHasFrontend" />
         <ConfigForm v-else-if="Object.keys(configSchema).length" ref="configFormRef"
                     v-model="configValues" :schema="configSchema" :plugin-id="configTarget?.id" />
-        <div v-else class="muted center" style="padding:24px">这个插件没有可配置项。</div>
+        <div v-else class="muted center" style="padding:24px">该插件暂无可配置项。</div>
 
         <div class="config-scope-grid">
           <div class="config-scope-field" @click.stop>
@@ -1869,7 +1869,7 @@ onUnmounted(() => {
                 </label>
                 <div class="config-scope-divider"></div>
                 <div v-if="acctOptions.length === 0" class="config-scope-empty">
-                  还没有账号，请先到“账号管理”登录。
+                  暂无账号，请先到「账号管理」登录。
                 </div>
                 <label v-for="a in acctOptions" :key="a.session" class="config-scope-option">
                   <input type="checkbox" :checked="acctSelected.includes(a.session)"
@@ -1886,7 +1886,7 @@ onUnmounted(() => {
           <div class="webhook-title">Webhook 入站地址</div>
           <div class="hint muted small">
             外部服务可 POST 到此地址触发本插件。密钥统一在「系统设置 → 通知渠道」生成，
-            所有插件共用；需插件已启用并实现了处理器才会真正响应。
+            所有插件共用。插件启用并实现对应处理器后，Webhook 才会生效。
           </div>
           <template v-if="webhookSecret">
             <div class="webhook-url mono">{{ webhookUrl }}</div>
@@ -1921,7 +1921,7 @@ onUnmounted(() => {
           <button type="button" class="close" aria-label="关闭" @click="closeLogs"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <div class="log-box" ref="logsBox">
-          <div v-if="logsList.length === 0" class="muted center">该插件暂无日志</div>
+          <div v-if="logsList.length === 0" class="muted center">该插件暂无日志。</div>
           <div v-for="(l, i) in logsList" :key="l.id || `${l.timestamp}-${i}`" class="log-line">
             <span class="time">{{ pluginLogTime(l) }}</span>
             <span class="level" :class="logLevelClass(l.level)">{{ l.level }}</span>
@@ -1943,7 +1943,7 @@ onUnmounted(() => {
         </div>
         <div v-if="repoErr" class="alert">{{ repoErr }}</div>
         <div class="form">
-          <div class="muted small">官方仓库已内置，无需添加。这里配置你自己的额外仓库。</div>
+          <div class="muted small">官方仓库已内置。需要使用其他仓库时，可在这里添加。</div>
           <div class="field">
             <label>额外公开插件仓库（可加多个）</label>
             <div v-for="(r, i) in repoList" :key="i" class="repo-row">
@@ -1955,8 +1955,8 @@ onUnmounted(() => {
                       @click="delRepo(i)"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
             </div>
             <button class="btn sm" @click="addRepo">+ 添加仓库</button>
-            <div class="hint muted">仓库名必须是 AWBotNest-Plugins，例如 AWdress/AWBotNest-Plugins。</div>
-            <div class="hint muted">V2 仓库根目录必须包含 manifest_v2.json；插件条目需填写 version，并与插件元数据一致，系统才能识别更新。</div>
+            <div class="hint muted">请输入 AWBotNest-Plugins 仓库，例如 AWdress/AWBotNest-Plugins。</div>
+            <div class="hint muted">V2 仓库根目录必须有 manifest_v2.json。每个插件都要填写 version，并与插件元数据保持一致，系统才能识别更新。</div>
           </div>
         </div>
         <div class="modal-foot">

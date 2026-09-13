@@ -329,7 +329,7 @@ function eventKey(item) {
 }
 
 const EVENT_SOURCE_NAMES = {
-  main: '平台',
+  main: '系统',
   repo_sync: '插件仓库',
   scheduler: '定时任务',
   plugin: '插件管理',
@@ -340,7 +340,7 @@ const EVENT_SOURCE_NAMES = {
   notification_channels: '通知渠道',
   notifier: '通知服务',
   custom_client: 'Telegram 客户端',
-  api: '平台接口',
+  api: '系统接口',
   registry: '插件注册',
   context: '插件上下文',
   deps: '依赖管理',
@@ -450,7 +450,7 @@ onUnmounted(() => {
   </div>
 
   <div v-else-if="st" class="status" :class="{ ready: pageReady }">
-    <section class="metric-strip reveal section-0" :class="{ compact: !st.telegram_configured }" aria-label="平台指标">
+    <section class="metric-strip reveal section-0" :class="{ compact: !st.telegram_configured }" aria-label="系统指标">
       <article v-for="(card, index) in cards" :key="card.key" class="metric" :class="card.tone" :style="{ '--delay': `${index * 55}ms` }">
         <span class="metric-icon" :class="{ pulsing: card.key === 'bot' && st.bot_connected }">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="icons[card.icon]" /></svg>
@@ -477,7 +477,7 @@ onUnmounted(() => {
 
         <div v-if="!hasActivity" class="chart-empty">
           <span class="empty-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 19V9m5 10V5m5 14v-7m5 7V3"/></svg></span>
-          <div><strong>还没有插件活动</strong><p>插件处理消息后，这里会自动绘制{{ activityRangeLabel }}趋势。</p></div>
+          <div><strong>暂无插件活动</strong><p>插件开始处理消息后，这里会显示{{ activityRangeLabel }}趋势。</p></div>
         </div>
         <template v-else>
           <div class="chart-legend">
@@ -532,7 +532,7 @@ onUnmounted(() => {
         </header>
         <div v-if="!events.length" class="event-empty">
           <span class="empty-mark success"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span>
-          <div><strong>暂时没有新的事件</strong><p>新的插件记录出现后会自动显示在这里。</p></div>
+          <div><strong>暂无新事件</strong><p>有新的插件记录后会显示在这里。</p></div>
         </div>
         <div v-else class="event-list">
           <article v-for="event in events" :key="event.key" class="event-row">
@@ -546,7 +546,7 @@ onUnmounted(() => {
     <section class="secondary-grid reveal section-2" :class="{ 'without-accounts': !st.telegram_configured }">
       <article class="surface ranking-panel">
         <header class="panel-heading compact"><div><span class="eyebrow">{{ activityRangeLabel }}</span><h2>活跃插件</h2></div><RouterLink class="panel-link" to="/plugins">查看全部</RouterLink></header>
-        <div v-if="!topPlugins.length" class="small-empty">暂无插件活跃记录</div>
+        <div v-if="!topPlugins.length" class="small-empty">暂无插件运行记录</div>
         <div v-else class="ranking-list">
           <div v-for="plugin in topPlugins" :key="plugin.pluginId" class="ranking-row">
             <span class="rank">{{ plugin.rank }}</span>
@@ -557,7 +557,7 @@ onUnmounted(() => {
 
       <article v-if="st.telegram_configured" class="surface account-panel">
         <header class="panel-heading compact"><div><span class="eyebrow">连接状态</span><h2>账号</h2></div><span class="healthy-badge">{{ st.user_count }}/{{ st.accounts.length }} 在线</span></header>
-        <div v-if="!st.accounts.length" class="small-empty">暂无账号，请先到账号管理中登录。</div>
+        <div v-if="!st.accounts.length" class="small-empty">暂无账号，请先到「账号管理」登录。</div>
         <div v-else class="account-list">
           <div v-for="account in st.accounts" :key="account.session" class="account-row" :class="{ changed: changedAccounts.includes(account.session) }">
             <AccountAvatar :account="account" />
@@ -576,7 +576,7 @@ onUnmounted(() => {
 
       <article class="surface jobs-panel">
         <header class="panel-heading compact jobs-heading"><div><span class="eyebrow">定时任务</span><h2>即将执行</h2></div><span class="jobs-header-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3v3m10-3v3M4 9h16M5 5h14v15H5z"/><circle cx="16.5" cy="16.5" r="3.5"/><path d="M16.5 14.8v1.9l1.2.7"/></svg></span></header>
-        <div v-if="!st.scheduler_jobs.length" class="small-empty">当前没有定时任务。</div>
+        <div v-if="!st.scheduler_jobs.length" class="small-empty">暂无定时任务。</div>
         <div v-else class="job-list">
           <div v-for="job in st.scheduler_jobs" :key="job.id" class="job-row" :class="{ changed: changedJobs.includes(job.id) }">
             <span class="job-mark" :class="{ running: job.running }"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></svg></span>

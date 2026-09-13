@@ -211,7 +211,7 @@ const pageContext = {
   '/plugins': { kicker: '插件生态', title: '插件管理' },
   '/accounts': { kicker: '会话接入', title: '账号管理' },
   '/logs': { kicker: '诊断中心', title: '运行日志' },
-  '/settings': { kicker: '平台配置', title: '系统设置' },
+  '/settings': { kicker: '系统配置', title: '系统设置' },
 }
 const currentPage = computed(() => pageContext[route.path] || {
   kicker: 'AWBotNest',

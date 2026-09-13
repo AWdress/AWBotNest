@@ -1,5 +1,5 @@
 const SOURCE_LABELS = {
-  main: '平台服务', api: '平台接口', scheduler: '定时任务', repo_sync: '插件仓库',
+  main: '系统服务', api: '系统接口', scheduler: '定时任务', repo_sync: '插件仓库',
   plugin: '插件管理', plugin_runtime: '插件运行', plugins: '插件管理',
   account: '账号管理', account_manager: '账号管理', telegram: 'Telegram 客户端',
   custom_client: 'Telegram 客户端', notification: '通知服务', notifier: '通知服务',
@@ -33,10 +33,10 @@ const MESSAGE_RULES = [
   [/^Telethon Bot \[([^\]]+)] 已连接$/i, 'Bot「$1」已连接'],
   [/^Telethon 用户账号 (.+) 已连接$/i, '用户账号「$1」已连接'],
   [/^Started server process/i, 'Web 服务进程已启动'],
-  [/^Waiting for application startup/i, '正在等待平台启动'],
-  [/^Application startup complete/i, '平台启动完成'],
+  [/^Waiting for application startup/i, '正在等待系统启动'],
+  [/^Application startup complete/i, '系统启动完成'],
   [/^Shutting down/i, '正在停止 Web 服务'],
-  [/^Application shutdown complete/i, '平台已停止'],
+  [/^Application shutdown complete/i, '系统已停止'],
 ]
 
 export function logLevelLabel(level) {
@@ -54,11 +54,11 @@ export function isDisplayLog(item = {}) {
 
 export function logSourceLabel(source, pluginNames = {}) {
   const raw = String(source || '').trim()
-  if (!raw) return '平台服务'
+  if (!raw) return '系统服务'
   if (pluginNames[raw]) return pluginNames[raw]
   if (SOURCE_LABELS[raw]) return SOURCE_LABELS[raw]
   if (raw.startsWith('awbotnest.plugin.')) return pluginNames[raw.slice(17)] || '插件运行'
-  if (raw.startsWith('awbotnest.')) return SOURCE_LABELS[raw.slice(10)] || '平台模块'
+  if (raw.startsWith('awbotnest.')) return SOURCE_LABELS[raw.slice(10)] || '系统模块'
   return /^[a-z][a-z0-9_.-]*$/i.test(raw) ? '系统组件' : raw
 }
 

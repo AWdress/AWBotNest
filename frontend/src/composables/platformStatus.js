@@ -25,7 +25,7 @@ export async function refreshPlatformStatus(force = false) {
       return data
     })
     .catch((error) => {
-      if (startedGeneration === generation) platformStatusError.value = error.message || '读取平台状态失败'
+      if (startedGeneration === generation) platformStatusError.value = error.message || '读取系统状态失败'
       throw error
     })
     .finally(() => {

@@ -586,7 +586,7 @@ async function ensureCookieCredentials() {
     const credentials = await api.generateCookieCredentials()
     cookieSettings.value.uuid = credentials.uuid
     cookieSettings.value.password = credentials.password
-    toast.success('已自动生成平台 Cookie 凭据')
+    toast.success('已自动生成系统 Cookie 凭据')
     return true
   } catch (e) {
     toast.error('生成同步凭据失败：' + e.message)
@@ -658,7 +658,7 @@ async function syncRemoteCookies() {
 async function clearCookieData() {
   const accepted = await confirm({
     title: '清空浏览器 Cookie',
-    message: '平台保存的 Cookie 将被删除，插件会暂时无法读取。浏览器下次同步后会重新写入。',
+    message: '系统保存的 Cookie 将被删除，插件会暂时无法读取。浏览器下次同步后会重新写入。',
     confirmText: '确认清空',
     danger: true,
   })
@@ -668,7 +668,7 @@ async function clearCookieData() {
     const data = await api.clearCookieData()
     cookieStatus.value = data.sync_status || {}
     cookieHistory.value = data.history || cookieHistory.value
-    toast.success('平台保存的 Cookie 已清空')
+    toast.success('系统保存的 Cookie 已清空')
   } catch (e) {
     toast.error('清空 Cookie 失败：' + e.message)
   } finally {
@@ -1089,7 +1089,7 @@ function waitForPlatformRestart() {
         restartTimer = null
         restarting.value = false
         browserUpdating.value = false
-        toast.error('平台重启等待超时，请手动刷新页面检查状态')
+        toast.error('系统重启等待超时，请手动刷新页面检查状态')
       }
     }
   }, 2000)
@@ -1124,7 +1124,7 @@ async function updateCloakBrowser() {
   try {
     const result = await api.updateCloakBrowser()
     restarting.value = true
-    toast.success(result.message || 'CloakBrowser 已更新，平台正在重启')
+        toast.success(result.message || 'CloakBrowser 已更新，系统正在重启')
     waitForPlatformRestart()
   } catch (e) {
     browserUpdating.value = false
@@ -1833,7 +1833,7 @@ onBeforeRouteLeave(async () => {
 
       <div v-if="tab === 'login'" class="card appearance-card">
         <div class="card-title">界面外观</div>
-        <div class="hint muted">透明主题会保留深色玻璃底；背景支持固定图片或返回图片的随机 API。</div>
+        <div class="hint muted">透明主题会保留深色玻璃底。背景可使用固定图片，也可填写返回图片的 API。</div>
         <div class="grid2">
           <div class="field"><label>主题</label><select class="select" v-model="themeMode" @change="saveAppearance"><option value="dark">深色</option><option value="transparent">透明</option></select></div>
           <div class="field"><label>背景图片 / 随机 API（可选）</label><input class="input" v-model="backgroundUrl" placeholder="留空使用默认深色背景" @change="saveAppearance" /></div>
@@ -1842,7 +1842,7 @@ onBeforeRouteLeave(async () => {
 
       <div v-if="tab === 'login'" class="card">
         <div class="card-title">登录设置</div>
-        <div class="hint muted">修改登录用户名和密码。</div>
+        <div class="hint muted">在这里修改登录用户名和密码。</div>
         <div v-if="credErr" class="alert err">{{ credErr }}</div>
         <div v-if="credMsg" class="alert ok">{{ credMsg }}</div>
         <div class="grid2">
@@ -1863,7 +1863,7 @@ onBeforeRouteLeave(async () => {
       <!-- Telegram 凭据 -->
       <div v-if="tab === 'login'" class="card" style="margin-top:16px">
         <div class="card-title">Telegram 凭据</div>
-        <div class="hint muted">从 my.telegram.org 获取 API_ID / API_HASH。保存并重启平台后，可前往「账号管理」使用手机号和验证码登录 Telegram。Bot Token 在「通知渠道」页配置；点击眼睛可查看已保存的敏感值。</div>
+        <div class="hint muted">API_ID 和 API_HASH 可从 my.telegram.org 获取。保存并重启系统后，到「账号管理」使用手机号和验证码登录。Bot Token 在「通知渠道」中配置。</div>
         <div class="grid2">
           <div class="field"><label>API ID</label>
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
@@ -1882,7 +1882,7 @@ onBeforeRouteLeave(async () => {
       <div v-if="tab === 'notify'" class="card notify-channels-card">
         <div class="card-title">通知渠道</div>
         <div class="hint muted small" style="margin-bottom:16px">
-          设置消息发送渠道参数
+          设置消息发送渠道。
         </div>
 
         <!-- 通知渠道卡片网格 -->
@@ -1962,7 +1962,7 @@ onBeforeRouteLeave(async () => {
       <div v-if="tab === 'notify'" class="card notify-route-card" style="margin-top:16px">
         <div class="card-title">推送路由</div>
         <div class="hint muted small" style="margin-bottom:12px">
-          选择每个插件的通知发到哪个渠道；选择立即生效（无需保存设置）。未单独选择时使用当前默认渠道。
+          为每个插件选择通知渠道，修改会立即生效。未单独选择时使用默认渠道。
         </div>
         <div v-if="routingLoading" class="muted small">加载中…</div>
         <div v-else-if="routing.plugins.length === 0" class="muted small">还没有插件。</div>
@@ -2011,7 +2011,7 @@ onBeforeRouteLeave(async () => {
                 <div>
                   <div class="card-title">AI 服务</div>
                   <div class="hint muted">
-                    插件通过平台统一调用 AI 能力，不会接触服务商密钥。
+                    插件只通过系统调用 AI，不会接触服务商密钥。
                   </div>
                 </div>
               </div>
@@ -2071,7 +2071,7 @@ onBeforeRouteLeave(async () => {
             <div class="row between ai-section-head ai-activity-head">
               <div>
                 <div class="card-title">最近调用</div>
-                <div class="hint muted">保留最近 200 次实际请求，首屏按需加载 20 条，可定位服务、模型、协议和失败原因。</div>
+                <div class="hint muted">保留最近 200 次调用，先显示 20 条。可按服务、模型、协议和失败原因排查问题。</div>
               </div>
               <div class="row gap ai-activity-actions">
                 <select class="select" v-model="aiUsageStatus" aria-label="筛选调用状态">
@@ -2137,7 +2137,7 @@ onBeforeRouteLeave(async () => {
             <div class="row between ai-section-head">
               <div>
                 <div class="card-title">AI 服务商</div>
-                <div class="hint muted">支持 OpenAI 兼容接口，可添加云端服务或本地模型服务。</div>
+                <div class="hint muted">支持 OpenAI 兼容接口，可连接云端服务或本地模型。</div>
               </div>
               <button class="btn sm btn-primary" @click="addAiProvider">+ 添加服务</button>
             </div>
@@ -2169,8 +2169,8 @@ onBeforeRouteLeave(async () => {
                   </select>
                   <div class="hint muted small">
                     {{ provider.api_format === 'auto'
-                      ? `调用时识别并缓存可用协议${aiStatus?.detected_protocols?.[provider.id] ? `，当前识别为 ${aiProtocolLabel(aiStatus.detected_protocols[provider.id])}` : ''}`
-                      : '固定使用所选协议，不执行自动尝试' }}
+                      ? `调用时自动识别并记住可用协议${aiStatus?.detected_protocols?.[provider.id] ? `，当前为 ${aiProtocolLabel(aiStatus.detected_protocols[provider.id])}` : ''}`
+                      : '固定使用所选协议，不再自动尝试' }}
                   </div>
                 </div>
                 <div class="field">
@@ -2194,7 +2194,7 @@ onBeforeRouteLeave(async () => {
               <div>
                 <div class="card-title">模型库</div>
                 <div class="hint muted">
-                  从服务商列表选择或手动填写真实模型名，并设置插件调用时使用的别名。
+                  从服务商列表选择或手动填写真实模型名，再设置插件调用时使用的别名。
                 </div>
               </div>
               <button class="btn sm btn-primary" @click="addAiModel">+ 手动添加模型</button>
@@ -2232,12 +2232,12 @@ onBeforeRouteLeave(async () => {
                   </label>
                 </div>
                 <div v-else class="muted center ai-model-picker-empty">
-                  {{ aiModelSearch ? '没有符合条件的模型' : '读取到的模型已全部加入模型库' }}
+                  {{ aiModelSearch ? '没有匹配的模型' : '读取到的模型都已加入模型库' }}
                 </div>
               </div>
             </div>
             <div v-if="ai.models.length === 0" class="muted center ai-model-empty">
-              还没有模型，请从上方读取结果中选择，或手动添加一个模型。
+              暂无模型，请从上方读取结果中选择，或手动添加模型。
             </div>
             <template v-else>
               <div class="ai-library-toolbar">
@@ -2361,11 +2361,11 @@ onBeforeRouteLeave(async () => {
                             </button>
                             <div v-if="aiProviderModels(model.provider_id).length === 0"
                                  class="ai-model-dropdown-empty">
-                              请先读取这个服务商的模型列表，也可以直接手动填写
+                              请先读取该服务商的模型列表，也可以直接手动填写。
                             </div>
                             <div v-else-if="aiModelChoices(model).length === 0"
                                  class="ai-model-dropdown-empty">
-                              没有匹配的模型，可以保留当前内容并手动填写
+                              没有匹配的模型，可保留当前内容或手动填写。
                             </div>
                           </div>
                         </div>
@@ -2397,7 +2397,7 @@ onBeforeRouteLeave(async () => {
           <div class="card" style="margin-top:16px">
             <div class="card-title">模型分工</div>
             <div class="hint muted">
-              不指定模型的插件使用这里的默认模型；插件也可以通过别名自主选择模型库中的其他模型。
+              未指定模型的插件会使用这里的默认模型；也可以通过别名选择模型库中的其他模型。
             </div>
             <div class="ai-capability-grid">
               <div v-for="capability in AI_CAPABILITIES" :key="capability.key" class="ai-capability-card">
@@ -2433,7 +2433,7 @@ onBeforeRouteLeave(async () => {
               </div>
             </div>
             <div class="hint muted small ai-test-note">
-              生图测试会真正生成一张简单图片，可能产生少量服务商费用。
+              生图测试会实际生成一张图片，可能产生少量服务商费用。
             </div>
           </div>
 
@@ -2456,12 +2456,12 @@ onBeforeRouteLeave(async () => {
                        v-model.number="ai.max_concurrency" />
               </div>
             </div>
-            <div class="hint muted">生图通常需要更长时间，默认等待 300 秒；超过并发数量的请求会自动排队。</div>
+            <div class="hint muted">生图响应通常较慢，默认最多等待 300 秒。超过并发上限的请求会排队。</div>
           </div>
 
           <div class="card" style="margin-top:16px">
             <div class="card-title">插件 AI 设置</div>
-            <div class="hint muted">可以控制插件使用哪些 AI 能力，并为每种能力指定模型；留空则跟随默认设置。</div>
+            <div class="hint muted">可分别控制插件能使用的 AI 能力和模型。留空时使用默认设置。</div>
             <div v-if="aiPluginsLoading && !aiPlugins.length" class="ai-plugin-skeleton" aria-label="正在识别使用 AI 的插件">
               <i v-for="index in 2" :key="index"></i>
             </div>
@@ -2525,12 +2525,12 @@ onBeforeRouteLeave(async () => {
                 </svg>
               </div>
               <div>
-                <div class="card-title">平台 Cookie 服务</div>
-              <div class="hint muted">支持浏览器直接上传；插件只读取获准域名。</div>
+                <div class="card-title">系统 Cookie 服务</div>
+              <div class="hint muted">支持从浏览器直接上传。插件只能读取已允许的域名。</div>
               </div>
             </div>
             <button type="button" class="toggle" :class="{ on: cookieSettings.enabled }"
-                    :aria-pressed="cookieSettings.enabled" aria-label="启用平台 Cookie 服务"
+                    :aria-pressed="cookieSettings.enabled" aria-label="启用系统 Cookie 服务"
                     @click="toggleCookieService"></button>
           </div>
 
@@ -2538,7 +2538,7 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-section-heading">
               <div>
                 <div class="card-title">浏览器直连</div>
-                <div class="hint muted">把下面三项填入本地浏览器的 CookieCloud 扩展，工作模式选择“上传到服务器”。定时同步的间隔也在浏览器扩展中设置。</div>
+                <div class="hint muted">将下面三项填入浏览器 CookieCloud 扩展，并把工作模式设为“上传到服务器”。同步间隔也在扩展中设置。</div>
               </div>
               <button class="btn sm" @click="generateCookieCredentials">重新生成凭据</button>
             </div>
@@ -2570,7 +2570,7 @@ onBeforeRouteLeave(async () => {
                           @click="copyCookieValue(cookieSettings.password, '加密密码')">复制</button>
                 </div>
                 <div v-if="cookieSettings.password === '********'" class="hint muted small">
-                  密码已安全保存，点击输入框右侧的眼睛可以查看和复制。
+                  密码已安全保存。点击输入框右侧的眼睛即可查看并复制。
                 </div>
               </div>
               <div class="field">
@@ -2582,7 +2582,7 @@ onBeforeRouteLeave(async () => {
               </div>
             </div>
             <div class="cookie-security-note">
-              Cookie 内容由浏览器扩展端到端加密后上传。保存新凭据前，请先复制到浏览器扩展；更换凭据会清除旧快照。
+              Cookie 内容由浏览器扩展端到端加密后上传。保存新凭据前，请先复制到浏览器扩展；更换凭据会清除旧数据。
             </div>
           </div>
 
@@ -2590,8 +2590,8 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-section-heading">
               <div>
                 <div class="card-title">远程 CookieCloud</div>
-                <div class="hint muted">从已有 CookieCloud 服务器自动拉取数据，解密后再由平台加密保存。</div>
-                <div class="hint muted small">平台会优先在本地解密；遇到 MoviePilot 等兼容服务时，本地解密失败后会通过安全连接请远程服务完成解密。</div>
+                <div class="hint muted">从已有 CookieCloud 服务器拉取数据，解密后由系统加密保存。</div>
+                <div class="hint muted small">系统会优先在本地解密。若本地解密失败，再通过安全连接请求兼容服务完成解密。</div>
               </div>
               <div class="row gap cookie-remote-actions">
                 <button class="btn sm" :disabled="!cookieSettings.remote_enabled || cookieRemoteSyncing"
@@ -2609,7 +2609,7 @@ onBeforeRouteLeave(async () => {
                 <label>远程服务器地址</label>
                 <input class="input mono" v-model.trim="cookieSettings.remote_url"
                        placeholder="https://cookie.example.com/cookiecloud" />
-                <div class="hint muted small">填写 CookieCloud 服务根地址，不要包含 /get/UUID。</div>
+                <div class="hint muted small">填写 CookieCloud 服务根地址，不要带上 /get/UUID。</div>
               </div>
               <div class="field">
                 <label>远程用户 KEY · UUID</label>
@@ -2649,11 +2649,11 @@ onBeforeRouteLeave(async () => {
                 <label>同步域名白名单（可空）</label>
                 <input class="input mono" v-model="cookieRemoteDomainsText"
                        placeholder="example.com, *.example.org" />
-                <div class="hint muted small">多个域名用逗号或空格分隔；留空会同步远程服务器中的全部域名。</div>
+                <div class="hint muted small">多个域名用逗号或空格分隔。留空则同步远程服务器中的全部域名。</div>
               </div>
             </div>
             <div class="cookie-security-note">
-              远程地址、UUID 和密码只保存在平台加密配置中，不会提供给插件。定时同步成功或失败都会留下日志和同步记录；同时使用两种来源时，以最后完成的同步为准。
+              远程地址、UUID 和密码只保存在系统加密配置中，不会提供给插件。每次同步都会记录日志和结果；同时使用两种来源时，以最后完成的同步为准。
             </div>
           </div>
 
@@ -2661,7 +2661,7 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-section-heading">
               <div>
                 <div class="card-title">同步状态</div>
-                <div class="hint muted">扩展到达设定间隔后会自动上传；平台每次收到数据都会写入运行日志和下方记录。</div>
+                <div class="hint muted">扩展到达设定间隔后会自动上传。系统收到数据后会写入运行日志和下方记录。</div>
               </div>
               <div class="row gap">
                 <button class="btn sm" @click="checkCookieSync" :disabled="cookieChecking">
@@ -2728,8 +2728,8 @@ onBeforeRouteLeave(async () => {
       <div v-if="tab === 'api'" class="card">
         <div class="card-title">Webhook 入站</div>
         <div class="hint muted small" style="margin-bottom:12px">
-          外部服务 POST 到下面的地址（JSON 可含 text/title/category 字段，或直接发文本），
-          系统会把内容作为通知推送给管理员。留空密钥=关闭。改动随「保存设置」生效。
+          外部服务可 POST 到下面的地址（JSON 可包含 text、title、category 字段，也可以直接发送文本），
+          系统会把内容作为通知发给管理员。留空密钥即可关闭，改动在「保存设置」后生效。
         </div>
         <div class="row gap">
           <SecretInput style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥"
@@ -2750,7 +2750,7 @@ onBeforeRouteLeave(async () => {
         <div class="card-title">REST API</div>
         <div class="hint muted small" style="margin-bottom:12px">
           第三方工具（如 AI 助手、自动化脚本）可通过 API 远程管理 AWBotNest 和插件。
-          请求时需携带此密钥验证身份。留空=关闭 API。改动随「保存设置」生效。
+          请求时需携带此密钥进行身份验证。留空即可关闭 API，改动在「保存设置」后生效。
           <a href="/docs"
              target="_blank"
              style="color:#3b82f6;text-decoration:underline;margin-left:4px">
@@ -2783,7 +2783,7 @@ onBeforeRouteLeave(async () => {
           <div class="field"><label>外部地址 (WEB_UI_URL，可空)</label>
             <input class="input" v-model="s.WEB_UI_URL" /></div>
         </div>
-        <div class="hint muted small">需要公网访问请自行用 Nginx / Caddy 等反向代理到本机端口。</div>
+        <div class="hint muted small">如需公网访问，请用 Nginx 或 Caddy 将请求转发到本机端口。</div>
       </div>
 
       <!-- 运行代理 -->
@@ -2799,7 +2799,7 @@ onBeforeRouteLeave(async () => {
             <label>代理地址</label>
             <input class="input" v-model.trim="s.proxy_set.PROXY_URL"
                    placeholder="例如 socks5://127.0.0.1:7890" />
-            <div class="hint muted small">支持 http、socks4、socks5；Telegram、插件网络请求和浏览器服务统一使用此地址。需要认证时填写为 socks5://用户名:密码@主机:端口。</div>
+            <div class="hint muted small">支持 http、socks4、socks5。Telegram、插件请求和浏览器服务都会使用此地址。需要认证时填写为 socks5://用户名:密码@主机:端口。</div>
           </div>
           <div class="test-row">
             <button class="btn sm" @click="testProxy" :disabled="proxyTesting">
@@ -2812,14 +2812,14 @@ onBeforeRouteLeave(async () => {
           <label>pip 镜像源 (插件装依赖用)</label>
           <input class="input" v-model="s.PIP_INDEX_URL"
                  placeholder="https://pypi.tuna.tsinghua.edu.cn/simple" />
-          <div class="hint muted small">墙内建议填国内镜像（清华/阿里），境内直连不经墙。留空则走官方 pypi（此时若启用了上面的代理会自动用代理出墙）。</div>
+          <div class="hint muted small">国内网络可填写清华或阿里镜像。留空使用官方 PyPI；如果启用了上方代理，下载会通过代理进行。</div>
         </div>
         <div class="field" style="margin-top:14px">
           <label>GitHub Token</label>
           <SecretInput v-model="s.GITHUB_TOKEN" mono
                        @reveal="revealSystemSecret('GITHUB_TOKEN', (value, secret) => { value.GITHUB_TOKEN = secret })"
                        placeholder="可选，填写 GitHub Personal Access Token" />
-          <div class="hint muted small">用于插件仓库查询、自动发现和更新，提高 GitHub API 请求配额。保存后立即生效；留空并保存可移除 Token。</div>
+          <div class="hint muted small">用于查询插件仓库、自动发现和更新，可提高 GitHub API 配额。保存后立即生效；留空保存即可移除 Token。</div>
         </div>
       </div>
 
@@ -2831,14 +2831,14 @@ onBeforeRouteLeave(async () => {
             <input v-model="s.BROWSER_ENGINE" type="radio" value="chromium" />
             <span class="browser-engine-copy">
               <span class="browser-engine-name">Chromium <span class="badge">默认</span></span>
-              <span class="hint muted">使用平台现有 Chromium，兼容所有现有插件浏览器调用。</span>
+              <span class="hint muted">使用系统已有的 Chromium，兼容现有插件。</span>
             </span>
           </label>
           <label class="browser-engine-option" :class="{ selected: s.BROWSER_ENGINE === 'cloakbrowser' }">
             <input v-model="s.BROWSER_ENGINE" type="radio" value="cloakbrowser" />
             <span class="browser-engine-copy">
               <span class="browser-engine-name">CloakBrowser</span>
-              <span class="hint muted">提供浏览器指纹仿真和反检测能力，首次保存时自动安装。</span>
+              <span class="hint muted">提供指纹仿真能力。首次保存设置时会自动安装。</span>
             </span>
           </label>
         </div>
@@ -2860,7 +2860,7 @@ onBeforeRouteLeave(async () => {
                        @reveal="revealSystemSecret('CLOAKBROWSER_LICENSE_KEY', (value, secret) => { value.CLOAKBROWSER_LICENSE_KEY = secret })"
                        placeholder="cb_你的完整 Key" />
           <div class="hint muted small">
-            平台保存后直接提供给 CloakBrowser；依赖自动安装到持久化插件依赖目录。
+            系统保存后直接提供给 CloakBrowser；依赖自动安装到持久化插件依赖目录。
             <a href="https://cloakbrowser.dev/free" target="_blank" rel="noopener noreferrer">获取免费 Key</a>
           </div>
         </div>
@@ -2939,7 +2939,7 @@ onBeforeRouteLeave(async () => {
           <div class="field"><label>库名</label>
             <input class="input" v-model="s.DB_INFO.db_name" disabled /></div>
         </div>
-        <div class="hint muted small">平台固定使用内置 SQLite，无需安装或配置外部数据库。</div>
+        <div class="hint muted small">系统固定使用内置 SQLite，无需安装或配置外部数据库。</div>
         <template v-if="s.DB_INFO.dbset !== 'SQLite'">
           <div class="grid2">
             <div class="field"><label>地址</label><input class="input" v-model="s.DB_INFO.address" /></div>
@@ -2962,8 +2962,8 @@ onBeforeRouteLeave(async () => {
       <div v-if="tab === 'maint'" class="card">
         <div class="card-title">维护</div>
         <div class="hint muted">
-          这里可以设置日志自动清理，或导入、导出系统与插件配置。配置包不包含账号会话、Cookie、日志和插件程序。
-          导入时会先校验并下载当前快照，重启后再应用恢复，避免损坏运行中的数据库。
+          可在这里设置日志清理，或导入、导出系统与插件配置。配置包不包含账号会话、Cookie、日志和插件程序。
+          导入前会先校验并保存当前快照，重启后再应用配置，避免影响运行中的数据库。
         </div>
 
         <div class="maint-box">
@@ -2971,7 +2971,7 @@ onBeforeRouteLeave(async () => {
             <div class="maint-heading">
               <div>
                 <div class="maint-name">日志清理</div>
-                <div class="maint-desc muted">定时清理运行日志和插件历史日志，避免长期占用磁盘空间。</div>
+              <div class="maint-desc muted">定期清理运行日志和插件历史日志，减少磁盘占用。</div>
               </div>
               <button type="button" class="toggle" :class="{ on: s.LOG_CLEANER.enabled }"
                       :aria-pressed="s.LOG_CLEANER.enabled" aria-label="启用日志清理"
@@ -3004,7 +3004,7 @@ onBeforeRouteLeave(async () => {
           <div class="maint-item">
             <div>
               <div class="maint-name">导出配置</div>
-              <div class="maint-desc muted">仅导出系统设置和插件设置，生成轻量 zip 配置包。</div>
+              <div class="maint-desc muted">只导出系统设置和插件设置，生成小型 ZIP 配置包。</div>
             </div>
             <button class="btn btn-primary" @click="downloadBackup" :disabled="backupBusy">
               {{ backupBusy ? '导出中…' : '下载配置包' }}
@@ -3014,7 +3014,7 @@ onBeforeRouteLeave(async () => {
           <div class="maint-item">
             <div>
               <div class="maint-name">导入配置</div>
-              <div class="maint-desc muted">导入 AWBotNest 配置包；重启后只替换系统设置和插件设置。</div>
+              <div class="maint-desc muted">导入 AWBotNest 配置包。重启后只替换系统设置和插件设置。</div>
             </div>
             <button class="btn" @click="openRestorePicker" :disabled="restoreBusy">
               {{ restoreBusy ? '导入中…' : '选择配置包' }}
@@ -3024,7 +3024,7 @@ onBeforeRouteLeave(async () => {
         </div>
       </div>
 
-      <div class="hint muted foot" v-if="tab === 'telegram'">提示：账号登录在「账号管理」页完成，账号列表会随登录自动写入。</div>
+      <div class="hint muted foot" v-if="tab === 'telegram'">提示：请在「账号管理」完成登录，账号会自动加入列表。</div>
     </div>
   </div>
 
@@ -3071,7 +3071,7 @@ onBeforeRouteLeave(async () => {
             <input type="checkbox" v-model="channelForm.is_default" />
             <span>设为默认</span>
           </label>
-          <div class="hint muted small">默认渠道用于接收系统通知，只能有一个默认渠道</div>
+          <div class="hint muted small">默认渠道用于接收系统通知，只能设置一个。</div>
         </div>
 
         <!-- 名称 -->
@@ -3084,7 +3084,7 @@ onBeforeRouteLeave(async () => {
         <!-- 插件选择 -->
         <div class="field">
           <label>通知插件</label>
-          <div class="hint muted small" style="margin-bottom:8px">选择该渠道接收哪些插件的通知</div>
+          <div class="hint muted small" style="margin-bottom:8px">选择通过此渠道接收哪些插件的通知。</div>
 
           <!-- 全选复选框 -->
           <label class="plugin-checkbox-item">
@@ -3126,7 +3126,7 @@ onBeforeRouteLeave(async () => {
             <label>Chat ID（可选）</label>
             <input class="input" v-model="channelForm.config.chat_id"
                    placeholder="接收消息的用户、群组或频道 Chat ID" />
-            <div class="hint muted small">留空使用全局默认 Chat ID；未设置时发送给首个用户账号。请先用该账号启动接收通知的 Bot。</div>
+            <div class="hint muted small">留空使用全局默认 Chat ID；未设置时发送给第一个用户账号。请先用该账号启动 Bot。</div>
           </div>
         </template>
 
@@ -3154,13 +3154,13 @@ onBeforeRouteLeave(async () => {
             <label>代理地址（可选）</label>
             <input class="input" v-model="channelForm.config.proxy"
                    placeholder="https://qyapi.weixin.qq.com" />
-            <div class="hint muted small">不填时使用企业微信官方地址；使用转发服务时填写服务根地址。</div>
+            <div class="hint muted small">留空使用企业微信官方地址；使用转发服务时填写服务根地址。</div>
           </div>
           <div class="field">
             <label>接收成员（可选）</label>
             <input class="input" v-model="channelForm.config.touser"
                    placeholder="@all" />
-            <div class="hint muted small">默认发送给全部成员；指定多个成员时用竖线分隔。</div>
+          <div class="hint muted small">默认发送给全部成员；指定多个成员时用竖线分隔。</div>
           </div>
         </template>
 

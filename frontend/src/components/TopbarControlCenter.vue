@@ -468,10 +468,10 @@ onUnmounted(() => {
     <div v-if="panel === 'shortcuts'" class="control-pop shortcuts-pop">
       <div class="pop-head"><strong>快捷入口</strong><button @click="panel=''">×</button></div>
       <div class="shortcut-grid">
-        <button @click.stop="openModal('logs')"><i>▤</i><span><strong>运行日志</strong><small>查看最新运行记录</small></span></button>
+        <button @click.stop="openModal('logs')"><i>▤</i><span><strong>运行日志</strong><small>查看最近的运行记录</small></span></button>
         <button @click.stop="openModal('network')"><i>⌁</i><span><strong>网络测试</strong><small>检查外部服务连接</small></span></button>
         <button @click.stop="openModal('health')"><i>✦</i><span><strong>系统健康检查</strong><small>检查核心服务</small></span></button>
-        <button @click.stop="openModal('services')"><i>◷</i><span><strong>定时任务</strong><small>查看和执行定时任务</small></span></button>
+        <button @click.stop="openModal('services')"><i>◷</i><span><strong>定时任务</strong><small>查看或执行定时任务</small></span></button>
       </div>
     </div>
 
@@ -655,7 +655,7 @@ onUnmounted(() => {
         </div>
         <div v-else-if="modal === 'theme'" class="modal-body theme-modal-body">
           <label>背景图片或随机图片 API</label>
-          <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认二次元背景">
+          <input v-model="backgroundUrl" class="appearance-input" placeholder="留空使用默认背景">
           <button class="btn primary" @click="saveAppearance(); closeModal()">保存定制主题</button>
         </div>
       </section>
@@ -668,7 +668,7 @@ onUnmounted(() => {
           </header>
           <div v-if="selectedVersion.loading" class="release-note-state">正在读取更新内容…</div>
           <div v-else-if="selectedVersion.notes" class="release-note-content" v-html="releaseNoteHtml"></div>
-          <div v-else class="release-note-state">这个版本暂时没有更新说明。</div>
+          <div v-else class="release-note-state">该版本暂无更新说明。</div>
         </article>
       </div>
     </div>
