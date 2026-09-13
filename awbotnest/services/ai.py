@@ -176,14 +176,14 @@ class AIService:
         return type(exc).__name__
 
     def _log_started(self, capability: str, plugin_id: str, model: str, base_url: str) -> None:
-        logger.debug(
+        logger.info(
             "AI 调用开始：来源=%s 能力=%s 模型=%s 服务=%s",
             self._audit_source(plugin_id), capability, model, self._provider_host(base_url),
         )
 
     def _log_succeeded(self, capability: str, plugin_id: str, model: str, base_url: str,
                        started: float, data: object) -> None:
-        logger.debug(
+        logger.info(
             "AI 调用成功：来源=%s 能力=%s 模型=%s 服务=%s 耗时=%dms%s",
             self._audit_source(plugin_id), capability, model, self._provider_host(base_url),
             round((time.perf_counter() - started) * 1000), self._usage_summary(data),
