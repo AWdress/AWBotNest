@@ -9,7 +9,8 @@ function cancel() { _resolveConfirm(false) }
 <template>
   <Transition name="fade">
     <div v-if="confirmState.open" class="mask" @click.self="cancel">
-      <div class="dialog">
+      <div class="dialog" :role="confirmState.showCancel ? 'dialog' : 'alertdialog'"
+           aria-modal="true" aria-labelledby="global-dialog-title" aria-describedby="global-dialog-message">
         <div class="d-icon" :class="{ danger: confirmState.danger }">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                stroke-linecap="round" stroke-linejoin="round">
@@ -17,10 +18,10 @@ function cancel() { _resolveConfirm(false) }
             <path v-else d="M12 22a10 10 0 100-20 10 10 0 000 20zM12 8v5M12 16h.01" />
           </svg>
         </div>
-        <h3 class="d-title">{{ confirmState.title }}</h3>
-        <p class="d-msg">{{ confirmState.message }}</p>
+        <h3 id="global-dialog-title" class="d-title">{{ confirmState.title }}</h3>
+        <p id="global-dialog-message" class="d-msg">{{ confirmState.message }}</p>
         <div class="d-actions">
-          <button class="btn" @click="cancel">{{ confirmState.cancelText }}</button>
+          <button v-if="confirmState.showCancel" class="btn" @click="cancel">{{ confirmState.cancelText }}</button>
           <button class="btn" :class="confirmState.danger ? 'btn-danger-solid' : 'btn-primary'" @click="ok">
             {{ confirmState.confirmText }}
           </button>

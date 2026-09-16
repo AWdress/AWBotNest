@@ -4,7 +4,7 @@ import { Flame } from '@lucide/vue'
 import { api, getToken } from '../api'
 import ConfigForm from '../components/ConfigForm.vue'
 import RemotePluginConfig from '../components/RemotePluginConfig.vue'
-import { confirm } from '../composables/confirm'
+import { confirm, showAlert } from '../composables/confirm'
 import { toast } from '../composables/toast'
 import { publishNotificationSync, subscribeNotificationSync } from '../utils/notificationSync'
 import logo from '../assets/logo.png'
@@ -19,6 +19,11 @@ const orderSaving = ref(false)
 const loading = ref(true)
 let loadRequestId = 0
 const error = ref('')
+watch(error, async (message) => {
+  if (!message) return
+  await showAlert({ title: '插件操作失败', message, danger: true })
+  if (error.value === message) error.value = ''
+})
 const busy = ref({})
 const selfCheckOpen = ref(false)
 const selfCheckTarget = ref(null)
@@ -188,7 +193,6 @@ async function toggle(p) {
     p.enabled = wasEnabled
     const message = `${wasEnabled ? '停用' : '启用'}失败：${p.name}（${e.message}）`
     error.value = message
-    toast.error(message)
   } finally {
     busy.value[p.id] = false
   }
@@ -656,7 +660,6 @@ async function onFile(e) {
     toast.success(`插件「${file.name}」安装完成`)
   } catch (err) {
     error.value = `上传失败: ${err.message}`
-    toast.error('插件上传失败')
   } finally {
     e.target.value = ''
   }
@@ -678,7 +681,6 @@ async function onDrop(e) {
     toast.success(`插件「${file.name}」安装完成`)
   } catch (err) {
     error.value = `上传失败: ${err.message}`
-    toast.error('插件上传失败')
   }
 }
 
@@ -764,6 +766,11 @@ const storeBusy = ref(false)
 let storeLoaded = false
 let storeRequest = null
 const storeErr = ref('')
+watch(storeErr, async (message) => {
+  if (!message) return
+  await showAlert({ title: '插件市场操作失败', message, danger: true })
+  if (storeErr.value === message) storeErr.value = ''
+})
 let storeErrTimer = null
 function showStoreNotice(message) {
   storeErr.value = message
@@ -1085,7 +1092,6 @@ async function download(p) {
     const res = r.result || {}
     if (res.errors && res.errors.length) {
       showStoreNotice(res.errors.join('；'))
-      toast.error(`${p.name} ${isUpdate ? '更新' : '安装'}失败`)
     } else {
       p.installed = true
       p.local_version = p.version   // 记录新版本，清除「有更新」提示
@@ -1096,7 +1102,6 @@ async function download(p) {
       const reloadError = (res.reload_errors || []).find(item => item.startsWith(`${p.id}:`))
       if (reloadError) {
         showStoreNotice(reloadError)
-        toast.error(`插件「${p.name}」文件已更新，但重新加载失败，请检查插件日志`)
       } else {
         toast.success(isUpdate
           ? `插件「${p.name}」已更新到 v${p.version}${restored ? '（已自动恢复运行）' : reloaded ? '（运行中实例已热重载）' : ''}`
@@ -1105,7 +1110,6 @@ async function download(p) {
     }
   } catch (e) {
     showStoreNotice(`${p.name}: ${e.message}`)
-    toast.error(`${p.name} ${isUpdate ? '更新' : '安装'}失败`)
   } finally {
     dlBusy.value[p.id] = false
   }
@@ -1136,13 +1140,11 @@ async function updateAll() {
 
     if (errors.length) {
       showStoreNotice(errors.join('；'))
-      toast.error(`部分插件更新失败：${errors.length} 个`)
     } else {
       toast.success(`已更新 ${targets.length} 个插件`)
     }
   } catch (e) {
     showStoreNotice(e.message)
-    toast.error(`全部更新失败：${e.message}`)
   } finally {
     updateAllBusy.value = false
   }
@@ -1153,6 +1155,11 @@ const repoOpen = ref(false)
 const repoList = ref([])
 const repoSaving = ref(false)
 const repoErr = ref('')
+watch(repoErr, async (message) => {
+  if (!message) return
+  await showAlert({ title: '仓库设置失败', message, danger: true })
+  if (repoErr.value === message) repoErr.value = ''
+})
 
 async function openRepos() {
   repoErr.value = ''
@@ -1355,8 +1362,6 @@ onUnmounted(() => {
       <div v-else class="control-caption">浏览并安装公开仓库中的插件</div>
     </div>
 
-    <div v-if="error" class="alert error-dialog" role="alert" aria-live="assertive">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
-
     <!-- ════ 我的插件 ════ -->
     <template v-if="tab === 'mine'">
       <div v-if="loading" class="muted center">加载中…</div>
@@ -1457,8 +1462,6 @@ onUnmounted(() => {
     <!-- ════ 插件市场 ════ -->
     <template v-else>
       <div class="hint muted store-hint">插件来自官方仓库和你添加的 GitHub 仓库。安装后不会自动启用，请到「我的插件」手动开启。</div>
-      <div v-if="storeErr" class="alert error-dialog" role="alert" aria-live="assertive">{{ storeErr }} <button type="button" aria-label="关闭提示" @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
-
       <div v-if="storeBusy && store.length === 0" class="muted center">加载市场…</div>
       <template v-else>
         <!-- 有更新的已安装插件 -->
@@ -1941,7 +1944,6 @@ onUnmounted(() => {
           <h2>设置 GitHub 仓库地址</h2>
           <button type="button" class="close" aria-label="关闭" @click="repoOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
-        <div v-if="repoErr" class="alert error-dialog" role="alert" aria-live="assertive">{{ repoErr }} <button type="button" aria-label="关闭提示" @click="repoErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
         <div class="form">
           <div class="muted small">官方仓库已内置。需要使用其他仓库时，可在此处添加。</div>
           <div class="field">
@@ -2060,26 +2062,6 @@ onUnmounted(() => {
   display: flex; flex-direction: column; gap: 14px;
   position: relative;
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
-}
-.error-dialog {
-  position: fixed;
-  top: 50%; left: 50%;
-  z-index: 1600;
-  width: min(620px, calc(100vw - 32px));
-  min-height: 72px;
-  margin: 0;
-  padding: 18px 20px;
-  transform: translate(-50%, -50%);
-  border-color: rgba(224, 72, 79, .72);
-  background: linear-gradient(145deg, rgba(76, 28, 39, .97), rgba(39, 22, 31, .98));
-  box-shadow: 0 0 0 100vmax rgba(3, 8, 15, .62), 0 24px 70px rgba(0, 0, 0, .55);
-  font-size: 14px;
-  line-height: 1.55;
-}
-.error-dialog .close {
-  width: 40px; height: 40px;
-  justify-content: center;
-  flex-shrink: 0;
 }
 .plugin-card::before { content: ''; position: absolute; left: 20px; right: 20px; top: -1px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, rgba(48,128,240,0), rgba(48,128,240,.48), rgba(16,176,128,.34), rgba(16,176,128,0)); opacity: .28; transition: opacity .2s ease; }
 .plugin-card:hover::before { opacity: .95; }

@@ -433,6 +433,26 @@ test('iPhone 17 插件配置关闭按钮避开顶部安全区且易于点击', a
   await expect(modal).toBeHidden()
 })
 
+test('插件操作失败使用系统内置提示弹窗', async ({ page }) => {
+  await page.route('**/api/plugins/mobile_config_test/disable', (route) => route.fulfill({
+    status: 500,
+    contentType: 'application/json',
+    body: JSON.stringify({ detail: "ImportError: cannot import name 'auto_avatar'" }),
+  }))
+  await page.goto('/#/plugins')
+
+  await page.locator('.plugin-card .toggle').first().click()
+  const dialog = page.getByRole('alertdialog')
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText('插件操作失败', { exact: true })).toBeVisible()
+  await expect(dialog.getByText(/ImportError: cannot import name 'auto_avatar'/)).toBeVisible()
+  await expect(dialog.getByRole('button', { name: '取消' })).toHaveCount(0)
+  await expect(page.locator('.error-dialog')).toHaveCount(0)
+
+  await dialog.getByRole('button', { name: '知道了' }).click()
+  await expect(dialog).toBeHidden()
+})
+
 test('Schema Cron 接口显示参考图式规则编辑器', async ({ page }) => {
   await page.goto('/#/plugins')
   await page.getByText('手机配置测试', { exact: true }).click()

@@ -8,6 +8,7 @@ export const confirmState = reactive({
   message: '',
   confirmText: '确定',
   cancelText: '取消',
+  showCancel: true,
   danger: false,
   _resolve: null,
 })
@@ -19,9 +20,19 @@ export function confirm(opts = {}) {
   confirmState.message = opts.message || ''
   confirmState.confirmText = opts.confirmText || '确定'
   confirmState.cancelText = opts.cancelText || '取消'
+  confirmState.showCancel = opts.showCancel !== false
   confirmState.danger = opts.danger || false
   confirmState.open = true
   return new Promise((resolve) => { confirmState._resolve = resolve })
+}
+
+// 复用确认弹窗的外观显示单按钮提示，适合需要管理员明确看到的错误信息。
+export function showAlert(opts = {}) {
+  return confirm({
+    ...opts,
+    confirmText: opts.confirmText || '知道了',
+    showCancel: false,
+  })
 }
 
 export function _resolveConfirm(val) {
