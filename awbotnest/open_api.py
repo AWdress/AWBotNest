@@ -5,7 +5,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from . import __version__
 from .auth import api_key_dependency
@@ -24,7 +24,7 @@ def register_open_api(
 ) -> None:
     router = APIRouter(
         prefix="/api/v1",
-        tags=["开放平台 API"],
+        tags=["系统开放 API"],
         dependencies=[Depends(api_key_dependency(settings))],
     )
 
@@ -63,6 +63,37 @@ def register_open_api(
     @router.get("/plugins")
     async def plugins():
         return {"plugins": [item.to_dict() for item in runtime.scan()]}
+
+    @router.post("/plugins/upload")
+    async def upload_plugin(file: UploadFile = File(...)):
+        """Upload and validate a single Python plugin without enabling it."""
+        filename = file.filename or ""
+        if not filename.endswith(".py") or not filename[:-3].replace("_", "").isalnum():
+            raise HTTPException(status_code=400, detail="仅支持名称安全的 .py 插件文件")
+        content = await file.read(2 * 1024 * 1024 + 1)
+        if not content or len(content) > 2 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="插件文件大小不能超过 2 MB")
+        runtime.plugins_dir.mkdir(parents=True, exist_ok=True)
+        target = runtime.plugins_dir / filename
+        temporary = runtime.plugins_dir / f".{filename}.upload"
+        backup = target.read_bytes() if target.exists() else None
+        try:
+            content.decode("utf-8")
+            temporary.write_bytes(content)
+            temporary.replace(target)
+            runtime.invalidate_scan_cache()
+            plugin = next((item for item in runtime.scan() if item.id == target.stem), None)
+            if plugin is None or plugin.error:
+                raise ValueError(plugin.error if plugin else "插件元数据无法识别")
+        except Exception as exc:
+            target.unlink(missing_ok=True)
+            if backup is not None:
+                target.write_bytes(backup)
+            runtime.invalidate_scan_cache()
+            raise HTTPException(status_code=400, detail=f"插件校验失败：{exc}") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+        return {"ok": True, "plugin": plugin.to_dict(), "enabled": bool(plugin.enabled)}
 
     @router.get("/plugins/{plugin_id}")
     async def plugin_detail(plugin_id: str):

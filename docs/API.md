@@ -37,7 +37,20 @@ GET /api/v1/plugins
 }
 ```
 
-响应还可能包含 `requirements`、`resources`、`cookie_domains`、`requires_plugins`、`requires_capabilities`、`provides_capabilities`、平台版本范围及展示字段。调用方应忽略不认识的新增字段。
+响应还可能包含 `requirements`、`resources`、`cookie_domains`、`requires_plugins`、`requires_capabilities`、`provides_capabilities`、系统版本范围及展示字段。调用方应忽略不认识的新增字段。
+
+### 推送插件文件
+
+上传一个 Python 插件文件到系统。文件会先进行元数据校验，上传成功后保持停用状态，不会自动执行。请求使用 `multipart/form-data`，字段名为 `file`，文件大小不能超过 2 MB。
+
+```bash
+curl -X POST \
+  -H "X-API-Key: YOUR_API_KEY" \
+  -F "file=@my_plugin.py" \
+  http://127.0.0.1:18001/api/v1/plugins/upload
+```
+
+上传成功后，可使用 `POST /api/v1/plugins/{plugin_id}/enable` 启用插件。
 
 ### 插件详情与源码
 
@@ -186,7 +199,7 @@ GET /api/v1/status
 
 ```json
 {
-  "version": "2.0.0.2",
+  "version": "2.0.0.3",
   "bot_connected": true,
   "user_accounts_count": 1,
   "total_plugins": 5,

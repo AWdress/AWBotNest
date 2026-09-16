@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse
 
 
 PUBLIC_TAGS = [
-    {"name": "平台", "description": "检查 AWBotNest 是否可用，以及当前插件和账号的运行概况。"},
+    {"name": "系统", "description": "检查 AWBotNest 是否可用，以及当前插件和账号的运行概况。"},
     {"name": "Telegram", "description": "发送 Telegram 消息并查询当前账号可访问的会话。"},
     {"name": "插件管理", "description": "查看、启用、停用或重载已安装插件。"},
     {"name": "插件配置", "description": "读取和保存插件配置；保存后，已运行的插件会自动重载。"},
@@ -20,10 +20,11 @@ PUBLIC_TAGS = [
 ]
 
 OPERATION_DOCS: dict[tuple[str, str], tuple[str, str, str]] = {
-    ("/api/v1/status", "get"): ("平台", "查看平台状态", "用于健康检查或自动化开始前的快速确认，不会修改任何数据。"),
+    ("/api/v1/status", "get"): ("系统", "查看系统状态", "用于健康检查或自动化开始前的快速确认，不会修改任何数据。"),
     ("/api/v1/messages/send", "post"): ("Telegram", "发送 Telegram 消息", "使用机器人或用户账号向指定会话发送文字消息。`sender` 省略时使用机器人。"),
     ("/api/v1/chats/{chat_id}", "get"): ("Telegram", "查询 Telegram 会话", "通过已连接的用户账号解析会话 ID 或用户名；机器人账号不能用于此查询。"),
     ("/api/v1/plugins", "get"): ("插件管理", "列出所有插件", "返回插件的启用状态、版本、作用域、依赖和运行错误等信息。"),
+    ("/api/v1/plugins/upload", "post"): ("插件管理", "推送插件文件", "上传并校验一个 Python 插件文件。上传成功后保持停用状态，不会自动执行；请求使用 `multipart/form-data`，字段名为 `file`，文件大小不能超过 2 MB。"),
     ("/api/v1/plugins/{plugin_id}", "get"): ("插件管理", "查看插件详情", "`plugin_id` 是插件英文标识，可先通过“列出所有插件”获取。"),
     ("/api/v1/plugins/{plugin_id}/source", "get"): ("插件管理", "读取插件源码", "返回插件入口文件的相对路径和源码。源码可能包含敏感业务逻辑，请谨慎保存。"),
     ("/api/v1/plugins/{plugin_id}/source", "put"): ("插件管理", "远程修改源码（已禁用）", "出于安全原因，此端点固定返回 `403`。请通过可信的本地文件或插件安装流程修改源码。"),
@@ -37,7 +38,7 @@ OPERATION_DOCS: dict[tuple[str, str], tuple[str, str, str]] = {
     ("/api/v1/plugins/{plugin_id}/kv/{key}", "put"): ("插件数据", "写入一个 KV 值", "`value` 可以是字符串、数字、布尔值、数组、对象或 `null`。"),
     ("/api/v1/plugins/{plugin_id}/kv/{key}", "delete"): ("插件数据", "删除一个 KV 值", "永久删除指定键；键不存在时返回 `404`。"),
     ("/api/v1/accounts", "get"): ("账号与日志", "列出账号连接状态", "仅返回账号标识、类型和连接状态，不返回 Token、手机号或 Session 内容。"),
-    ("/api/v1/logs", "get"): ("账号与日志", "读取平台日志", "返回最近的平台日志，`limit` 范围为 1–1000。"),
+    ("/api/v1/logs", "get"): ("账号与日志", "读取系统日志", "返回最近的系统日志，`limit` 范围为 1–1000。"),
     ("/api/v1/logs/plugins/{plugin_id}", "get"): ("账号与日志", "读取插件日志", "只返回指定插件的最近日志，便于第三方监控定位问题。"),
 }
 
@@ -149,7 +150,7 @@ def _docs_html(version: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#07101b">
-  <title>AWBotNest 开放平台 API</title>
+  <title>AWBotNest 系统开放 API</title>
   <link rel="icon" href="/favicon.ico">
   <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
@@ -218,7 +219,7 @@ def _docs_html(version: str) -> str:
     .swagger-ui .btn { border-radius:8px; color:#dce7f5; font-family:inherit; }
     .swagger-ui .loading-container .loading:after { color:var(--muted); }
     @media (max-width:760px) {
-      .docs-nav { height:58px; padding-left:max(14px,env(safe-area-inset-left)); padding-right:max(14px,env(safe-area-inset-right)); }
+      .docs-nav { height:calc(58px + max(12px, env(safe-area-inset-top))); padding-top:max(12px, env(safe-area-inset-top)); padding-left:max(14px,env(safe-area-inset-left)); padding-right:max(14px,env(safe-area-inset-right)); }
       .brand small, .version { display:none; }
       .docs-intro { padding:42px 16px 24px; }
       .docs-intro h1 { font-size:36px; }
@@ -241,7 +242,7 @@ def _docs_html(version: str) -> str:
 </head>
 <body>
   <nav class="docs-nav" aria-label="文档导航">
-    <a class="brand" href="/"><img class="brand-mark" src="/pwa-192.png" alt="AWBotNest Logo"><span>AWBotNest <small>开放平台</small></span></a>
+    <a class="brand" href="/"><img class="brand-mark" src="/pwa-192.png" alt="AWBotNest Logo"><span>AWBotNest <small>系统开放 API</small></span></a>
     <div class="nav-actions"><span class="version">v__VERSION__</span><a class="back-link" href="/">返回控制台</a></div>
   </nav>
   <main>
@@ -254,7 +255,7 @@ def _docs_html(version: str) -> str:
           <div class="steps">
             <div class="step"><span class="step-number">1</span><div><strong>生成 API Key</strong><p>前往“系统设置 → 开放接口”，生成密钥并保存设置。密钥只应交给可信程序。</p></div></div>
             <div class="step"><span class="step-number">2</span><div><strong>完成文档授权</strong><p>点击接口列表上方的“授权”，直接粘贴 API Key，不要添加 <code>Bearer</code> 前缀。</p></div></div>
-            <div class="step"><span class="step-number">3</span><div><strong>发送测试请求</strong><p>展开“查看平台状态”，点击“试用接口 → 执行”。收到 <code>200</code> 即表示接入成功。</p></div></div>
+            <div class="step"><span class="step-number">3</span><div><strong>发送测试请求</strong><p>展开“查看系统状态”，点击“试用接口 → 执行”。收到 <code>200</code> 即表示接入成功。</p></div></div>
           </div>
         </div>
         <div class="verify-panel">

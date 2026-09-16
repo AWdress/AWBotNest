@@ -2,13 +2,13 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AWBotNest API",
-    "version": "2.0.0.2"
+    "version": "2.0.0.3"
   },
   "paths": {
     "/api/v1/plugins": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Plugins",
         "operationId": "plugins_api_v1_plugins_get",
@@ -56,10 +56,72 @@
         }
       }
     },
+    "/api/v1/plugins/upload": {
+      "post": {
+        "tags": [
+          "系统开放 API"
+        ],
+        "summary": "Upload Plugin",
+        "description": "Upload and validate a single Python plugin without enabling it.",
+        "operationId": "upload_plugin_api_v1_plugins_upload_post",
+        "parameters": [
+          {
+            "name": "X-API-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "X-Api-Key"
+            }
+          },
+          {
+            "name": "Api-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_upload_plugin_api_v1_plugins_upload_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/plugins/{plugin_id}": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Plugin Detail",
         "operationId": "plugin_detail_api_v1_plugins__plugin_id__get",
@@ -119,7 +181,7 @@
     "/api/v1/plugins/{plugin_id}/source": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Plugin Source",
         "operationId": "plugin_source_api_v1_plugins__plugin_id__source_get",
@@ -177,7 +239,7 @@
       },
       "put": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Update Plugin Source",
         "operationId": "update_plugin_source_api_v1_plugins__plugin_id__source_put",
@@ -237,7 +299,7 @@
     "/api/v1/plugins/{plugin_id}/enable": {
       "post": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Enable Plugin",
         "operationId": "enable_plugin_api_v1_plugins__plugin_id__enable_post",
@@ -297,7 +359,7 @@
     "/api/v1/plugins/{plugin_id}/disable": {
       "post": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Disable Plugin",
         "operationId": "disable_plugin_api_v1_plugins__plugin_id__disable_post",
@@ -357,7 +419,7 @@
     "/api/v1/plugins/{plugin_id}/reload": {
       "post": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Reload Plugin",
         "operationId": "reload_plugin_api_v1_plugins__plugin_id__reload_post",
@@ -417,7 +479,7 @@
     "/api/v1/plugins/{plugin_id}/config": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Get Plugin Config",
         "operationId": "get_plugin_config_api_v1_plugins__plugin_id__config_get",
@@ -475,7 +537,7 @@
       },
       "put": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Put Plugin Config",
         "operationId": "put_plugin_config_api_v1_plugins__plugin_id__config_put",
@@ -535,7 +597,7 @@
     "/api/v1/plugins/{plugin_id}/kv": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "List Kv",
         "operationId": "list_kv_api_v1_plugins__plugin_id__kv_get",
@@ -605,7 +667,7 @@
     "/api/v1/plugins/{plugin_id}/kv/{key}": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Get Kv",
         "operationId": "get_kv_api_v1_plugins__plugin_id__kv__key__get",
@@ -682,7 +744,7 @@
       },
       "put": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Put Kv",
         "operationId": "put_kv_api_v1_plugins__plugin_id__kv__key__put",
@@ -759,7 +821,7 @@
       },
       "delete": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Delete Kv",
         "operationId": "delete_kv_api_v1_plugins__plugin_id__kv__key__delete",
@@ -838,7 +900,7 @@
     "/api/v1/messages/send": {
       "post": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Send Message",
         "operationId": "send_message_api_v1_messages_send_post",
@@ -889,7 +951,7 @@
     "/api/v1/chats/{chat_id}": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Chat Info",
         "operationId": "chat_info_api_v1_chats__chat_id__get",
@@ -959,7 +1021,7 @@
     "/api/v1/accounts": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Account List",
         "operationId": "account_list_api_v1_accounts_get",
@@ -1010,7 +1072,7 @@
     "/api/v1/logs": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Logs",
         "operationId": "logs_api_v1_logs_get",
@@ -1071,7 +1133,7 @@
     "/api/v1/logs/plugins/{plugin_id}": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Plugin Logs",
         "operationId": "plugin_logs_api_v1_logs_plugins__plugin_id__get",
@@ -1141,7 +1203,7 @@
     "/api/v1/status": {
       "get": {
         "tags": [
-          "开放平台 API"
+          "系统开放 API"
         ],
         "summary": "Open Status",
         "operationId": "open_status_api_v1_status_get",
@@ -4865,6 +4927,20 @@
           "file"
         ],
         "title": "Body_upload_plugin_api_plugins_upload_post"
+      },
+      "Body_upload_plugin_api_v1_plugins_upload_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_upload_plugin_api_v1_plugins_upload_post"
       },
       "Body_upload_ui_avatar_api_ui_avatar_post": {
         "properties": {
