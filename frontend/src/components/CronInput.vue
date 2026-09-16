@@ -266,7 +266,8 @@ const advancedText = computed(() => draft.value && isValidCron(draft.value) && !
   border: 0; outline: 0; color: inherit; background: transparent; cursor: pointer;
   font: inherit; line-height: 1.2; text-align: center;
 }
-.cron-pill select option { color: var(--text-primary); background: var(--bg-elevated); }
+.cron-pill select option { color: var(--text-primary); background: var(--select-option-bg); }
+.cron-pill select option:checked { color: var(--select-option-selected-text); background: var(--select-option-selected-bg); }
 .cron-pill button {
   width: 26px; min-height: 38px; margin-left: -8px; padding: 0 8px 1px 0;
   border: 0; color: color-mix(in srgb, var(--cron-green) 65%, var(--text-muted));

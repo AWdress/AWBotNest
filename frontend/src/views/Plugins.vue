@@ -1355,7 +1355,7 @@ onUnmounted(() => {
       <div v-else class="control-caption">浏览并安装公开仓库中的插件</div>
     </div>
 
-    <div v-if="error" class="alert">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+    <div v-if="error" class="alert error-dialog" role="alert" aria-live="assertive">{{ error }} <button type="button" aria-label="关闭提示" @click="error=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
     <!-- ════ 我的插件 ════ -->
     <template v-if="tab === 'mine'">
@@ -1457,7 +1457,7 @@ onUnmounted(() => {
     <!-- ════ 插件市场 ════ -->
     <template v-else>
       <div class="hint muted store-hint">插件来自官方仓库和你添加的 GitHub 仓库。安装后不会自动启用，请到「我的插件」手动开启。</div>
-      <div v-if="storeErr" class="alert">{{ storeErr }} <button type="button" aria-label="关闭提示" @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
+      <div v-if="storeErr" class="alert error-dialog" role="alert" aria-live="assertive">{{ storeErr }} <button type="button" aria-label="关闭提示" @click="storeErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
 
       <div v-if="storeBusy && store.length === 0" class="muted center">加载市场…</div>
       <template v-else>
@@ -1941,7 +1941,7 @@ onUnmounted(() => {
           <h2>设置 GitHub 仓库地址</h2>
           <button type="button" class="close" aria-label="关闭" @click="repoOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
-        <div v-if="repoErr" class="alert">{{ repoErr }}</div>
+        <div v-if="repoErr" class="alert error-dialog" role="alert" aria-live="assertive">{{ repoErr }} <button type="button" aria-label="关闭提示" @click="repoErr=''" class="close"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>
         <div class="form">
           <div class="muted small">官方仓库已内置。需要使用其他仓库时，可在此处添加。</div>
           <div class="field">
@@ -2060,6 +2060,26 @@ onUnmounted(() => {
   display: flex; flex-direction: column; gap: 14px;
   position: relative;
   transition: border-color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+.error-dialog {
+  position: fixed;
+  top: 50%; left: 50%;
+  z-index: 1600;
+  width: min(620px, calc(100vw - 32px));
+  min-height: 72px;
+  margin: 0;
+  padding: 18px 20px;
+  transform: translate(-50%, -50%);
+  border-color: rgba(224, 72, 79, .72);
+  background: linear-gradient(145deg, rgba(76, 28, 39, .97), rgba(39, 22, 31, .98));
+  box-shadow: 0 0 0 100vmax rgba(3, 8, 15, .62), 0 24px 70px rgba(0, 0, 0, .55);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.error-dialog .close {
+  width: 40px; height: 40px;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .plugin-card::before { content: ''; position: absolute; left: 20px; right: 20px; top: -1px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, rgba(48,128,240,0), rgba(48,128,240,.48), rgba(16,176,128,.34), rgba(16,176,128,0)); opacity: .28; transition: opacity .2s ease; }
 .plugin-card:hover::before { opacity: .95; }

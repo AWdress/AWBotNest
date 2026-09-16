@@ -11,6 +11,12 @@
   --bg-hover: #142238;       /* hover 态 */
   --bg-panel: rgba(12, 21, 34, 0.92);
 
+  /* 原生下拉选项（select/option）颜色。部分浏览器不会继承控件外观，单独定义可保证可读性。 */
+  --select-option-bg: #172131;
+  --select-option-hover-bg: #1e3350;
+  --select-option-selected-bg: #3080f0;
+  --select-option-selected-text: #ffffff;
+
   /* 强调色 */
   --accent: #3080f0;         /* 主强调（蓝） */
   --accent-hover: #4a90ff;
@@ -251,6 +257,29 @@ a { color: inherit; text-decoration: none; }
   color: var(--text-primary);
   font-size: 13px;
   font-family: inherit;
+}
+
+/*
+ * 原生下拉菜单由浏览器绘制，不能依赖 select 的继承色。
+ * 明确指定普通、悬停和选中状态，避免深色主题下 option 与背景融在一起。
+ */
+select {
+  color: var(--text-primary);
+  background-color: var(--bg-elevated);
+  color-scheme: dark;
+}
+select option {
+  color: var(--text-primary) !important;
+  background-color: var(--select-option-bg) !important;
+}
+select option:hover,
+select option:focus {
+  color: var(--select-option-selected-text) !important;
+  background-color: var(--select-option-hover-bg) !important;
+}
+select option:checked {
+  color: var(--select-option-selected-text) !important;
+  background-color: var(--select-option-selected-bg) !important;
 }
 .input:focus, .select:focus, .textarea:focus {
   outline: none;
