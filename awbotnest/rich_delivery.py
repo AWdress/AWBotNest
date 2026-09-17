@@ -11,27 +11,44 @@ class DeliveryUncertain(RuntimeError):
     """The request may have been delivered; automatic fallback could duplicate it."""
 
 
+async def _bot_api_request(token, method, payload, proxy):
+    # 直接使用 transport，避免 HTTP 客户端日志记录 URL 中的 Bot Token。
+    try:
+        async with httpx.AsyncHTTPTransport(proxy=proxy or None) as transport:
+            request = httpx.Request(
+                'POST', f'https://api.telegram.org/bot{token}/{method}', json=payload,
+                extensions={'timeout': dict(connect=15, read=30, write=30, pool=15)},
+            )
+            response = await transport.handle_async_request(request)
+            try:
+                return json.loads(await response.aread())
+            finally:
+                await response.aclose()
+    except Exception:
+        raise DeliveryUncertain('Bot 通知结果未确认，请检查网络；未重复发送') from None
+
+
 async def send_rich(client, target, rich, plain, *, token='', proxy='', rich_format='html',
                     is_rtl=None, skip_entity_detection=None, **kwargs):
     if token:
-        # 直接使用 transport，避免 HTTP 客户端日志记录 URL 中的 Bot Token。
-        try:
-            async with httpx.AsyncHTTPTransport(proxy=proxy or None) as transport:
-                request = httpx.Request('POST', f'https://api.telegram.org/bot{token}/sendRichMessage',
-                                        json={'chat_id': target, 'rich_message': {'html': rich}},
-                                        extensions={'timeout': dict(connect=15, read=30, write=30, pool=15)})
-                response = await transport.handle_async_request(request)
-                try:
-                    data = json.loads(await response.aread())
-                finally:
-                    await response.aclose()
-        except Exception:
-            raise DeliveryUncertain('原生富文本投递结果未确认，请检查网络；未重复发送') from None
+        data = await _bot_api_request(
+            token, 'sendRichMessage',
+            {'chat_id': target, 'rich_message': {'html': rich}}, proxy,
+        )
         if data.get('ok'):
             return data.get('result')
         if data.get('error_code') not in {400, 404}:
             raise RuntimeError(f'原生富文本投递失败（状态码 {data.get("error_code", "未知")}）')
-        logger.debug('Bot 原生富文本不可用，改用兼容文本')
+        logger.debug('Bot 原生富文本不可用，改用 Telegram 标准 Bot API')
+        data = await _bot_api_request(token, 'sendMessage', {'chat_id': target, 'text': plain}, proxy)
+        if data.get('ok'):
+            return data.get('result')
+        raise RuntimeError(
+            f'Bot 通知发送失败（状态码 {data.get("error_code", "未知")}）：'
+            f'{data.get("description") or "未知错误"}'
+        )
+    if client is None:
+        raise RuntimeError('Telegram 通知 Bot 不可用')
     else:
         me = await client.get_me()
         if getattr(me, 'bot', False) or getattr(me, 'premium', False):

@@ -79,12 +79,36 @@ class TelegramAccounts:
         temporary.replace(self._profiles_path)
         return profile
 
+    def _remember_notification_target(self, session_name: str, profile: dict[str, object]) -> None:
+        """首次登录时固化 Bot 接收人，使通知不依赖用户账号保持在线。"""
+        if not isinstance(profile, dict):
+            return
+        if self.settings.default_bot_chat_id.strip():
+            return
+        if self.settings.user_sessions and self.settings.user_sessions[0] != session_name:
+            return
+        try:
+            user_id = int(profile.get("user_id") or 0)
+        except (TypeError, ValueError):
+            return
+        if user_id <= 0:
+            return
+        self.settings.default_bot_chat_id = str(user_id)
+        from .config import save_settings
+        save_settings(self.settings)
+
     @property
     def telegram_available(self) -> bool:
         return self.settings.telegram_configured
 
     def _client(self, session: str) -> TelegramClient:
-        kwargs = {}
+        # Telethon 默认只重试 5 次，网络中断稍久后客户端会永久离线。
+        # 连接层持续重试即可在网络恢复后复用已有会话，不需要重新验证账号。
+        kwargs = {
+            "auto_reconnect": True,
+            "connection_retries": None,
+            "retry_delay": 5,
+        }
         if self.settings.proxy_url:
             value = urlparse(self.settings.proxy_url)
             if value.scheme not in {"http", "socks4", "socks5"} or not value.hostname or not value.port:
@@ -161,7 +185,8 @@ class TelegramAccounts:
                 return
             self.users[session_name] = client
             try:
-                await asyncio.wait_for(self._cache_profile(session_name, client), timeout=15)
+                profile = await asyncio.wait_for(self._cache_profile(session_name, client), timeout=15)
+                self._remember_notification_target(session_name, profile)
             except Exception:
                 logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
             logger.info("用户账号 [%s] 启动成功", session_name)
@@ -233,7 +258,8 @@ class TelegramAccounts:
         self.users[session_name] = client
         me = await client.get_me()
         try:
-            await self._cache_profile(session_name, client)
+            profile = await self._cache_profile(session_name, client)
+            self._remember_notification_target(session_name, profile)
         except Exception:
             logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
         return {

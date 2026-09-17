@@ -131,9 +131,25 @@ class NotificationService:
         kind = str(config.get("type") or "telegram")
         if kind == "telegram":
             target = entity if entity is not None else (config.get("chat_id") or self.settings.default_bot_chat_id)
-            selected_id = str(config.get("bot_id") or config.get("id") or channel or bot_id or "")
-            bot = self.accounts.choose_bot(selected_id)
-            if bot is None or not bot.is_connected():
+            selected_id = str(
+                config.get("bot_id") or config.get("id") or channel or bot_id
+                or self.settings.default_bot_id or "default"
+            )
+            bot = self.accounts.bots.get(selected_id)
+            resolved_id = selected_id
+            configured = next((item for item in self.settings.bot_specs() if item.id == resolved_id), None)
+            token = configured.token if configured else ""
+            if not token and (bot is None or not bot.is_connected()):
+                bot = self.accounts.choose_bot(selected_id)
+                if bot is not None:
+                    resolved_id = next(
+                        (key for key, value in self.accounts.bots.items() if value is bot), selected_id,
+                    )
+                    configured = next(
+                        (item for item in self.settings.bot_specs() if item.id == resolved_id), None,
+                    )
+                    token = configured.token if configured else ""
+            if not token and (bot is None or not bot.is_connected()):
                 raise RuntimeError("Telegram 通知 Bot 不可用")
             if isinstance(target, str):
                 target = target.strip()
@@ -143,8 +159,6 @@ class NotificationService:
                 raise RuntimeError("Telegram 通知未找到接收人：请登录首个用户账号或填写 Chat ID")
             if isinstance(target, str) and target.lstrip("-").isdigit():
                 target = int(target)
-            resolved_id = next((key for key, value in self.accounts.bots.items() if value is bot), selected_id)
-            token = next((spec.token for spec in self.settings.bot_specs() if spec.id == resolved_id), '')
             return await send_rich(bot, target, rich_text, plain_text, token=token, proxy=self.settings.proxy_url)
         if kind == "bark":
             url = str(config.get("url") or config.get("server") or "").rstrip("/")
