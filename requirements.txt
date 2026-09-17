@@ -1,5 +1,6 @@
 # AWBotNest V2 锁定依赖，用于 Docker/GitHub Actions 可复现构建。
 telethon==1.44.0
+beautifulsoup4==4.15.0
 cryptg==0.6.0
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
