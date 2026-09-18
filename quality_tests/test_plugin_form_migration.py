@@ -25,6 +25,19 @@ class FakeTreeResponse:
         return None
 
 
+class OfflineHTTPClient:
+    """热度中心不可达：安装热度是增强信息，离线时也必须给出本地统计。"""
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    async def __aenter__(self):
+        raise RuntimeError("离线")
+
+    async def __aexit__(self, *exc_info) -> bool:
+        return False
+
+
 class PluginFormMigrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -130,10 +143,11 @@ class PluginFormMigrationTests(unittest.IsolatedAsyncioTestCase):
         (self.plugins / f"_{PLUGIN_ID}.py.backup").write_text(SINGLE_SOURCE, encoding="utf-8")
         (self.plugins / "_TEMPLATE.py").write_text("__plugin__ = {}\n", encoding="utf-8")
         with patch("awbotnest.market.PLUGINS_DIR", self.plugins), \
-             patch.object(PluginMarket, "_save_heat_state"):
+             patch("awbotnest.market.httpx.AsyncClient", OfflineHTTPClient):
             counts = await self.market()._install_counts()
         self.assertIn(PLUGIN_ID, counts)
         self.assertNotIn("_TEMPLATE", counts)
+        self.assertNotIn(f"_{PLUGIN_ID}", counts)
 
 
 if __name__ == "__main__":
