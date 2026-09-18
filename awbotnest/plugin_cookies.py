@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from urllib.parse import urlsplit
 
+from .cookiecloud import service_configured
+
 
 class PluginCookies:
     def __init__(self, service, settings, domains, notifier):
@@ -19,7 +21,7 @@ class PluginCookies:
 
     @property
     def available(self):
-        return bool(self._settings.cookie_settings.get("enabled") and
+        return bool(service_configured(self._settings.cookie_settings) and
                     self._domains and self._service.path.exists())
 
     def _authorize(self, domain, *, require_enabled=True):
@@ -32,8 +34,8 @@ class PluginCookies:
                     (requested == pattern[2:] or requested.endswith("." + pattern[2:])))
                    for pattern in self._domains):
             raise PermissionError(f"插件未声明 Cookie 域名权限: {requested}")
-        if require_enabled and not self._settings.cookie_settings.get("enabled"):
-            raise RuntimeError("系统 Cookie 同步尚未启用")
+        if require_enabled and not service_configured(self._settings.cookie_settings):
+            raise RuntimeError("系统 Cookie 服务尚未配置凭据")
         return requested
 
     async def get(self, domain, *, path="/", names=None):

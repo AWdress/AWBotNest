@@ -16,6 +16,21 @@ from .config import DATA_DIR
 HISTORY_PATH = DATA_DIR / "cookie_sync_history.json"
 
 
+def service_configured(value: dict[str, object] | None) -> bool:
+    """A browser CookieCloud endpoint is usable once its credentials exist."""
+    value = value or {}
+    return bool(str(value.get("uuid") or "").strip() and
+                str(value.get("password") or "").strip())
+
+
+def remote_configured(value: dict[str, object] | None) -> bool:
+    """Remote synchronization needs all three values used to fetch and decrypt data."""
+    value = value or {}
+    return bool(str(value.get("remote_url") or "").strip() and
+                str(value.get("remote_uuid") or "").strip() and
+                str(value.get("remote_password") or "").strip())
+
+
 def sync_history() -> list[dict[str, Any]]:
     try:
         values = json.loads(HISTORY_PATH.read_text(encoding="utf-8"))

@@ -278,7 +278,7 @@ def create_router(deps) -> APIRouter:
             raise HTTPException(status_code=502, detail=f"读取模型失败：{exc}") from exc
 
     async def cookie_sync_state() -> dict[str, object]:
-        from ..cookiecloud import sync_history
+        from ..cookiecloud import service_configured, sync_history
         domains = await runtime.services.cookies.domains()
         history = sync_history()
         latest_success = next((item for item in history if item.get("status") == "success"), None)
@@ -292,12 +292,21 @@ def create_router(deps) -> APIRouter:
             error_message = str(latest_error.get("message") or "")
         return {"has_data": cookie_count > 0, "domain_count": len(domains),
                 "cookie_count": cookie_count, "last_sync": last_sync,
-                "last_error": error_message}
+                "last_error": error_message,
+                "configured": service_configured(settings.cookie_settings)}
 
     @router.get("/api/cookies/settings", dependencies=[Depends(require_admin)])
     async def get_cookie_settings():
         from ..cookiecloud import sync_history
         value = dict(settings.cookie_settings)
+        # V2.0.0.5 no longer needs separate enable switches. Do not expose
+        # legacy fields again after an administrator has removed them.
+        value.pop("enabled", None)
+        value.pop("remote_enabled", None)
+        value.setdefault("crypto_type", "aes-128-cbc-fixed")
+        value.setdefault("remote_crypto_type", "auto")
+        value.setdefault("remote_interval_minutes", 360)
+        value.setdefault("remote_domains", [])
         for key in ("uuid", "password", "token", "remote_password"):
             if value.get(key):
                 value[key] = "********"
@@ -306,6 +315,7 @@ def create_router(deps) -> APIRouter:
 
     @router.put("/api/cookies/settings", dependencies=[Depends(require_admin)])
     async def save_cookie_settings(request: Request):
+        from ..cookiecloud import remote_configured
         raw = await request.json()
         value = raw.get("settings")
         if not isinstance(value, dict):
@@ -318,10 +328,12 @@ def create_router(deps) -> APIRouter:
         for key in ("uuid", "password", "token", "remote_password"):
             if value.get(key) == "********":
                 value[key] = settings.cookie_settings.get(key, "")
+        value.pop("enabled", None)
+        value.pop("remote_enabled", None)
         settings.cookie_settings = value
         save_settings(settings)
         job_id = "__platform__::远程 CookieCloud 同步"
-        if value.get("remote_enabled"):
+        if remote_configured(value):
             scheduler.add_interval("__platform__", "远程 CookieCloud 同步", sync_remote_cookies,
                                    seconds=interval * 60)
         elif scheduler.scheduler.get_job(job_id):
@@ -347,10 +359,10 @@ def create_router(deps) -> APIRouter:
 
     @router.post("/api/cookies/remote-sync", dependencies=[Depends(require_admin)])
     async def sync_remote_cookies():
-        from ..cookiecloud import CookieCloudError, pull, record_sync, sync_history, filter_domains
+        from ..cookiecloud import CookieCloudError, filter_domains, pull, record_sync, remote_configured, sync_history
         value = settings.cookie_settings
-        if not value.get("remote_enabled"):
-            raise HTTPException(status_code=409, detail="远程 CookieCloud 同步尚未启用")
+        if not remote_configured(value):
+            raise HTTPException(status_code=409, detail="请先填写远程地址、UUID 和端到端加密密码并保存")
         url = str(value.get("remote_url") or "").strip()
         uuid_value = str(value.get("remote_uuid") or "").strip()
         password = str(value.get("remote_password") or "")
@@ -414,17 +426,18 @@ def create_router(deps) -> APIRouter:
 
     @router.get("/cookiecloud/health")
     async def cookiecloud_health(request: Request):
+        from ..cookiecloud import service_configured
         check_cookiecloud_rate(request)
-        enabled = bool(settings.cookie_settings.get("enabled"))
-        return JSONResponse({"status": "OK" if enabled else "DISABLED"},
-                            status_code=200 if enabled else 503,
+        configured = service_configured(settings.cookie_settings)
+        return JSONResponse({"status": "OK" if configured else "UNCONFIGURED"},
+                            status_code=200 if configured else 503,
                             headers=cookiecloud_headers())
 
     @router.post("/cookiecloud/update")
     async def cookiecloud_update(request: Request):
-        from ..cookiecloud import CookieCloudError, decrypt_payload, normalize_cookie_data, record_sync
-        if not settings.cookie_settings.get("enabled"):
-            raise HTTPException(status_code=404, detail="Cookie 服务未启用")
+        from ..cookiecloud import CookieCloudError, decrypt_payload, normalize_cookie_data, record_sync, service_configured
+        if not service_configured(settings.cookie_settings):
+            raise HTTPException(status_code=404, detail="Cookie 服务尚未配置凭据")
         check_cookiecloud_rate(request)
         try:
             payload = await request.json()

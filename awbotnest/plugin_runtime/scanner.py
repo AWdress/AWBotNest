@@ -29,11 +29,18 @@ class PluginScanner:
 
     def entries(self) -> list[Path]:
         self.plugins_dir.mkdir(parents=True, exist_ok=True)
-        files = [path for path in self.plugins_dir.glob("*.py") if not path.name.startswith("_")]
-        files.extend(path / "__init__.py" for path in self.plugins_dir.iterdir()
-                     if path.is_dir() and not path.name.startswith("_")
-                     and (path / "__init__.py").exists())
-        return sorted(files)
+        packages: dict[str, Path] = {}
+        singles: dict[str, Path] = {}
+        for path in self.plugins_dir.iterdir():
+            if path.name.startswith(("_", ".")):
+                continue
+            if path.is_dir() and (path / "__init__.py").exists():
+                packages[path.name] = path / "__init__.py"
+            elif path.suffix == ".py":
+                singles[path.stem] = path
+        # 目录形态优先：一个插件同时残留旧单文件与新目录时，运行时加载的是目录，
+        # 列表也必须只出现一条并以同一入口读版本，否则版本会永远停在旧值。
+        return sorted({**singles, **packages}.values())
 
     def _entry_signature(self) -> tuple[tuple[str, int, int], ...]:
         signature: list[tuple[str, int, int]] = []

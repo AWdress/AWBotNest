@@ -580,40 +580,6 @@ async function revealChannelSecret(field) {
   }
 }
 
-async function ensureCookieCredentials() {
-  if (cookieSettings.value.uuid && cookieSettings.value.password) return true
-  try {
-    const credentials = await api.generateCookieCredentials()
-    cookieSettings.value.uuid = credentials.uuid
-    cookieSettings.value.password = credentials.password
-    toast.success('已自动生成系统 Cookie 凭据')
-    return true
-  } catch (e) {
-    toast.error('生成同步凭据失败：' + e.message)
-    return false
-  }
-}
-
-async function toggleCookieService() {
-  if (cookieSettings.value.enabled) {
-    cookieSettings.value.enabled = false
-    cookieSettings.value.remote_enabled = false
-    return
-  }
-  if (!await ensureCookieCredentials()) return
-  cookieSettings.value.enabled = true
-}
-
-async function toggleRemoteCookieService() {
-  if (cookieSettings.value.remote_enabled) {
-    cookieSettings.value.remote_enabled = false
-    return
-  }
-  if (!await ensureCookieCredentials()) return
-  cookieSettings.value.enabled = true
-  cookieSettings.value.remote_enabled = true
-}
-
 async function copyCookieValue(value, label) {
   if (await copyText(value)) toast.success(`已复制${label}`)
   else toast.error('复制失败，请手动选择复制')
@@ -636,7 +602,7 @@ async function checkCookieSync() {
 }
 
 async function syncRemoteCookies() {
-  if (!cookieSettings.value?.remote_enabled || cookieRemoteSyncing.value) return
+  if (!cookieSettings.value || cookieRemoteSyncing.value) return
   if (cookieDirty.value) {
     const saved = await saveCookieSettings()
     if (!saved) return
@@ -2526,12 +2492,9 @@ onBeforeRouteLeave(async () => {
               </div>
               <div>
                 <div class="card-title">系统 Cookie 服务</div>
-              <div class="hint muted">支持从浏览器直接上传。插件只能读取已允许的域名。</div>
+              <div class="hint muted">生成凭据后即可从浏览器直接上传，插件只能读取已允许的域名。</div>
               </div>
             </div>
-            <button type="button" class="toggle" :class="{ on: cookieSettings.enabled }"
-                    :aria-pressed="cookieSettings.enabled" aria-label="启用系统 Cookie 服务"
-                    @click="toggleCookieService"></button>
           </div>
 
           <div class="card cookie-setup" style="margin-top:16px">
@@ -2593,15 +2556,9 @@ onBeforeRouteLeave(async () => {
                 <div class="hint muted">从已有 CookieCloud 服务器拉取数据，解密后由系统加密保存。</div>
                 <div class="hint muted small">系统会优先在本地解密。若本地解密失败，再通过安全连接请求兼容服务完成解密。</div>
               </div>
-              <div class="row gap cookie-remote-actions">
-                <button class="btn sm" :disabled="!cookieSettings.remote_enabled || cookieRemoteSyncing"
-                        @click="syncRemoteCookies">
-                  {{ cookieRemoteSyncing ? '同步中…' : '立即同步' }}
-                </button>
-                <button type="button" class="toggle" :class="{ on: cookieSettings.remote_enabled }"
-                        :aria-pressed="cookieSettings.remote_enabled" aria-label="启用远程 CookieCloud"
-                        @click="toggleRemoteCookieService"></button>
-              </div>
+              <button class="btn sm" :disabled="cookieRemoteSyncing" @click="syncRemoteCookies">
+                {{ cookieRemoteSyncing ? '同步中…' : '立即同步' }}
+              </button>
             </div>
 
             <div class="cookie-connect-fields">
@@ -2653,7 +2610,7 @@ onBeforeRouteLeave(async () => {
               </div>
             </div>
             <div class="cookie-security-note">
-              远程地址、UUID 和密码只保存在系统加密配置中，不会提供给插件。每次同步都会记录日志和结果；同时使用两种来源时，以最后完成的同步为准。
+              远程地址、UUID 和密码只保存在系统加密配置中，不会提供给插件。填写完整并保存后会自动同步；每次同步都会记录结果，同时使用两种来源时以最后完成的同步为准。
             </div>
           </div>
 
@@ -2676,8 +2633,8 @@ onBeforeRouteLeave(async () => {
             <div class="cookie-status-grid">
               <div>
                 <span class="muted small">服务状态</span>
-                <strong :class="cookieSettings.enabled ? 'status-ok' : 'muted'">
-                  {{ cookieSettings.enabled ? (cookieStatus.has_data ? '同步正常' : '等待浏览器同步') : '已停用' }}
+                <strong :class="cookieStatus.configured ? 'status-ok' : 'muted'">
+                  {{ cookieStatus.configured ? (cookieStatus.has_data ? '同步正常' : '等待浏览器同步') : '等待生成凭据' }}
                 </strong>
               </div>
               <div>

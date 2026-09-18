@@ -41,12 +41,22 @@ def _safe_path(value: str) -> PurePosixPath:
     return path
 
 
+def _plugin_forms(plugin_id: str) -> tuple[Path, ...]:
+    """插件目录形态在前、单文件形态在后：与运行时实际加载的入口保持一致。"""
+    return PLUGINS_DIR / plugin_id, PLUGINS_DIR / f"{plugin_id}.py"
+
+
+def _is_hidden_plugin_name(name: str) -> bool:
+    """模板、备份与临时文件不是插件，不能计入本地安装热度。"""
+    return name.startswith(("_", "."))
+
+
 class PluginMarket:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.install_lock = asyncio.Lock()
         self._refresh_lock = asyncio.Lock()
-        self._pending_installs: dict[str, tuple[Path, Path]] = {}
+        self._pending_installs: dict[str, list[tuple[Path, Path]]] = {}
         self._cache: dict[str, Any] | None = None
         self._cache_until = 0.0
         self._state_path = PLUGINS_DIR.parent / "data" / "repo_sync.json"
@@ -304,6 +314,8 @@ class PluginMarket:
         state = self._heat_state()
         local = state.get("installs") or {}
         for entry in PLUGINS_DIR.iterdir() if PLUGINS_DIR.exists() else ():
+            if _is_hidden_plugin_name(entry.name):
+                continue
             plugin_id = entry.stem if entry.is_file() and entry.suffix == ".py" else (entry.name if entry.is_dir() and (entry / "__init__.py").exists() else "")
             if plugin_id and plugin_id not in local:
                 local[plugin_id] = 1
@@ -329,6 +341,8 @@ class PluginMarket:
             }
             # 把当前已安装插件纳入本地热度缓存。
             for entry in PLUGINS_DIR.iterdir() if PLUGINS_DIR.exists() else ():
+                if _is_hidden_plugin_name(entry.name):
+                    continue
                 plugin_id = entry.stem if entry.is_file() and entry.suffix == ".py" else (entry.name if entry.is_dir() and (entry / "__init__.py").exists() else "")
                 if plugin_id and plugin_id not in local:
                     local[plugin_id] = 1
@@ -340,9 +354,11 @@ class PluginMarket:
 
     @staticmethod
     def _installed_version(plugin_id: str) -> str | None:
-        entry = PLUGINS_DIR / f"{plugin_id}.py"
+        # 单文件与目录两种形态并存时，运行时实际加载的是目录形态，
+        # 读取版本必须用同一个入口；否则会读到旧的单文件而永远判定「有新版本」。
+        entry = PLUGINS_DIR / plugin_id / "__init__.py"
         if not entry.exists():
-            entry = PLUGINS_DIR / plugin_id / "__init__.py"
+            entry = PLUGINS_DIR / f"{plugin_id}.py"
         if not entry.exists():
             return None
         try:
@@ -477,18 +493,22 @@ class PluginMarket:
             content = await self._download_file(repo, branch, source_path)
             self._validate_entry(content, plugin_id)
             destination = PLUGINS_DIR / f"{plugin_id}.py"
-            backup = PLUGINS_DIR / f".{plugin_id}.backup.py"
+            backup = PLUGINS_DIR / f".{plugin_id}.py.backup"
             if plugin_id in self._pending_installs:
                 raise RuntimeError("该插件已有安装任务")
+            # 保留单文件的原子替换：新内容写临时文件后一步换入，过程中不出现「插件不存在」。
             backup.unlink(missing_ok=True)
             if destination.exists():
                 shutil.copy2(destination, backup)
-            temp = destination.with_suffix(".py.tmp")
+            temp = PLUGINS_DIR / f".{plugin_id}.py.tmp"
             temp.write_bytes(content)
-            self._pending_installs[plugin_id] = (destination, backup)
             try:
+                # 先登记事务，再移走另一种形态：中途失败也能由 finish() 完整回滚。
+                self._pending_installs[plugin_id] = [(destination, backup)]
+                self._detach_other_form(plugin_id, destination)
                 temp.replace(destination)
             except Exception:
+                temp.unlink(missing_ok=True)
                 self.finish(plugin_id, False)
                 raise
             return destination
@@ -528,8 +548,10 @@ class PluginMarket:
                 shutil.rmtree(backup)
             if destination.exists():
                 destination.replace(backup)
-            self._pending_installs[plugin_id] = (destination, backup)
             try:
+                # 先登记事务，再移走另一种形态：中途失败也能由 finish() 完整回滚。
+                self._pending_installs[plugin_id] = [(destination, backup)]
+                self._detach_other_form(plugin_id, destination)
                 shutil.copytree(staged, destination)
             except Exception:
                 self.finish(plugin_id, False)
@@ -540,16 +562,34 @@ class PluginMarket:
         transaction = self._pending_installs.get(plugin_id)
         if transaction is None:
             return  # 下载/校验失败尚未修改插件，不能删除原安装。
-        destination, backup = transaction
-        if not success:
-            if destination.is_dir():
-                shutil.rmtree(destination)
+        for original, backup in transaction:
+            if not success:
+                if original.is_dir():
+                    shutil.rmtree(original)
+                else:
+                    original.unlink(missing_ok=True)
+                if backup.exists():
+                    backup.replace(original)
+            elif backup.is_dir():
+                shutil.rmtree(backup)
             else:
-                destination.unlink(missing_ok=True)
-            if backup.exists():
-                backup.replace(destination)
-        elif backup.is_dir():
-            shutil.rmtree(backup)
-        else:
-            backup.unlink(missing_ok=True)
+                backup.unlink(missing_ok=True)
         self._pending_installs.pop(plugin_id, None)
+
+    def _detach_other_form(self, plugin_id: str, keep: Path) -> None:
+        """移走同名插件的另外一种形态，并把每一步追加进事务供成功时清理、失败时回滚。
+
+        只替换目标形态会留下另一种形态，两种入口并存时运行时会加载目录形态、
+        而旧单文件继续提供旧版本号，导致插件被反复判定「有新版本」并上报热度。
+        """
+        transaction = self._pending_installs[plugin_id]
+        for form in _plugin_forms(plugin_id):
+            if form == keep or not form.exists():
+                continue
+            backup = PLUGINS_DIR / f"_{form.name}.backup"
+            if backup.is_dir():
+                shutil.rmtree(backup)
+            else:
+                backup.unlink(missing_ok=True)
+            form.replace(backup)
+            transaction.append((form, backup))

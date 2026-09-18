@@ -150,12 +150,13 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     runtime.cloak_update_task = asyncio.create_task(
         check_cloakbrowser_updates_job(), name="cloakbrowser-update-check",
     )
+    from .cookiecloud import remote_configured
     cookie_settings = settings.cookie_settings
-    if cookie_settings.get("remote_enabled"):
+    if remote_configured(cookie_settings):
         async def sync_remote_cookiecloud() -> None:
             from .cookiecloud import pull, record_sync, filter_domains
             cookie_settings = settings.cookie_settings
-            if not cookie_settings.get("remote_enabled"):
+            if not remote_configured(cookie_settings):
                 return
             logger.debug("远程 CookieCloud 同步开始")
             try:

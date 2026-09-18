@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AWBotNest API",
-    "version": "2.0.0.4"
+    "version": "2.0.0.5"
   },
   "paths": {
     "/api/v1/plugins": {
