@@ -7,6 +7,7 @@ import ast
 import time
 import logging
 import json
+import os
 import uuid
 import asyncio
 from packaging.version import InvalidVersion, Version
@@ -19,6 +20,8 @@ from .config import PLUGINS_DIR, Settings, save_settings
 
 MANIFEST_NAME = "manifest_v2.json"
 PLUGIN_HEAT_SERVER_URL = "http://115.231.35.106:18002"
+# 热度中心可以要求上报凭据；留空表示不发送，兼容未开启鉴权的部署。
+PLUGIN_HEAT_REPORT_TOKEN = os.getenv("AWBOTNEST_PLUGIN_HEAT_TOKEN", "").strip()
 OFFICIAL_REPO = "AWdress/AWBotNest-Plugins"
 logger = logging.getLogger("awbotnest.market")
 REPO_PATTERN = re.compile(r"^(?:https?://github\.com/)?([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
@@ -49,6 +52,35 @@ def _plugin_forms(plugin_id: str) -> tuple[Path, ...]:
 def _is_hidden_plugin_name(name: str) -> bool:
     """模板、备份与临时文件不是插件，不能计入本地安装热度。"""
     return name.startswith(("_", "."))
+
+
+def _heat_headers() -> dict[str, str]:
+    return {"x-plugin-auth": PLUGIN_HEAT_REPORT_TOKEN} if PLUGIN_HEAT_REPORT_TOKEN else {}
+
+
+def _prune_shadowed_single_files() -> list[str]:
+    """删除已被目录形态取代的旧单文件。
+
+    运行时只加载目录入口，残留的单文件既不生效，又会让版本比较读到旧值，使每次
+    轮询都判定「有新版本」并多上报一次热度。安装流程已会清理，这里再兜底一次，
+    保证历史遗留的插件也能自愈。
+    """
+    removed: list[str] = []
+    if not PLUGINS_DIR.exists():
+        return removed
+    for entry in PLUGINS_DIR.iterdir():
+        if _is_hidden_plugin_name(entry.name) or not entry.is_file() or entry.suffix != ".py":
+            continue
+        package_entry = PLUGINS_DIR / entry.stem / "__init__.py"
+        # 只清理确实存在可用目录入口的情况，避免误删真正的单文件插件。
+        if not package_entry.exists() or PluginMarket._entry_version(package_entry) is None:
+            continue
+        try:
+            entry.unlink()
+        except OSError:
+            continue
+        removed.append(entry.stem)
+    return removed
 
 
 class PluginMarket:
@@ -147,7 +179,10 @@ class PluginMarket:
         }
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(4, connect=2)) as client:
-                await client.post(f"{PLUGIN_HEAT_SERVER_URL}/api/plugin-heat/events", json={"events": [event]})
+                await client.post(
+                    f"{PLUGIN_HEAT_SERVER_URL}/api/plugin-heat/events",
+                    json={"events": [event]}, headers=_heat_headers(),
+                )
         except Exception:
             logger.debug("插件安装热度上报暂时失败：%s", plugin_id)
 
@@ -353,6 +388,23 @@ class PluginMarket:
             return self.local_install_counts()
 
     @staticmethod
+    def _entry_version(entry: Path) -> str | None:
+        try:
+            tree = ast.parse(entry.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "__plugin__" for target in node.targets
+            ):
+                try:
+                    value = ast.literal_eval(node.value)
+                except (ValueError, TypeError):
+                    return None
+                return str(value.get("version") or "0.0.0") if isinstance(value, dict) else None
+        return None
+
+    @staticmethod
     def _installed_version(plugin_id: str) -> str | None:
         # 单文件与目录两种形态并存时，运行时实际加载的是目录形态，
         # 读取版本必须用同一个入口；否则会读到旧的单文件而永远判定「有新版本」。
@@ -361,17 +413,7 @@ class PluginMarket:
             entry = PLUGINS_DIR / f"{plugin_id}.py"
         if not entry.exists():
             return None
-        try:
-            tree = ast.parse(entry.read_text(encoding="utf-8"))
-            for node in tree.body:
-                if isinstance(node, ast.Assign) and any(
-                    isinstance(target, ast.Name) and target.id == "__plugin__" for target in node.targets
-                ):
-                    value = ast.literal_eval(node.value)
-                    return str(value.get("version") or "0.0.0") if isinstance(value, dict) else None
-        except Exception:
-            return None
-        return None
+        return PluginMarket._entry_version(entry)
 
     @staticmethod
     def _newer(remote: str, installed: str | None) -> bool:
@@ -389,6 +431,9 @@ class PluginMarket:
     async def _list_all(self) -> dict[str, Any]:
         if self._cache is not None and time.monotonic() < self._cache_until:
             return self.cached()
+        pruned = _prune_shadowed_single_files()
+        if pruned:
+            logger.info("已清理被目录形态取代的旧单文件：%s", "、".join(sorted(pruned)))
         stale_cache = self._cache
         plugins: list[dict[str, Any]] = []
         errors: list[str] = []

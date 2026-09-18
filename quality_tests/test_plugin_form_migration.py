@@ -149,6 +149,38 @@ class PluginFormMigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_TEMPLATE", counts)
         self.assertNotIn(f"_{PLUGIN_ID}", counts)
 
+    async def test_refresh_prunes_single_file_shadowed_by_package(self):
+        """历史遗留的旧单文件必须在刷新时自愈，否则版本会永远被判成有新版本。"""
+        self.write_single()
+        self.write_package()
+        with patch("awbotnest.market.PLUGINS_DIR", self.plugins), \
+             patch("awbotnest.market.httpx.AsyncClient", OfflineHTTPClient):
+            market = self.market()
+            market._github = self.github
+            await market._list_all()
+        self.assertFalse((self.plugins / f"{PLUGIN_ID}.py").exists())
+        self.assertTrue((self.plugins / PLUGIN_ID / "__init__.py").exists())
+
+    async def test_refresh_keeps_lone_single_file_plugin(self):
+        """只有单文件形态的插件不是残留，不能被清理。"""
+        self.write_single()
+        with patch("awbotnest.market.PLUGINS_DIR", self.plugins), \
+             patch("awbotnest.market.httpx.AsyncClient", OfflineHTTPClient):
+            market = self.market()
+            await market._list_all()
+        self.assertTrue((self.plugins / f"{PLUGIN_ID}.py").exists())
+
+    async def test_refresh_keeps_single_file_when_package_is_unreadable(self):
+        """目录入口读不出元数据时不能删单文件，否则会把可用插件清成空。"""
+        self.write_single()
+        package = self.plugins / PLUGIN_ID
+        package.mkdir(exist_ok=True)
+        (package / "__init__.py").write_text("raise RuntimeError('损坏的插件')\n", encoding="utf-8")
+        with patch("awbotnest.market.PLUGINS_DIR", self.plugins), \
+             patch("awbotnest.market.httpx.AsyncClient", OfflineHTTPClient):
+            market = self.market()
+            await market._list_all()
+        self.assertTrue((self.plugins / f"{PLUGIN_ID}.py").exists())
 
 if __name__ == "__main__":
     unittest.main()
