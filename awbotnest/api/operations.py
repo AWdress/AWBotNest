@@ -265,7 +265,8 @@ def create_router(deps, list_plugins) -> APIRouter:
     async def _install_market_plugin(body: MarketInstallBody):
         plugin_id = str(body.plugin.get("id") or "")
         was_loaded = plugin_id in runtime.loaded
-        action = "更新" if runtime.entry_file(plugin_id) is not None else "安装"
+        installed_before = market.installed_for(body.plugin)
+        action = "更新" if installed_before else "安装"
         plugin_name = str(body.plugin.get("name") or runtime.display_name(plugin_id))
         try:
             if was_loaded:
@@ -300,7 +301,7 @@ def create_router(deps, list_plugins) -> APIRouter:
                 logger.error("%s失败：%s（重新加载失败：%s，已回滚）", action, plugin_name, meta.error)
                 raise HTTPException(status_code=409, detail=f"更新加载失败，已回滚：{meta.error}")
         market.finish(plugin_id, True)
-        await market.record_install(body.plugin, "update" if was_loaded else "install")
+        await market.record_install(body.plugin, "update" if installed_before else "install")
         market.clear_cache()
         logger.info("已%s：%s", action, meta.name)
         return {"ok": True, "path": str(destination), "plugin": meta.to_dict()}

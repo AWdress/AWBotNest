@@ -294,6 +294,9 @@ def create_router(deps) -> APIRouter:
         settings.bot_routing.pop(plugin_id, None)
         settings.plugin_order = [item for item in settings.plugin_order if item != plugin_id]
         save_settings(settings)
+        forget_install = getattr(market, "forget_install", None)
+        if forget_install is not None:
+            forget_install(plugin_id)
         # 删除后立即使市场缓存失效，避免已删除插件仍显示为“已安装”。
         market.clear_cache()
         return {"ok": True}

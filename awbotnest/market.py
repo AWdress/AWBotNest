@@ -44,11 +44,6 @@ def _safe_path(value: str) -> PurePosixPath:
     return path
 
 
-def _plugin_forms(plugin_id: str) -> tuple[Path, ...]:
-    """插件目录形态在前、单文件形态在后：与运行时实际加载的入口保持一致。"""
-    return PLUGINS_DIR / plugin_id, PLUGINS_DIR / f"{plugin_id}.py"
-
-
 def _is_hidden_plugin_name(name: str) -> bool:
     """模板、备份与临时文件不是插件，不能计入本地安装热度。"""
     return name.startswith(("_", "."))
@@ -56,31 +51,6 @@ def _is_hidden_plugin_name(name: str) -> bool:
 
 def _heat_headers() -> dict[str, str]:
     return {"x-plugin-auth": PLUGIN_HEAT_REPORT_TOKEN} if PLUGIN_HEAT_REPORT_TOKEN else {}
-
-
-def _prune_shadowed_single_files() -> list[str]:
-    """删除已被目录形态取代的旧单文件。
-
-    运行时只加载目录入口，残留的单文件既不生效，又会让版本比较读到旧值，使每次
-    轮询都判定「有新版本」并多上报一次热度。安装流程已会清理，这里再兜底一次，
-    保证历史遗留的插件也能自愈。
-    """
-    removed: list[str] = []
-    if not PLUGINS_DIR.exists():
-        return removed
-    for entry in PLUGINS_DIR.iterdir():
-        if _is_hidden_plugin_name(entry.name) or not entry.is_file() or entry.suffix != ".py":
-            continue
-        package_entry = PLUGINS_DIR / entry.stem / "__init__.py"
-        # 只清理确实存在可用目录入口的情况，避免误删真正的单文件插件。
-        if not package_entry.exists() or PluginMarket._entry_version(package_entry) is None:
-            continue
-        try:
-            entry.unlink()
-        except OSError:
-            continue
-        removed.append(entry.stem)
-    return removed
 
 
 class PluginMarket:
@@ -115,7 +85,12 @@ class PluginMarket:
         result = {**snapshot, "plugins": []}
         for source in snapshot.get("plugins", []):
             plugin = dict(source)
-            installed = self._installed_version(str(plugin.get("id") or ""))
+            plugin_id = str(plugin.get("id") or "")
+            source_path = plugin.get("path")
+            installed = (
+                self._installed_version_for_source(plugin_id, str(source_path))
+                if source_path else self._installed_version(plugin_id)
+            )
             plugin.update(installed=installed is not None, installed_version=installed,
                           local_version=installed,
                           update_available=self._newer(str(plugin.get("version") or "0"), installed))
@@ -136,6 +111,10 @@ class PluginMarket:
             value = {}
         value.setdefault("installation_id", str(uuid.uuid4()))
         value.setdefault("installs", {})
+        # 每个插件都有独立的安装周期：更新沿用周期，卸载后重新安装会生成新的
+        # 周期。这样热度中心可以忽略轮询重报，同时仍统计真正的卸载后重装。
+        value.setdefault("plugin_installations", {})
+        value.setdefault("reported", {})
         return value
 
     def local_install_counts(self) -> dict[str, int]:
@@ -167,15 +146,26 @@ class PluginMarket:
         plugin_id = str(plugin.get("id") or "").strip()
         if not plugin_id:
             return
+        event_type = event_type if event_type in {"install", "update"} else "install"
+        cycles = state.setdefault("plugin_installations", {})
+        cycle = str(cycles.get(plugin_id) or "")
+        if event_type == "install" or not cycle:
+            cycle = str(uuid.uuid4())
+            cycles[plugin_id] = cycle
+        version = str(plugin.get("version") or "unknown")[:64]
+        reported = state.setdefault("reported", {})
+        plugin_reports = reported.setdefault(plugin_id, {})
+        report_key = f"{cycle}:{version}"
         installs = state.setdefault("installs", {})
-        installs[plugin_id] = max(0, int(installs.get(plugin_id, 0) or 0)) + 1
+        if report_key not in plugin_reports:
+            installs[plugin_id] = max(0, int(installs.get(plugin_id, 0) or 0)) + 1
+            plugin_reports[report_key] = True
         state_path.parent.mkdir(parents=True, exist_ok=True)
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._save_heat_state(state)
         event = {
-            "event_id": str(uuid.uuid4()), "installation_id": str(state["installation_id"]),
+            "event_id": str(uuid.uuid4()), "installation_id": cycle,
             "plugin_id": plugin_id,
-            "event_type": event_type if event_type in {"install", "update"} else "install",
-            "version": str(plugin.get("version") or "")[:64], "app_version": "2",
+            "event_type": event_type, "version": version, "app_version": "2",
         }
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(4, connect=2)) as client:
@@ -185,6 +175,15 @@ class PluginMarket:
                 )
         except Exception:
             logger.debug("插件安装热度上报暂时失败：%s", plugin_id)
+
+    def forget_install(self, plugin_id: str) -> None:
+        """结束一个插件安装周期；下次安装同一版本也应重新计入热度。"""
+        plugin_id = str(plugin_id or "").strip()
+        if not plugin_id:
+            return
+        state = self._heat_state()
+        state.setdefault("plugin_installations", {}).pop(plugin_id, None)
+        self._save_heat_state(state)
 
     async def poll_updates(self, runtime: Any) -> dict[str, Any]:
         async with self.install_lock:
@@ -317,7 +316,7 @@ class PluginMarket:
             if not self.settings.telegram_configured and scope in {"user", "both"}:
                 continue
             source_path = _safe_path(str(raw.get("path") or f"{plugin_id}.py"))
-            installed_version = self._installed_version(str(plugin_id))
+            installed_version = self._installed_version_for_source(str(plugin_id), source_path)
             remote_version = str(raw.get("version") or "0.0.0")
             is_official = repo.casefold() == OFFICIAL_REPO.casefold()
             plugins.append({
@@ -416,6 +415,24 @@ class PluginMarket:
         return PluginMarket._entry_version(entry)
 
     @staticmethod
+    def _installed_version_for_source(plugin_id: str, source_path: PurePosixPath | str) -> str | None:
+        """按清单形态读取本地版本，避免把 V1 单文件误当成 V2 目录插件。"""
+        source = PurePosixPath(str(source_path))
+        entry = (PLUGINS_DIR / plugin_id / "__init__.py"
+                 if source.suffix != ".py" else PLUGINS_DIR / f"{plugin_id}.py")
+        return PluginMarket._entry_version(entry) if entry.exists() else None
+
+    @staticmethod
+    def installed_for(plugin: dict[str, Any]) -> bool:
+        plugin_id = str(plugin.get("id") or "")
+        source_path = PurePosixPath(str(plugin.get("path") or f"{plugin_id}.py"))
+        if not plugin_id:
+            return False
+        entry = (PLUGINS_DIR / plugin_id / "__init__.py"
+                 if source_path.suffix != ".py" else PLUGINS_DIR / f"{plugin_id}.py")
+        return entry.exists()
+
+    @staticmethod
     def _newer(remote: str, installed: str | None) -> bool:
         if installed is None:
             return False
@@ -431,9 +448,6 @@ class PluginMarket:
     async def _list_all(self) -> dict[str, Any]:
         if self._cache is not None and time.monotonic() < self._cache_until:
             return self.cached()
-        pruned = _prune_shadowed_single_files()
-        if pruned:
-            logger.info("已清理被目录形态取代的旧单文件：%s", "、".join(sorted(pruned)))
         stale_cache = self._cache
         plugins: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -548,9 +562,8 @@ class PluginMarket:
             temp = PLUGINS_DIR / f".{plugin_id}.py.tmp"
             temp.write_bytes(content)
             try:
-                # 先登记事务，再移走另一种形态：中途失败也能由 finish() 完整回滚。
+                # 先登记事务，失败时由 finish() 完整回滚。
                 self._pending_installs[plugin_id] = [(destination, backup)]
-                self._detach_other_form(plugin_id, destination)
                 temp.replace(destination)
             except Exception:
                 temp.unlink(missing_ok=True)
@@ -594,9 +607,8 @@ class PluginMarket:
             if destination.exists():
                 destination.replace(backup)
             try:
-                # 先登记事务，再移走另一种形态：中途失败也能由 finish() 完整回滚。
+                # 先登记事务，失败时由 finish() 完整回滚。
                 self._pending_installs[plugin_id] = [(destination, backup)]
-                self._detach_other_form(plugin_id, destination)
                 shutil.copytree(staged, destination)
             except Exception:
                 self.finish(plugin_id, False)
@@ -620,21 +632,3 @@ class PluginMarket:
             else:
                 backup.unlink(missing_ok=True)
         self._pending_installs.pop(plugin_id, None)
-
-    def _detach_other_form(self, plugin_id: str, keep: Path) -> None:
-        """移走同名插件的另外一种形态，并把每一步追加进事务供成功时清理、失败时回滚。
-
-        只替换目标形态会留下另一种形态，两种入口并存时运行时会加载目录形态、
-        而旧单文件继续提供旧版本号，导致插件被反复判定「有新版本」并上报热度。
-        """
-        transaction = self._pending_installs[plugin_id]
-        for form in _plugin_forms(plugin_id):
-            if form == keep or not form.exists():
-                continue
-            backup = PLUGINS_DIR / f"_{form.name}.backup"
-            if backup.is_dir():
-                shutil.rmtree(backup)
-            else:
-                backup.unlink(missing_ok=True)
-            form.replace(backup)
-            transaction.append((form, backup))

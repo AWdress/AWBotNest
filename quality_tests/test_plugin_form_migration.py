@@ -95,26 +95,29 @@ class PluginFormMigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([meta.id for meta in metas], [PLUGIN_ID])
         self.assertEqual(metas[0].version, "2.0.2")
 
-    async def test_package_install_removes_legacy_single_file(self):
+    async def test_package_install_keeps_v1_single_file(self):
         self.write_single()
         with patch("awbotnest.market.PLUGINS_DIR", self.plugins):
             market = self.market()
             await market.install(self.package_plugin())
             market.finish(PLUGIN_ID, True)
-            self.assertFalse((self.plugins / f"{PLUGIN_ID}.py").exists())
+            self.assertTrue((self.plugins / f"{PLUGIN_ID}.py").exists())
             self.assertEqual(market._installed_version(PLUGIN_ID), "2.0.2")
-        self.assertEqual(sorted(path.name for path in self.plugins.iterdir()), [PLUGIN_ID])
+        self.assertEqual(sorted(path.name for path in self.plugins.iterdir()), [PLUGIN_ID, f"{PLUGIN_ID}.py"])
 
-    async def test_single_file_install_removes_legacy_package(self):
+    async def test_single_file_install_keeps_v2_package(self):
         self.write_package()
         plugin = {**self.package_plugin(), "path": f"{PLUGIN_ID}.py"}
         with patch("awbotnest.market.PLUGINS_DIR", self.plugins):
             market = self.market()
             await market.install(plugin)
             market.finish(PLUGIN_ID, True)
-            self.assertFalse((self.plugins / PLUGIN_ID).exists())
-            self.assertEqual(market._installed_version(PLUGIN_ID), "1.5.0")
-        self.assertEqual(sorted(path.name for path in self.plugins.iterdir()), [f"{PLUGIN_ID}.py"])
+            self.assertTrue((self.plugins / PLUGIN_ID).exists())
+            self.assertEqual(
+                market._installed_version_for_source(PLUGIN_ID, f"{PLUGIN_ID}.py"),
+                "1.5.0",
+            )
+        self.assertEqual(sorted(path.name for path in self.plugins.iterdir()), [PLUGIN_ID, f"{PLUGIN_ID}.py"])
 
     async def test_failed_install_restores_both_forms(self):
         self.write_single()
@@ -149,8 +152,8 @@ class PluginFormMigrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("_TEMPLATE", counts)
         self.assertNotIn(f"_{PLUGIN_ID}", counts)
 
-    async def test_refresh_prunes_single_file_shadowed_by_package(self):
-        """历史遗留的旧单文件必须在刷新时自愈，否则版本会永远被判成有新版本。"""
+    async def test_refresh_keeps_v1_and_v2_forms(self):
+        """V1 单文件与 V2 目录是两个不兼容形态，刷新不能删除任一形态。"""
         self.write_single()
         self.write_package()
         with patch("awbotnest.market.PLUGINS_DIR", self.plugins), \
@@ -158,8 +161,54 @@ class PluginFormMigrationTests(unittest.IsolatedAsyncioTestCase):
             market = self.market()
             market._github = self.github
             await market._list_all()
-        self.assertFalse((self.plugins / f"{PLUGIN_ID}.py").exists())
+        self.assertTrue((self.plugins / f"{PLUGIN_ID}.py").exists())
         self.assertTrue((self.plugins / PLUGIN_ID / "__init__.py").exists())
+
+    async def test_source_shape_does_not_cross_detect_v1_and_v2(self):
+        self.write_single()
+        self.write_package()
+        with patch("awbotnest.market.PLUGINS_DIR", self.plugins):
+            self.assertEqual(
+                PluginMarket._installed_version_for_source(PLUGIN_ID, "plugins_v2/juai_checkin/"),
+                "2.0.2",
+            )
+            self.assertEqual(
+                PluginMarket._installed_version_for_source(PLUGIN_ID, "juai_checkin.py"),
+                "1.5.0",
+            )
+
+    async def test_cached_listing_uses_manifest_source_shape(self):
+        """缓存里的 V1/V2 清单各自读取对应入口，不能被另一种形态覆盖。"""
+        self.write_single()
+        self.write_package()
+        with patch("awbotnest.market.PLUGINS_DIR", self.plugins):
+            market = self.market()
+            market._cache = {
+                "plugins": [
+                    {"id": PLUGIN_ID, "path": f"{PLUGIN_ID}.py", "version": "1.5.0"},
+                    {"id": PLUGIN_ID, "path": f"plugins_v2/{PLUGIN_ID}/", "version": "2.0.2"},
+                ],
+                "install_counts": {},
+            }
+            cached = market.cached()["plugins"]
+        self.assertEqual([item["installed_version"] for item in cached], ["1.5.0", "2.0.2"])
+        self.assertEqual([item["update_available"] for item in cached], [False, False])
+
+    async def test_uninstall_then_install_same_version_starts_new_heat_cycle(self):
+        with patch("awbotnest.market.PLUGINS_DIR", self.plugins), \
+             patch("awbotnest.market.httpx.AsyncClient", OfflineHTTPClient):
+            market = self.market()
+            plugin = {"id": PLUGIN_ID, "version": "2.0.2"}
+            await market.record_install(plugin, "install")
+            first = market._heat_state()
+            first_cycle = first["plugin_installations"][PLUGIN_ID]
+            await market.record_install(plugin, "update")
+            self.assertEqual(market._heat_state()["installs"][PLUGIN_ID], 1)
+            market.forget_install(PLUGIN_ID)
+            await market.record_install(plugin, "install")
+            second = market._heat_state()
+            self.assertNotEqual(first_cycle, second["plugin_installations"][PLUGIN_ID])
+            self.assertEqual(second["installs"][PLUGIN_ID], 2)
 
     async def test_refresh_keeps_lone_single_file_plugin(self):
         """只有单文件形态的插件不是残留，不能被清理。"""
