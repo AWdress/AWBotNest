@@ -19,7 +19,7 @@ import httpx
 from .config import PLUGINS_DIR, Settings, save_settings
 
 MANIFEST_NAME = "manifest_v2.json"
-PLUGIN_HEAT_SERVER_URL = "http://115.231.35.106:18002"
+PLUGIN_HEAT_SERVER_URL = "http://64.83.41.32:18002"
 # 热度中心可以要求上报凭据；留空表示不发送，兼容未开启鉴权的部署。
 PLUGIN_HEAT_REPORT_TOKEN = os.getenv("AWBOTNEST_PLUGIN_HEAT_TOKEN", "").strip()
 OFFICIAL_REPO = "AWdress/AWBotNest-Plugins"
