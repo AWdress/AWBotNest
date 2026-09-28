@@ -6,8 +6,9 @@ from .browser import BrowserService
 from .container import PlatformServices
 from .cookies import CookieService
 from .http import HttpService
+from .ocr import OcrClient, OcrService
 
 __all__ = [
     "AIService", "BrowserService", "CookieService", "HttpService",
-    "PlatformServices", "PluginAI", "DATA_DIR",
+    "OcrClient", "OcrService", "PlatformServices", "PluginAI", "DATA_DIR",
 ]

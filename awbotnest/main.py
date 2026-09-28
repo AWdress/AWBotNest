@@ -265,8 +265,11 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
                 try:
                     await accounts.stop()
                 finally:
-                    scheduler.stop()
-                    activity.flush()
+                    try:
+                        await runtime.services.close()
+                    finally:
+                        scheduler.stop()
+                        activity.flush()
     return restart_event.is_set()
 
 

@@ -37,8 +37,8 @@ Platform Services / Scheduler / Governance
 1. `awbotnest/api/` 按领域维护 FastAPI routers；app composition 只负责创建应用、注册 middleware/router/lifecycle/OpenAPI 及挂载静态资源。
 2. `awbotnest/app.py` 是 `create_app` 的 compatibility shim，不再承载 endpoint 实现。测试 patch 必须指向 symbol 的实际查找位置，不得继续 patch 已移出的 `awbotnest.app.*` 实现。
 3. `awbotnest/plugin_runtime/` 负责扫描、元数据解析、依赖解析、模块加载和卸载；`PluginRuntime` 负责生命周期协调，不得重新聚合所有实现细节。
-4. `awbotnest/services/` 分别实现 HTTP、AI、Browser 和 Cookie；`PlatformServices` 只作为容器，不得成为新的 God Object。
-5. `PluginContext` 是正式 Plugin SDK Facade。插件通过 `ctx.http`、`ctx.ai`、`ctx.browser`、`ctx.cookies`、`ctx.storage`、`ctx.sessions`、`ctx.delivery`、通知、路由和调度接口使用平台能力，不直接依赖平台内部实现。
+4. `awbotnest/services/` 分别实现 HTTP、AI、Browser、OCR 和 Cookie；`PlatformServices` 只作为容器，不得成为新的 God Object。
+5. `PluginContext` 是正式 Plugin SDK Facade。插件通过 `ctx.http`、`ctx.ai`、`ctx.browser`、`ctx.ocr`、`ctx.cookies`、`ctx.storage`、`ctx.sessions`、`ctx.delivery`、通知、路由和调度接口使用系统能力，不直接依赖内部实现。
 6. 内部拆分不得无意改变现有 REST URL、HTTP method、参数、响应 JSON、状态码、鉴权、auth cookie、WebSocket 协议、前端 contract、配置格式或数据库格式。
 
 ## 入口与元数据

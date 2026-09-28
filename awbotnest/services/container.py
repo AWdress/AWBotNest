@@ -19,6 +19,7 @@ from .ai import AIService
 from .browser import BrowserService
 from .cookies import CookieService
 from .http import HttpService
+from .ocr import OcrService
 
 class PlatformServices:
     def __init__(self, settings: Settings) -> None:
@@ -33,3 +34,8 @@ class PlatformServices:
         self.cookies = CookieService()
         self.browser = BrowserService(settings)
         self.ai = AIService(settings, self.http, services_data_dir / "ai_usage.json")
+        self.ocr = OcrService()
+        self.ocr.install_module_facade()
+
+    async def close(self) -> None:
+        await self.ocr.close()

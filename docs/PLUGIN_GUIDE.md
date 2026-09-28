@@ -376,7 +376,7 @@ async def setup(ctx):
 
 停用时平台会移除事件、调度、Webhook 和动作，并取消通过 `ctx.create_task()` 创建的后台任务。不要直接创建平台无法追踪的永久任务。
 
-## 平台服务
+## 系统服务
 
 ### HTTP
 
@@ -386,7 +386,20 @@ response.raise_for_status()
 data = response.json()
 ```
 
-`ctx.http` 继承平台代理。下载使用 `ctx.http.download(url, destination)`。
+`ctx.http` 继承系统代理。下载使用 `ctx.http.download(url, destination)`。
+
+### 本地 OCR
+
+插件需要本地验证码识别时，在 `requirements` 声明 `ddddocr>=1.5`，再使用系统托管的
+OCR 服务：
+
+```python
+text = await ctx.ocr.classification(image_bytes)
+results = await ctx.ocr.classification_many([original, processed])
+```
+
+现有插件继续使用 `ddddocr.DdddOcr()` 也会自动接入同一服务。OCR 模型只在独立工作
+进程中加载，多个插件串行共用，空闲后自动退出；不要自行长期保存 ONNX Runtime 模型。
 
 ### KV 与文件
 

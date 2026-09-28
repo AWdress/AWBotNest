@@ -188,6 +188,10 @@ class PluginContext:
         return self._services.browser
 
     @property
+    def ocr(self):
+        return self._services.ocr
+
+    @property
     def ai(self):
         return self._plugin_ai
 
