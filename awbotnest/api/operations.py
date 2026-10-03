@@ -300,8 +300,26 @@ def create_router(deps, list_plugins) -> APIRouter:
                 await runtime.enable(plugin_id)
                 logger.error("%s失败：%s（重新加载失败：%s，已回滚）", action, plugin_name, meta.error)
                 raise HTTPException(status_code=409, detail=f"更新加载失败，已回滚：{meta.error}")
+        try:
+            confirm_source = getattr(market, "confirm_source", None)
+            if confirm_source is not None:
+                confirm_source(body.plugin)
+        except Exception as exc:
+            try:
+                if was_loaded:
+                    await runtime.disable(plugin_id, persist=False)
+            finally:
+                market.finish(plugin_id, False)
+                runtime.invalidate_scan_cache()
+            if was_loaded:
+                await runtime.enable(plugin_id)
+            logger.error("%s失败：%s（无法保存更新来源，已回滚）", action, plugin_name)
+            raise HTTPException(status_code=503, detail="更新来源保存失败，已恢复原插件") from exc
         market.finish(plugin_id, True)
-        await market.record_install(body.plugin, "update" if installed_before else "install")
+        try:
+            await market.record_install(body.plugin, "update" if installed_before else "install")
+        except Exception:
+            logger.debug("插件已%s，安装热度暂未记录：%s", action, plugin_name, exc_info=True)
         market.clear_cache()
         logger.info("已%s：%s", action, meta.name)
         return {"ok": True, "path": str(destination), "plugin": meta.to_dict()}

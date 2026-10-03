@@ -93,6 +93,9 @@ def register_open_api(
             plugin = next((item for item in runtime.scan() if item.id == target.stem), None)
             if plugin is None or plugin.error:
                 raise ValueError(plugin.error if plugin else "插件元数据无法识别")
+            forget_source = getattr(market, "forget_source", None)
+            if forget_source is not None:
+                forget_source(target.stem)
         except Exception as exc:
             target.unlink(missing_ok=True)
             if backup is not None:
@@ -101,9 +104,6 @@ def register_open_api(
             raise HTTPException(status_code=400, detail=f"插件校验失败：{exc}") from exc
         finally:
             temporary.unlink(missing_ok=True)
-        forget_source = getattr(market, "forget_source", None)
-        if forget_source is not None:
-            forget_source(target.stem)
         return {"ok": True, "plugin": plugin.to_dict(), "enabled": bool(plugin.enabled)}
 
     @router.get("/plugins/{plugin_id}")

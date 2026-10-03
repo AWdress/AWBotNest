@@ -599,31 +599,36 @@ test('嵌套敏感值按需读取且删除行后不会串用其他账号的值',
   expect(saved.private_accounts).toEqual([{ cookie: 'private-cookie' }])
 })
 
-test('旧安装通过内置确认框确认更新来源，取消不会重新安装', async ({ page }) => {
+test('旧安装无需确认来源，同版本不重装，手动更新后不再显示更新入口', async ({ page }) => {
   let installations = 0
   await page.route('**/api/plugins/store/install', (route) => {
     installations += 1
     return json(route, { ok: true, plugin: { loaded: false } })
   })
   await page.route('**/api/plugins/store*', (route) => {
-    return json(route, { plugins: [{ id: 'source_demo', name: '来源确认测试', installed: true,
+    return json(route, { plugins: [{ id: 'source_demo', name: '同版本旧安装测试', installed: true,
       from_manifest: true, version: '1.0.0', local_version: '1.0.0', source_confirmed: false,
+      update_available: false,
       repo: 'Example/AWBotNest-Plugins', path: 'plugins_v2/source_demo/', install_count: 1,
+    }, { id: 'update_demo', name: '旧安装更新测试', installed: true,
+      from_manifest: true, version: '2.0.0', local_version: '1.0.0', source_confirmed: false,
+      update_available: true,
+      repo: 'Example/AWBotNest-Plugins', path: 'plugins_v2/update_demo/', install_count: 1,
     }] })
   })
   await page.goto('/#/plugins')
   await page.getByRole('button', { name: /插件市场/ }).click()
-  await expect(page.getByText('先确认更新来源', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '确认来源', exact: true }).click()
-  const dialog = page.getByRole('dialog', { name: '确认更新来源' })
-  await expect(dialog).toBeVisible()
-  await expect(dialog.getByText(/Example\/AWBotNest-Plugins/)).toBeVisible()
-  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  await expect(page.getByText('旧安装更新测试', { exact: true })).toBeVisible()
+  await expect(page.getByText('同版本旧安装测试', { exact: true })).toHaveCount(0)
+  await expect(page.getByText('先确认更新来源', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '确认来源', exact: true })).toHaveCount(0)
   expect(installations).toBe(0)
-  await page.getByRole('button', { name: '确认来源', exact: true }).click()
-  await dialog.getByRole('button', { name: '确认来源并安装' }).click()
-  await expect(page.getByText('先确认更新来源', { exact: true })).toBeHidden()
-  expect(installations).toBe(1)
+  await page.getByRole('button', { name: '更新', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '确认更新来源' })
+  await expect(dialog).toHaveCount(0)
+  await expect.poll(() => installations).toBe(1)
+  await expect(page.getByText('旧安装更新测试', { exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCount(0)
 })
 
 test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {

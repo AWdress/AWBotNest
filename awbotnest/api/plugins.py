@@ -262,6 +262,9 @@ def create_router(deps) -> APIRouter:
             meta = next((item for item in runtime.scan() if item.id == target.stem), None)
             if meta is None or meta.error:
                 raise ValueError(meta.error if meta else "插件元数据无法识别")
+            forget_source = getattr(market, "forget_source", None)
+            if forget_source is not None:
+                forget_source(target.stem)
         except Exception as exc:
             logger.error("安装失败：%s（%s）", runtime.display_name(target.stem), exc)
             target.unlink(missing_ok=True)
@@ -272,9 +275,6 @@ def create_router(deps) -> APIRouter:
         finally:
             temporary.unlink(missing_ok=True)
         logger.info("已安装：%s", runtime.display_name(target.stem))
-        forget_source = getattr(market, "forget_source", None)
-        if forget_source is not None:
-            forget_source(target.stem)
         return {"ok": True, "plugin": meta.to_dict()}
 
     @router.delete("/api/plugins/{plugin_id}", dependencies=[Depends(require_admin)])

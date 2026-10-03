@@ -321,49 +321,70 @@ test('failed secret lookup preserves list rows and stale reveal cannot update an
   assert.equal(secret.values.length, 0)
 })
 
-test('same-version old installations can confirm their source and cancellation never installs', async () => {
+test('same-version old installations stay out of installation and update lists', async () => {
   const calls = [], prompts = []
-  let approved = false
+  const p = page('Plugins', {
+    storeDownload: async plugins => { calls.push(plugins); return { result: {} } },
+  }, 'updateAll, store, storeAvailable, storeUpdatable', {
+    confirm: async options => { prompts.push(options); return true },
+  })
+  const plugin = { id: 'source-test', name: '来源测试', installed: true, from_manifest: true,
+    version: '1.0', local_version: '1.0', source_confirmed: false, update_available: false,
+    repo: 'Example/AWBotNest-Plugins', path: 'plugins_v2/source-test/' }
+  p.store.value = [plugin]
+  assert.equal(p.storeAvailable.value.length, 0)
+  assert.equal(p.storeUpdatable.value.length, 0)
+  await p.updateAll()
+  assert.equal(calls.length, 0)
+  assert.equal(prompts.length, 0)
+  p.store.value.push({ id: 'new-plugin', installed: false })
+  assert.equal(p.storeAvailable.value.length, 1)
+  assert.equal(p.storeAvailable.value[0].id, 'new-plugin')
+})
+
+test('manual updating records the source without a separate confirmation or repeated update', async () => {
+  const calls = [], prompts = []
   const p = page('Plugins', {
     listPlugins: async () => ({ plugins: [] }),
     storeDownload: async plugins => { calls.push(plugins[0].id); return { result: {} } },
-  }, 'download, store, storeAvailable, dlBusy', {
-    confirm: async options => { prompts.push(options); return approved },
+  }, 'download, updateAll, store, storeUpdatable, dlBusy', {
+    confirm: async options => { prompts.push(options); return false },
   })
-  const plugin = { id: 'source-test', name: '来源测试', installed: true, from_manifest: true,
-    version: '1.0', local_version: '1.0', source_confirmed: false,
-    repo: 'Example/AWBotNest-Plugins', path: 'plugins_v2/source-test/' }
+  const plugin = { id: 'source-test', installed: true, from_manifest: true,
+    version: '2.0', local_version: '1.0', source_confirmed: false,
+    update_available: true, auto_update_allowed: false }
   p.store.value = [plugin]
-  assert.equal(p.storeAvailable.value.length, 1)
-  await p.download(plugin)
-  assert.equal(calls.length, 0)
-  assert.equal(p.dlBusy.value[plugin.id], false)
-  assert.match(prompts[0].message, /Example\/AWBotNest-Plugins.*plugins_v2\/source-test\//)
-  approved = true
+  assert.equal(p.storeUpdatable.value.length, 1)
   await p.download(plugin)
   assert.deepEqual(calls, ['source-test'])
+  assert.equal(prompts.length, 0)
   assert.equal(plugin.source_confirmed, true)
-  assert.equal(p.storeAvailable.value.length, 0)
+  assert.equal(plugin.auto_update_allowed, true)
+  assert.equal(plugin.installed_version, '2.0')
+  assert.equal(plugin.local_version, '2.0')
+  assert.equal(plugin.update_available, false)
+  assert.equal(p.storeUpdatable.value.length, 0)
+  assert.equal(p.dlBusy.value[plugin.id], false)
+  await p.updateAll()
+  assert.deepEqual(calls, ['source-test'])
 })
 
-test('batch updating unconfirmed sources asks once and confirmed sources do not prompt', async () => {
+test('batch updating old installations does not ask for source confirmation', async () => {
   const prompts = [], calls = []
-  const p = page('Plugins', { storeDownload: async plugins => { calls.push(plugins); return { result: {} } } },
-    'updateAll, store, updateAllBusy, confirmUpdateSources', {
-      confirm: async options => { prompts.push(options); return false },
-    })
+  const p = page('Plugins', {
+    listPlugins: async () => ({ plugins: [] }),
+    pluginStore: async () => ({ plugins: [] }),
+    storeDownload: async plugins => { calls.push(plugins.map(plugin => plugin.id)); return { result: {} } },
+  }, 'updateAll, store, updateAllBusy', {
+    confirm: async options => { prompts.push(options); return false },
+  })
   p.store.value = ['first', 'second'].map(id => ({ id, installed: true, from_manifest: true,
-    version: '2', local_version: '1', source_confirmed: false,
+    version: '2', local_version: '1', source_confirmed: false, update_available: true,
     repo: `Example-${id}/AWBotNest-Plugins`, path: `plugins_v2/${id}/` }))
   await p.updateAll()
-  assert.equal(prompts.length, 1)
-  assert.match(prompts[0].message, /Example-first\/AWBotNest-Plugins/)
-  assert.match(prompts[0].message, /Example-second\/AWBotNest-Plugins/)
-  assert.equal(calls.length, 0)
+  assert.equal(prompts.length, 0)
+  assert.deepEqual(calls.map(chunk => [...chunk]), [['first', 'second']])
   assert.equal(p.updateAllBusy.value, false)
-  assert.equal(await p.confirmUpdateSources([{ installed: true, source_confirmed: true }]), true)
-  assert.equal(await p.confirmUpdateSources([{ installed: true }]), true)
-  assert.equal(prompts.length, 1)
 })
 
 test('store follows the server version comparison and does not offer older versions as updates', () => {

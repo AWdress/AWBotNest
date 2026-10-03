@@ -859,13 +859,7 @@ function applyStoreFilters(list) {
   return filtered
 }
 
-function needsSourceConfirmation(plugin) {
-  return plugin.installed && plugin.source_confirmed === false
-}
-
-const storeAvailable = computed(() => applyStoreFilters(store.value.filter((p) =>
-  !p.installed || (needsSourceConfirmation(p) && !hasUpdate(p))
-)))
+const storeAvailable = computed(() => applyStoreFilters(store.value.filter((p) => !p.installed)))
 // 已安装但仓库有新版本的插件：优先使用服务端的版本比较结果，
 // 本地上传/手动导入(无 local_version)不误报更新，避免静默覆盖本地改动。
 function hasUpdate(p) {
@@ -1153,7 +1147,6 @@ async function download(p) {
   const isUpdate = hasUpdate(p)
   dlBusy.value[p.id] = true; storeErr.value = ''
   try {
-    if (!await confirmUpdateSources([p])) return
     const r = await api.storeDownload([p])
     const res = r.result || {}
     if (res.errors && res.errors.length) {
@@ -1162,7 +1155,9 @@ async function download(p) {
       p.installed = true
       p.source_confirmed = true
       p.auto_update_allowed = true
-      p.local_version = p.version   // 记录新版本，清除「有更新」提示
+      p.installed_version = p.version
+      p.local_version = p.version
+      p.update_available = false
       p.install_count = res.install_counts?.[p.id] ?? p.install_count ?? 0
       await load()
       const reloaded = (res.reloaded || []).includes(p.id)
@@ -1183,19 +1178,6 @@ async function download(p) {
   }
 }
 
-async function confirmUpdateSources(plugins) {
-  const unconfirmed = plugins.filter(needsSourceConfirmation)
-  if (!unconfirmed.length) return true
-  const sources = unconfirmed.map(plugin =>
-    `${plugin.name || plugin.id}：${shortRepo(plugin.repo || plugin.repo_url) || '未知仓库'}${plugin.path ? ` / ${plugin.path}` : ''}`
-  ).join('\n')
-  return confirm({
-    title: '确认更新来源',
-    message: `确认后将从以下仓库重新安装插件，并将其设为后续自动更新来源。\n\n${sources}`,
-    confirmText: '确认来源并安装',
-  })
-}
-
 async function updateAll() {
   if (updateAllBusy.value || !storeUpdatable.value.length) return
 
@@ -1205,7 +1187,6 @@ async function updateAll() {
   storeErr.value = ''
 
   try {
-    if (!await confirmUpdateSources(targets)) return
     // The API accepts up to 100 plugins per request. Keep the operation safe
     // for larger stores while preserving the order shown in the UI.
     for (let index = 0; index < targets.length; index += 100) {
@@ -1572,7 +1553,6 @@ onUnmounted(() => {
               </div>
 
               <p class="desc">{{ p.description || '（无描述）' }}</p>
-              <p v-if="needsSourceConfirmation(p)" class="hint muted small">先确认更新来源</p>
               <div v-if="pluginTags(p).length" class="plugin-tags" aria-label="插件功能">
                 <span v-for="tag in pluginTags(p)" :key="tag" :title="tag">{{ tag }}</span>
               </div>
@@ -1603,7 +1583,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">{{ storeAvailable.some(needsSourceConfirmation) ? '安装与来源确认' : '可安装' }}</div>
+        <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">可安装</div>
         <div v-if="storeAvailable.length === 0 && storeUpdatable.length === 0" class="empty card">
           <p class="muted" v-if="storeErr">当前仓库没有适用于此版本的插件，请确认仓库根目录有 manifest_v2.json。</p>
           <p class="muted" v-else>暂无可安装的新插件；也可能还没有添加额外仓库。</p>
@@ -1624,7 +1604,6 @@ onUnmounted(() => {
           </div>
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
-          <p v-if="needsSourceConfirmation(p)" class="hint muted small">先确认更新来源</p>
           <div v-if="pluginTags(p).length" class="plugin-tags" aria-label="插件功能">
             <span v-for="tag in pluginTags(p)" :key="tag" :title="tag">{{ tag }}</span>
           </div>
@@ -1647,7 +1626,7 @@ onUnmounted(() => {
                 <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                      stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-                </svg>{{ needsSourceConfirmation(p) ? '确认来源' : '安装' }}
+                </svg>安装
               </template>
             </button>
           </div>

@@ -79,6 +79,7 @@ __plugin__ = {
 | `scope` | 是 | `standalone`、`bot`、`user`、`both` |
 | `description` | 否 | 面向用户的功能说明 |
 | `author` | 否 | 插件卡片中 GitHub 图标旁显示的作者名 |
+| `repository` | 否 | 源码所在的 GitHub 仓库，填写 `owner/repo` 或仓库根地址；旧安装核对更新来源时使用。从商店安装或更新的插件会自动记录来源。 |
 | `tags` | 否 | 功能标签字符串列表；建议 1–4 个，每项不超过 24 个字符 |
 | `bot` | 否 | 指定 Bot ID；留空使用默认 Bot |
 | `requirements` | 否 | 启用前安装的 Python 依赖 |

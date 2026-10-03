@@ -75,7 +75,7 @@ class RestoreIntegrityTests(unittest.TestCase):
 
 
 class UpdateSourceTests(unittest.IsolatedAsyncioTestCase):
-    async def test_old_install_requires_explicit_source_confirmation(self):
+    async def test_unverified_install_skips_unsafe_auto_update(self):
         with tempfile.TemporaryDirectory() as folder, patch("awbotnest.market.PLUGINS_DIR", Path(folder) / "plugins"):
             market = PluginMarket(Settings())
             untrusted = {"id": "custom", "repo": "unknown/AWBotNest-Plugins", "path": "custom",
@@ -247,6 +247,111 @@ class SecurityApiTests(unittest.IsolatedAsyncioTestCase):
                                                      files={"file": ("uploaded.py", b"__plugin__ = {'id': 'uploaded'}")})
                     self.assertEqual(response.status_code, 200, response.text)
             self.assertEqual(forgotten, ["uploaded", "uploaded"])
+
+    async def test_upload_source_persistence_failure_restores_previous_code_and_binding(self):
+        settings = Settings(admin_token="upload-test-token", api_key="upload-test-api")
+        scheduler = PluginScheduler()
+        self.addCleanup(scheduler.stop)
+        with tempfile.TemporaryDirectory() as folder:
+            plugins = Path(folder) / "plugins"
+            plugins.mkdir()
+            original = b"__plugin__ = {'id': 'uploaded', 'version': '1'}\n"
+            changed = b"__plugin__ = {'id': 'uploaded', 'version': '2'}\nCUSTOM = True\n"
+            target = plugins / "uploaded.py"
+            target.write_bytes(original)
+            with patch("awbotnest.market.PLUGINS_DIR", plugins):
+                market = PluginMarket(settings)
+                source = {"id": "uploaded", "repo": OFFICIAL_REPO, "path": "uploaded.py"}
+                market.confirm_source(source)
+                source_state = market._sources_path.read_bytes()
+                plugin = SimpleNamespace(id="uploaded", error="", enabled=False,
+                                         to_dict=lambda: {"id": "uploaded"})
+                runtime = SimpleNamespace(plugins_dir=plugins, scan=lambda: [plugin],
+                                          invalidate_scan_cache=lambda: None, display_name=lambda name: name)
+                app = create_app(settings, SimpleNamespace(), runtime, scheduler, PluginRoutes(), market=market)
+                transport = httpx.ASGITransport(app, raise_app_exceptions=False)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    for url, headers in (("/api/plugins/upload", {"Authorization": "Bearer upload-test-token"}),
+                                         ("/api/v1/plugins/upload", {"X-API-Key": "upload-test-api"})):
+                        with self.subTest(url=url), patch("awbotnest.api.plugins.PLUGINS_DIR", plugins), \
+                                patch.object(market, "_save_sources", side_effect=OSError("fixture disk full")):
+                            response = await client.post(url, headers=headers,
+                                                         files={"file": ("uploaded.py", changed)})
+                        self.assertGreaterEqual(response.status_code, 400)
+                        self.assertEqual(target.read_bytes(), original)
+                        self.assertTrue(market.source_matches(source))
+                        self.assertNotIn("uploaded", market._local_only)
+                        self.assertEqual(market._sources_path.read_bytes(), source_state)
+                        self.assertFalse((plugins / ".uploaded.py.upload").exists())
+
+    async def test_store_source_persistence_failure_restores_code_before_backup_is_removed(self):
+        settings = Settings(admin_token="store-test-token")
+        scheduler = PluginScheduler()
+        self.addCleanup(scheduler.stop)
+        with tempfile.TemporaryDirectory() as folder:
+            plugins = Path(folder) / "plugins"
+            plugins.mkdir()
+            original = b"__plugin__ = {'id': 'sample', 'name': 'Fixture', 'version': '1'}\n"
+            changed = b"__plugin__ = {'id': 'sample', 'name': 'Fixture', 'version': '2'}\nNEW_CODE = True\n"
+            target = plugins / "sample.py"
+            target.write_bytes(original)
+            with patch("awbotnest.market.PLUGINS_DIR", plugins):
+                market = PluginMarket(settings)
+                previous = {"id": "sample", "repo": "previous/plugins", "path": "sample.py"}
+                market.confirm_source(previous)
+                source_state = market._sources_path.read_bytes()
+                market._download_file = AsyncMock(return_value=changed)
+                plugin = SimpleNamespace(id="sample", name="Fixture", error="", enabled=False,
+                                         to_dict=lambda: {"id": "sample"})
+                runtime = SimpleNamespace(loaded={}, scan=lambda: [plugin],
+                                          invalidate_scan_cache=lambda: None, display_name=lambda name: name)
+                app = create_app(settings, SimpleNamespace(), runtime, scheduler, PluginRoutes(), market=market)
+                transport = httpx.ASGITransport(app, raise_app_exceptions=False)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    with patch.object(market, "_save_sources", side_effect=OSError("fixture disk full")):
+                        response = await client.post("/api/plugins/store/install",
+                                                     headers={"Authorization": "Bearer store-test-token"},
+                                                     json={"plugin": {"id": "sample", "repo": "new/plugins",
+                                                                      "path": "sample.py", "version": "2"}})
+                self.assertGreaterEqual(response.status_code, 400)
+                self.assertEqual(target.read_bytes(), original)
+                self.assertTrue(market.source_matches(previous))
+                self.assertEqual(market._sources_path.read_bytes(), source_state)
+                self.assertNotIn("sample", market._pending_installs)
+                self.assertFalse((plugins / ".sample.py.backup").exists())
+
+    async def test_store_heat_persistence_failure_keeps_successful_update(self):
+        settings = Settings(admin_token="store-test-token")
+        scheduler = PluginScheduler()
+        self.addCleanup(scheduler.stop)
+        with tempfile.TemporaryDirectory() as folder:
+            plugins = Path(folder) / "plugins"
+            plugins.mkdir()
+            original = b"__plugin__ = {'id': 'sample', 'name': 'Fixture', 'version': '1'}\n"
+            changed = b"__plugin__ = {'id': 'sample', 'name': 'Fixture', 'version': '2'}\n"
+            target = plugins / "sample.py"
+            target.write_bytes(original)
+            with patch("awbotnest.market.PLUGINS_DIR", plugins):
+                market = PluginMarket(settings)
+                source = {"id": "sample", "repo": "trusted/plugins", "path": "sample.py"}
+                market.confirm_source(source)
+                market._download_file = AsyncMock(return_value=changed)
+                plugin = SimpleNamespace(id="sample", name="Fixture", error="", enabled=False,
+                                         to_dict=lambda: {"id": "sample"})
+                runtime = SimpleNamespace(loaded={}, scan=lambda: [plugin],
+                                          invalidate_scan_cache=lambda: None, display_name=lambda name: name)
+                app = create_app(settings, SimpleNamespace(), runtime, scheduler, PluginRoutes(), market=market)
+                transport = httpx.ASGITransport(app, raise_app_exceptions=False)
+                async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+                    with patch.object(market, "_save_heat_state", side_effect=OSError("fixture heat disk full")):
+                        response = await client.post("/api/plugins/store/install",
+                                                     headers={"Authorization": "Bearer store-test-token"},
+                                                     json={"plugin": {**source, "version": "2"}})
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(target.read_bytes(), changed)
+                self.assertTrue(market.source_matches(source))
+                self.assertNotIn("sample", market._pending_installs)
+                self.assertEqual(market._download_file.await_count, 1)
 
 
 class LoggingSecretsTests(unittest.TestCase):
