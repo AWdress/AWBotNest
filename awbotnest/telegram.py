@@ -3,14 +3,21 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+import errno
 import re
+import socket
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
 from telethon import TelegramClient
-from telethon.errors import PasswordHashInvalidError, PhoneCodeInvalidError, SessionPasswordNeededError
+from telethon.errors import (
+    PasswordHashInvalidError, PhoneCodeInvalidError, ServerError,
+    SessionPasswordNeededError, TimedOutError,
+)
+from python_socks import ProxyConnectionError, ProxyTimeoutError
 
 from .config import DATA_DIR, SESSIONS_DIR, Settings
 from .activity import install_client_hooks
@@ -41,6 +48,13 @@ class TelegramAccounts:
         self.users: dict[str, TelegramClient] = {}
         self._pending_logins: dict[str, tuple[TelegramClient, str, object, float]] = {}
         self._lock = asyncio.Lock()
+        self._connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
+        self._recovery_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._recovery_refresh_lock = asyncio.Lock()
+        self._suppressed_users: set[str] = set()
+        self._stopping = False
+        self._retry_delay = 5.0
+        self.on_recovered: Callable[[str, str], Awaitable[None]] | None = None
         self._profiles_path = DATA_DIR / "account_profiles.json"
 
     def _profiles(self) -> dict[str, dict[str, object]]:
@@ -129,60 +143,185 @@ class TelegramAccounts:
         return next((client for client in self.bots.values() if client.is_connected()), None)
 
     async def start(self) -> None:
+        self._stopping = False
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         if not self.telegram_available:
             logger.info("未配置 Telegram API_ID/API_HASH，系统以独立模式启动")
             return
         async with self._lock:
             for bot_spec in self.settings.bot_specs():
-                if not bot_spec.token:
-                    continue
-                if not re.fullmatch(r"[A-Za-z0-9_-]+", bot_spec.id):
-                    logger.error("Bot ID 不合法，已跳过：%s", bot_spec.id)
-                    continue
-                bot = None
-                try:
-                    bot = self._client(str(self.sessions_dir / f"bot_{bot_spec.id}"))
-                    await asyncio.wait_for(bot.start(bot_token=bot_spec.token), timeout=60)
-                    self.bots[bot_spec.id] = bot
-                    try:
-                        await asyncio.wait_for(self._cache_profile(f"bot_{bot_spec.id}", bot), timeout=15)
-                    except Exception:
-                        logger.warning("Bot [%s] 资料缓存失败", bot_spec.name, exc_info=True)
-                    logger.info("Bot [%s] 启动成功", bot_spec.name)
-                except asyncio.CancelledError:
-                    if bot is not None:
-                        await bot.disconnect()
-                    raise
-                except Exception:
-                    if bot is not None:
-                        await bot.disconnect()
-                    logger.exception("Telethon Bot [%s] 连接失败，系统继续启动", bot_spec.name)
+                await self._start_bot(bot_spec)
 
             for session_name in self.settings.user_sessions:
                 await self._start_user(session_name)
 
-    async def _start_user(self, session_name: str) -> None:
-        if not re.fullmatch(r"[A-Za-z0-9_]+", session_name or ""):
+    @staticmethod
+    def _retryable_connection_error(exc: Exception) -> bool:
+        if isinstance(exc, (ConnectionError, TimeoutError, EOFError, ServerError,
+                            TimedOutError, ProxyConnectionError, ProxyTimeoutError,
+                            socket.gaierror, socket.herror)):
+            return True
+        return isinstance(exc, OSError) and exc.errno in {
+            errno.ENETDOWN, errno.ENETUNREACH, errno.EHOSTUNREACH,
+            errno.ECONNABORTED, errno.ECONNRESET, errno.ECONNREFUSED,
+            errno.ETIMEDOUT, errno.EPIPE, errno.EADDRNOTAVAIL,
+        }
+
+    async def _discard_client(self, kind: str, account_id: str, client) -> None:
+        clients = self.bots if kind == "bot" else self.users
+        if clients.get(account_id) is client:
+            clients.pop(account_id, None)
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                logger.debug("账号 %s 连接清理失败", account_id, exc_info=True)
+
+    def _connection_failed(self, kind: str, account_id: str, exc: Exception,
+                           retry: bool) -> bool | None:
+        if self._retryable_connection_error(exc):
+            if retry:
+                logger.warning("账号 %s 连接暂时失败，将自动重试（%s）", account_id, type(exc).__name__)
+                self._schedule_recovery(kind, account_id)
+            else:
+                logger.debug("账号 %s 尚未恢复连接（%s）", account_id, type(exc).__name__)
+            return False
+        logger.exception("账号 %s 连接失败，请检查凭据或会话", account_id)
+        return None
+
+    def _schedule_recovery(self, kind: str, account_id: str) -> None:
+        key = (kind, account_id)
+        if self._stopping or (kind == "user" and account_id in self._suppressed_users):
             return
-        existing = self.users.get(session_name)
-        if existing is not None:
-            if existing.is_connected():
+        if key in self._recovery_tasks:
+            return
+        task = asyncio.create_task(self._recover_account(kind, account_id),
+                                   name=f"telegram-recovery:{kind}:{account_id}")
+        self._recovery_tasks[key] = task
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._recovery_tasks.get(key) is done:
+                self._recovery_tasks.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(finished)
+
+    async def _recover_account(self, kind: str, account_id: str) -> None:
+        delay = self._retry_delay
+        refresh_failures = 0
+        while not self._stopping:
+            await asyncio.sleep(delay)
+            if self._stopping:
                 return
-            await existing.disconnect()
-            self.users.pop(session_name, None)
+            if kind == "user":
+                if account_id in self._suppressed_users or account_id not in self.settings.user_sessions:
+                    return
+                result = await self._start_user(account_id, retry=False)
+            else:
+                spec = next((item for item in self.settings.bot_specs()
+                             if item.id == account_id and item.token), None)
+                if spec is None:
+                    return
+                result = await self._start_bot(spec, retry=False)
+            if result is None:
+                return  # Invalid credentials/session require an administrator.
+            if result:
+                try:
+                    async with self._recovery_refresh_lock:
+                        if self._stopping or (kind == "user" and account_id in self._suppressed_users):
+                            return
+                        if self.on_recovered is not None:
+                            await self.on_recovered(kind, account_id)
+                except Exception:
+                    refresh_failures += 1
+                    log = logger.warning if refresh_failures == 1 else logger.debug
+                    log("账号 %s 已连接，插件绑定失败，将重试", account_id, exc_info=True)
+                    delay = min(60.0, max(self._retry_delay, delay * 2))
+                    continue
+                logger.info("账号 %s 已恢复在线", account_id)
+                return
+            delay = min(60.0, max(self._retry_delay, delay * 2))
+
+    async def _cancel_recovery(self, kind: str, account_id: str) -> bool:
+        task = self._recovery_tasks.pop((kind, account_id), None)
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        return task is not None
+
+    async def stop_recovery(self) -> None:
+        self._stopping = True
+        tasks = [task for task in self._recovery_tasks.values()
+                 if task is not asyncio.current_task()]
+        self._recovery_tasks.clear()
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _start_bot(self, bot_spec, *, retry: bool = True) -> bool | None:
+        if self._stopping or not bot_spec.token:
+            return None
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", bot_spec.id):
+            logger.error("Bot ID 不合法，已跳过：%s", bot_spec.id)
+            return None
+        key = ("bot", bot_spec.id)
+        async with self._connection_locks.setdefault(key, asyncio.Lock()):
+            existing = self.bots.get(bot_spec.id)
+            if existing is not None and existing.is_connected():
+                return True
+            await self._discard_client("bot", bot_spec.id, existing)
+            bot = None
+            try:
+                bot = self._client(str(self.sessions_dir / f"bot_{bot_spec.id}"))
+                await asyncio.wait_for(bot.start(bot_token=bot_spec.token), timeout=60)
+                if self._stopping:
+                    await self._discard_client("bot", bot_spec.id, bot)
+                    return None
+                self.bots[bot_spec.id] = bot
+                try:
+                    await asyncio.wait_for(self._cache_profile(f"bot_{bot_spec.id}", bot), timeout=15)
+                except Exception:
+                    logger.warning("Bot [%s] 资料缓存失败", bot_spec.name, exc_info=True)
+                logger.info("Bot [%s] 启动成功", bot_spec.name)
+                return True
+            except asyncio.CancelledError:
+                await self._discard_client("bot", bot_spec.id, bot)
+                raise
+            except Exception as exc:
+                await self._discard_client("bot", bot_spec.id, bot)
+                return self._connection_failed("bot", bot_spec.id, exc, retry)
+
+    async def _start_user(self, session_name: str, *, retry: bool = True) -> bool | None:
+        if not re.fullmatch(r"[A-Za-z0-9_]+", session_name or ""):
+            return None
+        key = ("user", session_name)
+        async with self._connection_locks.setdefault(key, asyncio.Lock()):
+            return await self._start_user_locked(session_name, retry=retry)
+
+    async def _start_user_locked(self, session_name: str, *, retry: bool) -> bool | None:
+        if self._stopping or session_name in self._suppressed_users:
+            return None
+        existing = self.users.get(session_name)
+        if existing is not None and existing.is_connected():
+            return True
+        await self._discard_client("user", session_name, existing)
         session_path = self.sessions_dir / session_name
         if not session_path.with_suffix(".session").exists():
             logger.info("用户会话 %s 尚未登录，已跳过", session_name)
-            return
+            return None
         client = None
         try:
             client = self._client(str(session_path))
             await asyncio.wait_for(client.connect(), timeout=60)
             if not await asyncio.wait_for(client.is_user_authorized(), timeout=30):
-                await client.disconnect()
+                await self._discard_client("user", session_name, client)
                 logger.warning("用户会话 %s 已失效，已跳过", session_name)
-                return
+                return None
+            if self._stopping or session_name in self._suppressed_users:
+                await self._discard_client("user", session_name, client)
+                return None
             self.users[session_name] = client
             try:
                 profile = await asyncio.wait_for(self._cache_profile(session_name, client), timeout=15)
@@ -190,14 +329,13 @@ class TelegramAccounts:
             except Exception:
                 logger.warning("用户账号 %s 资料缓存失败", session_name, exc_info=True)
             logger.info("用户账号 [%s] 启动成功", session_name)
+            return True
         except asyncio.CancelledError:
-            if client is not None:
-                await client.disconnect()
+            await self._discard_client("user", session_name, client)
             raise
-        except Exception:
-            if client is not None:
-                await client.disconnect()
-            logger.exception("用户账号 %s 连接失败", session_name)
+        except Exception as exc:
+            await self._discard_client("user", session_name, client)
+            return self._connection_failed("user", session_name, exc, retry)
 
     async def begin_user_login(self, session_name: str, phone: str) -> dict[str, object]:
         """发送登录验证码；客户端保留在内存中等待下一步。"""
@@ -211,6 +349,8 @@ class TelegramAccounts:
             raise ValueError("手机号不能为空")
         if session_name in self.users:
             raise ValueError("该会话名称已在使用")
+        await self._cancel_recovery("user", session_name)
+        self._suppressed_users.add(session_name)
         for name, pending in list(self._pending_logins.items()):
             if time.monotonic() - pending[3] > 600:
                 await self.cancel_user_login(name)
@@ -255,6 +395,7 @@ class TelegramAccounts:
             await self.cancel_user_login(session_name)
             raise
         self._pending_logins.pop(session_name, None)
+        self._suppressed_users.discard(session_name)
         self.users[session_name] = client
         me = await client.get_me()
         try:
@@ -277,15 +418,18 @@ class TelegramAccounts:
             await pending[0].disconnect()
 
     async def disconnect_user(self, session_name: str) -> bool:
-        client = self.users.pop(session_name, None)
-        if client is None:
-            return False
-        await client.disconnect()
-        return True
+        self._suppressed_users.add(session_name)
+        recovering = await self._cancel_recovery("user", session_name)
+        async with self._connection_locks.setdefault(("user", session_name), asyncio.Lock()):
+            client = self.users.get(session_name)
+            await self._discard_client("user", session_name, client)
+        return client is not None or recovering
 
     async def connect_user(self, session_name: str) -> bool:
         if session_name not in self.settings.user_sessions:
             return False
+        await self._cancel_recovery("user", session_name)
+        self._suppressed_users.discard(session_name)
         await self._start_user(session_name)
         client = self.users.get(session_name)
         return bool(client and client.is_connected())
@@ -379,6 +523,7 @@ class TelegramAccounts:
         return result
 
     async def stop(self) -> None:
+        await self.stop_recovery()
         async with self._lock:
             clients = [
                 *self.users.values(),

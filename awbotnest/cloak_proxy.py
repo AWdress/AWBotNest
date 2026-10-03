@@ -277,10 +277,21 @@ async def _acquire_session_async() -> _SessionLease | None:
     cancel = threading.Event()
     task = asyncio.create_task(asyncio.to_thread(_SESSION_GATE.acquire, cancel))
     try:
-        return await task
+        # Cancelling the caller must not discard a lease already acquired by
+        # the worker thread before its result reaches the event loop.
+        return await asyncio.shield(task)
     except asyncio.CancelledError:
         cancel.set()
-        lease = await asyncio.shield(task)
+        # Disable and shutdown may both cancel the same caller. Finish the
+        # thread handoff even when another cancellation arrives during cleanup.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        lease = task.result() if not task.cancelled() and task.exception() is None else None
         if lease is not None:
             lease.release()
         raise

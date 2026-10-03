@@ -11,6 +11,7 @@ import secrets
 import tempfile
 import time
 import zipfile
+from contextlib import nullcontext
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
 from ..logs import memory_logs
 from ..market import normalize_repo
+from ..plugin_config import mask_config, restore_config_secrets, reveal_secret
 from ..routing import WebhookRequest
 from .models import *
 
@@ -239,6 +241,10 @@ def create_router(deps) -> APIRouter:
 
     @router.post("/api/plugins/upload", dependencies=[Depends(require_admin)])
     async def upload_plugin(file: UploadFile = File(...)):
+        async with (getattr(market, "install_lock", None) or nullcontext()):
+            return await _upload_plugin(file)
+
+    async def _upload_plugin(file: UploadFile):
         filename = file.filename or ""
         if not filename.endswith(".py") or not filename[:-3].replace("_", "").isalnum():
             raise HTTPException(status_code=400, detail="仅支持名称安全的 .py 插件文件")
@@ -266,10 +272,17 @@ def create_router(deps) -> APIRouter:
         finally:
             temporary.unlink(missing_ok=True)
         logger.info("已安装：%s", runtime.display_name(target.stem))
+        forget_source = getattr(market, "forget_source", None)
+        if forget_source is not None:
+            forget_source(target.stem)
         return {"ok": True, "plugin": meta.to_dict()}
 
     @router.delete("/api/plugins/{plugin_id}", dependencies=[Depends(require_admin)])
     async def delete_plugin(plugin_id: str):
+        async with (getattr(market, "install_lock", None) or nullcontext()):
+            return await _delete_plugin(plugin_id)
+
+    async def _delete_plugin(plugin_id: str):
         if not plugin_id.replace("_", "").replace("-", "").isalnum():
             raise HTTPException(status_code=400, detail="插件 ID 不合法")
         await runtime.disable(plugin_id)
@@ -307,10 +320,7 @@ def create_router(deps) -> APIRouter:
         if meta is None:
             raise HTTPException(status_code=404, detail="插件不存在")
         schema = meta.config_schema or {}
-        values = dict(settings.plugin_config.get(plugin_id, {}))
-        for key, spec in schema.items():
-            if runtime.secret_field(spec) and values.get(key):
-                values[key] = "********"
+        values = mask_config(schema, settings.plugin_config.get(plugin_id, {}))
         return {
             "values": values,
             "schema": schema,
@@ -324,17 +334,17 @@ def create_router(deps) -> APIRouter:
         if meta is None:
             raise HTTPException(status_code=404, detail="插件不存在")
         raw = await request.json()
-        field = str(raw.get("field") or "").strip()
-        if not field or len(field) > 200:
-            raise HTTPException(status_code=400, detail="敏感字段名称无效")
-        spec = (meta.config_schema or {}).get(field)
-        if not runtime.secret_field(spec):
-            raise HTTPException(status_code=400, detail="该字段不是已声明的敏感配置")
-        values = settings.plugin_config.get(plugin_id, {})
-        if field not in values or values[field] in (None, ""):
-            raise HTTPException(status_code=404, detail="敏感配置不存在")
+        if not isinstance(raw, dict):
+            raise HTTPException(status_code=400, detail="请求必须是对象")
+        field = str(raw.get("field") or "")
+        try:
+            value = reveal_secret(meta.config_schema or {}, settings.plugin_config.get(plugin_id, {}), field)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="敏感配置不存在") from exc
         return JSONResponse(
-            {"field": field, "value": values[field]},
+            {"field": field, "value": value},
             headers={"Cache-Control": "no-store", "Pragma": "no-cache"},
         )
 
@@ -374,14 +384,14 @@ def create_router(deps) -> APIRouter:
         if plugin is None:
             raise HTTPException(status_code=404, detail="插件不存在")
         raw = await request.json()
+        if not isinstance(raw, dict) or not isinstance(raw.get("values", raw), dict):
+            raise HTTPException(status_code=400, detail="插件配置必须是对象")
         values = dict(raw.get("values", raw))
         if len(json.dumps(values, ensure_ascii=False).encode("utf-8")) > 1024 * 1024:
             raise HTTPException(status_code=413, detail="插件配置超过 1 MB")
         current_values = settings.plugin_config.get(plugin_id, {})
-        for key, spec in (plugin.config_schema or {}).items():
-            if runtime.secret_field(spec) and values.get(key) == "********":
-                values[key] = current_values.get(key, "")
         try:
+            values = restore_config_secrets(plugin.config_schema or {}, values, current_values)
             runtime.validate_config(plugin.config_schema or {}, values,
                                     allow_extra=plugin.render_mode == "vue")
         except ValueError as exc:
@@ -397,9 +407,6 @@ def create_router(deps) -> APIRouter:
             meta = await runtime.enable(plugin_id)
             if meta.error:
                 raise HTTPException(status_code=409, detail=meta.error)
-        safe_values = dict(settings.plugin_config[plugin_id])
-        for key, spec in (plugin.config_schema or {}).items():
-            if runtime.secret_field(spec) and safe_values.get(key):
-                safe_values[key] = "********"
+        safe_values = mask_config(plugin.config_schema or {}, settings.plugin_config[plugin_id])
         return {"ok": True, "values": safe_values}
     return router

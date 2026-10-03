@@ -525,6 +525,107 @@ test('插件敏感配置只在点击显示后读取真实值', async ({ page }) 
   await expect(secret).toHaveValue('mobile-real-secret')
 })
 
+test('Schema 下拉选项保存并重新打开后保留数字和布尔类型', async ({ page }) => {
+  let values = { count: 1, mode: true }
+  await page.route('**/api/plugins/mobile_config_test/config', (route) => {
+    if (route.request().method() === 'PUT') {
+      values = route.request().postDataJSON().values
+      return json(route, { ok: true, values })
+    }
+    return json(route, {
+      schema: {
+        count: { type: 'select', label: '数字选项', options: [1, 2] },
+        mode: { type: 'select', label: '布尔选项', options: [{ value: true, label: '开启' }, { value: false, label: '关闭' }] },
+      }, values, render_mode: 'schema', has_frontend: false,
+    })
+  })
+  await page.goto('/#/plugins')
+  await page.getByText('手机配置测试', { exact: true }).click()
+  const modal = page.locator('.modal.modal-wide')
+  await modal.locator('select').nth(0).selectOption('2')
+  await modal.locator('select').nth(1).selectOption('false')
+  await modal.getByRole('button', { name: '保存并应用' }).click()
+  await expect(modal).toBeHidden()
+  expect(values).toEqual({ count: 2, mode: false })
+  await page.getByText('手机配置测试', { exact: true }).click()
+  await expect(modal.locator('select').nth(0)).toHaveValue('2')
+  await expect(modal.locator('select').nth(1)).toHaveValue('false')
+})
+
+test('嵌套敏感值按需读取且删除行后不会串用其他账号的值', async ({ page }) => {
+  const reads = []
+  let saved = null
+  await page.route('**/api/plugins/mobile_config_test/config', (route) => {
+    if (route.request().method() === 'PUT') {
+      saved = route.request().postDataJSON().values
+      return json(route, { ok: true })
+    }
+    return json(route, {
+      schema: {
+        accounts: { type: 'list', label: '签到账号', fields: {
+          name: { type: 'string', label: '名称' }, cookie: { type: 'password', label: 'Cookie' },
+        } },
+        private_accounts: { type: 'list', secret: true, label: '其他账号', fields: {
+          cookie: { type: 'password', label: 'Cookie' },
+        } },
+      },
+      values: { accounts: [{ name: 'one', cookie: '********' }, { name: 'two', cookie: '********' }], private_accounts: '********' },
+      render_mode: 'schema', has_frontend: false,
+    })
+  })
+  await page.route('**/api/plugins/mobile_config_test/config/reveal', (route) => {
+    const field = route.request().postDataJSON().field
+    reads.push(field)
+    const value = field === '/private_accounts' ? [{ cookie: 'private-cookie' }]
+      : field === '/accounts/0/cookie' ? 'first-cookie' : 'second-cookie'
+    return json(route, { field, value })
+  })
+  await page.goto('/#/plugins')
+  await page.getByText('手机配置测试', { exact: true }).click()
+  const modal = page.locator('.modal.modal-wide')
+  await expect(modal.locator('.secret-input input').first()).toHaveValue('********')
+  expect(reads).toEqual([])
+  await modal.getByRole('button', { name: '显示内容' }).first().click()
+  await expect(modal.locator('.secret-input input').first()).toHaveValue('first-cookie')
+  await modal.locator('.row-del').first().click()
+  await expect(modal.locator('.row-card')).toHaveCount(1)
+  await expect(modal.locator('.secret-input input').first()).toHaveValue('second-cookie')
+  await modal.getByRole('button', { name: '读取已保存内容' }).click()
+  await expect(modal.locator('.row-card')).toHaveCount(2)
+  await modal.getByRole('button', { name: '保存并应用' }).click()
+  await expect(modal).toBeHidden()
+  expect(reads).toEqual(['/accounts/0/cookie', '/accounts/1/cookie', '/private_accounts'])
+  expect(saved.accounts).toEqual([{ name: 'two', cookie: 'second-cookie' }])
+  expect(saved.private_accounts).toEqual([{ cookie: 'private-cookie' }])
+})
+
+test('旧安装通过内置确认框确认更新来源，取消不会重新安装', async ({ page }) => {
+  let installations = 0
+  await page.route('**/api/plugins/store/install', (route) => {
+    installations += 1
+    return json(route, { ok: true, plugin: { loaded: false } })
+  })
+  await page.route('**/api/plugins/store*', (route) => {
+    return json(route, { plugins: [{ id: 'source_demo', name: '来源确认测试', installed: true,
+      from_manifest: true, version: '1.0.0', local_version: '1.0.0', source_confirmed: false,
+      repo: 'Example/AWBotNest-Plugins', path: 'plugins_v2/source_demo/', install_count: 1,
+    }] })
+  })
+  await page.goto('/#/plugins')
+  await page.getByRole('button', { name: /插件市场/ }).click()
+  await expect(page.getByText('先确认更新来源', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '确认来源', exact: true }).click()
+  const dialog = page.getByRole('dialog', { name: '确认更新来源' })
+  await expect(dialog).toBeVisible()
+  await expect(dialog.getByText(/Example\/AWBotNest-Plugins/)).toBeVisible()
+  await dialog.getByRole('button', { name: '取消', exact: true }).click()
+  expect(installations).toBe(0)
+  await page.getByRole('button', { name: '确认来源', exact: true }).click()
+  await dialog.getByRole('button', { name: '确认来源并安装' }).click()
+  await expect(page.getByText('先确认更新来源', { exact: true })).toBeHidden()
+  expect(installations).toBe(1)
+})
+
 test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {
   await page.goto('/#/plugins')
   await page.getByRole('button', { name: /插件市场/ }).click()

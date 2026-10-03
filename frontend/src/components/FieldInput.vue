@@ -6,7 +6,7 @@
 //   chat：会话选择器，从账号的群/频道/私聊里挑（multi 多选；chat_types 过滤；session 指定账号）
 //   action：动作按钮，点击触发插件 ctx.action(name) 注册的函数（spec.action 为动作名；danger 需确认）
 //   info：只读展示，显示 spec.text 或当前值（配合 ctx.update_config 可当状态显示）
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { api } from '../api'
 import { toast } from '../composables/toast'
 import { confirm } from '../composables/confirm'
@@ -18,6 +18,7 @@ const props = defineProps({
   spec: { type: Object, required: true },
   value: { default: undefined },
   name: { type: String, default: '' },
+  path: { type: Array, default: () => [] },
   pluginId: { type: String, default: '' },
   error: { type: String, default: '' },
 })
@@ -26,14 +27,36 @@ const emit = defineEmits(['update'])
 function set(v) { emit('update', v) }
 
 const secretLoading = ref(false)
+const fieldPath = computed(() => props.path.length ? props.path : [props.name])
+const maskedList = computed(() => props.spec.type === 'list' && props.value === '********')
+let fieldMounted = true
+onBeforeUnmount(() => { fieldMounted = false })
+
+function fieldPointer(path) {
+  return '/' + path.map(part => String(part).replace(/~/g, '~0').replace(/\//g, '~1')).join('/')
+}
+
+function fieldSnapshot() {
+  const pluginId = props.pluginId
+  const pointer = fieldPointer(fieldPath.value)
+  const value = props.value
+  return {
+    pluginId,
+    pointer,
+    current: () => fieldMounted && props.pluginId === pluginId
+      && fieldPointer(fieldPath.value) === pointer && props.value === value,
+  }
+}
+
 async function revealSecret() {
   if (!props.pluginId || props.value !== '********' || secretLoading.value) return
+  const snapshot = fieldSnapshot()
   secretLoading.value = true
   try {
-    const data = await api.revealPluginSecret(props.pluginId, props.name)
-    set(String(data.value ?? ''))
+    const data = await api.revealPluginSecret(snapshot.pluginId, snapshot.pointer)
+    if (snapshot.current()) set(data.value ?? '')
   } catch (e) {
-    toast.error(e.message || '读取敏感配置失败')
+    if (snapshot.current()) toast.error(e.message || '读取敏感配置失败')
   } finally {
     secretLoading.value = false
   }
@@ -58,8 +81,16 @@ const selectOptions = computed(() => normOptions(props.spec.options))
 onMounted(() => {
   if (props.spec.type !== 'select') return
   const opts = selectOptions.value
-  if (opts.length && !opts.some((o) => o.value === props.value)) set(opts[0].value)
+  if (!opts.length || opts.some((o) => o.value === props.value)) return
+  // 兼容旧表单把数字/布尔选项保存成字符串的配置。
+  const legacy = opts.filter(o => String(o.value) === props.value)
+  set(legacy.length === 1 ? legacy[0].value : opts[0].value)
 })
+
+function selectValue(event) {
+  const option = selectOptions.value[event.target.selectedIndex]
+  if (option) set(option.value)
+}
 
 // ── list 行操作 ──
 const rows = computed(() => (Array.isArray(props.value) ? props.value : []))
@@ -76,8 +107,42 @@ function newRow() {
   }
   return r
 }
-function addRow() { set([...rows.value, newRow()]) }
-function delRow(i) { const a = [...rows.value]; a.splice(i, 1); set(a) }
+function addRow() {
+  if (!maskedList.value && !secretLoading.value) set([...rows.value, newRow()])
+}
+
+async function unmaskListValue(spec, value, path, pluginId) {
+  if (value === '********' && (spec.secret || spec.type === 'password')) {
+    return (await api.revealPluginSecret(pluginId, fieldPointer(path))).value
+  }
+  if (spec.type !== 'list' || !Array.isArray(value)) return value
+  return Promise.all(value.map(async (row, index) => {
+    const next = { ...row }
+    for (const [key, child] of Object.entries(spec.fields || {})) {
+      if (Object.hasOwn(next, key)) {
+        next[key] = await unmaskListValue(child, row[key], [...path, index, key], pluginId)
+      }
+    }
+    return next
+  }))
+}
+
+async function delRow(i) {
+  if (maskedList.value || secretLoading.value) return
+  const snapshot = fieldSnapshot()
+  secretLoading.value = true
+  try {
+    // 删除行会改变后续字段路径，先取回原路径的敏感值再移动。
+    const next = await unmaskListValue(props.spec, rows.value, fieldPath.value, snapshot.pluginId)
+    if (!snapshot.current()) return
+    next.splice(i, 1)
+    set(next)
+  } catch (e) {
+    if (snapshot.current()) toast.error(e.message || '读取敏感配置失败，未删除账号')
+  } finally {
+    secretLoading.value = false
+  }
+}
 function setCell(i, k, v) { set(rows.value.map((r, j) => (j === i ? { ...r, [k]: v } : r))) }
 
 // ── chat 会话选择器 ──
@@ -196,8 +261,12 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
       <!-- slider 当前值 -->
       <span v-else-if="spec.type === 'slider'" class="slider-val">{{ value }}</span>
     </div>
+    <SecretInput v-if="spec.secret && !['password', 'list'].includes(spec.type) && value === '********'"
+                 :model-value="value" :disabled="secretLoading"
+                 @reveal="revealSecret" @update:model-value="set" />
+
     <!-- info → 只读展示 -->
-    <div v-if="spec.type === 'info'" class="info-box">
+    <div v-else-if="spec.type === 'info'" class="info-box">
       <svg class="info-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
       <span>{{ infoText || '—' }}</span>
     </div>
@@ -241,21 +310,24 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
 
     <!-- list → 可增删行 -->
     <div v-else-if="spec.type === 'list'" class="list">
+      <button v-if="maskedList" type="button" class="row-add" :disabled="secretLoading" @click="revealSecret">
+        {{ secretLoading ? '读取中…' : '读取已保存内容' }}
+      </button>
       <div v-for="(row, i) in rows" :key="i" class="row-card">
         <div class="row-head">
           <span class="row-title">{{ (spec.item_label || '项') + ' ' + (i + 1) }}</span>
-          <button type="button" class="row-del" @click="delRow(i)">删除</button>
+          <button type="button" class="row-del" :disabled="secretLoading" @click="delRow(i)">删除</button>
         </div>
         <FieldInput v-for="(sub, k) in spec.fields" :key="k"
-                    :spec="sub" :name="k" :value="row[k]" :plugin-id="pluginId"
+                    :spec="sub" :name="k" :path="[...fieldPath, i, k]" :value="row[k]" :plugin-id="pluginId"
                     @update="(v) => setCell(i, k, v)" />
       </div>
-      <button type="button" class="row-add" @click="addRow">+ 添加{{ spec.item_label || '一项' }}</button>
+      <button v-if="!maskedList" type="button" class="row-add" :disabled="secretLoading" @click="addRow">+ 添加{{ spec.item_label || '一项' }}</button>
     </div>
 
     <!-- select -->
     <select v-else-if="spec.type === 'select'" class="select"
-            :value="value" @change="set($event.target.value)">
+            :value="value" @change="selectValue">
       <option v-for="o in selectOptions" :key="o.value" :value="o.value">{{ o.label }}</option>
     </select>
 

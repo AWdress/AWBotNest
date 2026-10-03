@@ -164,12 +164,14 @@ def create_router(deps) -> APIRouter:
         return {"ok": True}
 
     @router.post("/api/auth/change_credentials", dependencies=[Depends(require_admin)])
-    async def change_credentials(body: CredentialBody):
+    async def change_credentials(body: CredentialBody, response: Response):
         if not password_matches(body.old_password):
             raise HTTPException(status_code=400, detail="当前密码错误")
         username = body.new_username.strip() or settings.admin_username
         if not username:
             raise HTTPException(status_code=400, detail="用户名不能为空")
+        if body.new_password and len(body.new_password) < 4:
+            raise HTTPException(status_code=400, detail="密码至少 4 位")
         settings.admin_username = username
         if body.new_password:
             settings.admin_salt = secrets.token_hex(16)
@@ -178,12 +180,16 @@ def create_router(deps) -> APIRouter:
             ).hex()
             settings.admin_token = secrets.token_urlsafe(32)
         save_settings(settings)
+        response.set_cookie("awbotnest_resource", settings.admin_token, httponly=True,
+                            samesite="lax", path="/api/plugins")
         return {"ok": True, "username": username, "token": settings.admin_token}
 
     @router.post("/api/auth/rotate_token", dependencies=[Depends(require_admin)])
-    async def rotate_admin_token():
+    async def rotate_admin_token(response: Response):
         settings.admin_token = secrets.token_urlsafe(32)
         save_settings(settings)
+        response.set_cookie("awbotnest_resource", settings.admin_token, httponly=True,
+                            samesite="lax", path="/api/plugins")
         return {"ok": True, "token": settings.admin_token}
 
     @router.get("/api/ui/profile", dependencies=[Depends(require_admin)])

@@ -61,7 +61,7 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
     market = market or PluginMarket(settings)
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
                            admin_dependency(settings), time.monotonic(), ResourceSampler())
-    register_open_api(app, settings, accounts, runtime)
+    register_open_api(app, settings, accounts, runtime, market=market)
     app.include_router(system_router(deps))
     plugin_router, list_plugins = plugin_routes_router(deps)
     app.include_router(plugin_router)

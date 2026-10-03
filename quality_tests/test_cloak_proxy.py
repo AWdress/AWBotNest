@@ -4,6 +4,7 @@ import asyncio
 import sys
 import threading
 import time
+import unittest
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
@@ -238,3 +239,38 @@ def test_hot_reload_clears_maintenance_and_discards_old_cloak_modules():
         assert gate.snapshot()["maintenance"] is False
     finally:
         cloak_proxy._SESSION_GATE = original_gate
+
+
+class AsyncCloakCancellationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_cancellation_after_worker_acquires_a_seat_releases_it(self):
+        gate = cloak_proxy._FreeSessionGate()
+        acquired = threading.Event()
+        finish = threading.Event()
+        original_acquire = gate.acquire
+
+        def delayed_handoff(*args, **kwargs):
+            lease = original_acquire(*args, **kwargs)
+            acquired.set()
+            if not finish.wait(2):
+                lease.release()
+                raise TimeoutError("test handoff was not released")
+            return lease
+
+        with patch.object(cloak_proxy, "_SESSION_GATE", gate), \
+                patch.object(cloak_proxy, "_platform_license_key", return_value="cb_free"), \
+                patch.object(gate, "acquire", side_effect=delayed_handoff):
+            waiter = asyncio.create_task(cloak_proxy._acquire_session_async())
+            try:
+                self.assertTrue(await asyncio.to_thread(acquired.wait, 1))
+                waiter.cancel()
+                await asyncio.sleep(0)
+                waiter.cancel()  # A second lifecycle cancellation must also be safe.
+            finally:
+                finish.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await waiter
+            self.assertFalse(gate.snapshot()["active"])
+            self.assertEqual(gate.snapshot()["waiting"], 0)
+            next_lease = await asyncio.to_thread(gate.acquire, timeout=.2)
+            self.assertIsNotNone(next_lease)
+            next_lease.release()

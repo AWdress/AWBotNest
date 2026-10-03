@@ -299,9 +299,13 @@ class PluginRuntime:
             except Exception:
                 logger.exception("停止插件失败，继续清理其他插件：%s", self.display_name(plugin_id))
 
-    async def refresh_telegram_plugins(self) -> None:
+    async def refresh_telegram_plugins(self, *, scopes: set[str] | None = None,
+                                       account_name: str = "") -> None:
+        scopes = scopes if scopes is not None else {"user", "both"}
         candidates = [item.id for item in self.scan()
-                      if item.id in self.settings.enabled_plugins and item.scope in {"user", "both"}]
+                      if item.id in self.settings.enabled_plugins and item.scope in scopes
+                      and (not account_name or not self.settings.plugin_accounts.get(item.id)
+                           or account_name in self.settings.plugin_accounts[item.id])]
         # 按加载顺序先逆序卸载，再按依赖顺序恢复。
         for plugin_id in reversed(list(self.loaded)):
             if plugin_id in candidates:

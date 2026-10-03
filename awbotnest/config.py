@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -27,6 +28,127 @@ def validate_config_format(value: object) -> None:
         raise ValueError("配置文件必须是 JSON 对象")
     if any(key in value for key in ("API_ID", "API_HASH", "BOTS", "AI_SERVICES")):
         raise ValueError("配置文件格式不受支持，请为 V2 使用独立的数据目录")
+    # Validate the persisted form before a restore replaces the working file.
+    # Optional fields stay optional so backups from earlier V2 releases work.
+    def fail(field: str) -> None:
+        raise ValueError(f"配置项 {field} 格式不正确")
+
+    numeric = {"api_id": (0, 2**31 - 1), "web_port": (1, 65535),
+               "plugin_repo_interval": (1, 525600)}
+    for key, (minimum, maximum) in numeric.items():
+        if key in value:
+            item = value[key]
+            if isinstance(item, bool) or not isinstance(item, (int, str)):
+                fail(key)
+            if isinstance(item, str) and not re.fullmatch(r"[0-9]+", item):
+                fail(key)
+            if not minimum <= int(item) <= maximum:
+                fail(key)
+    string_fields = {
+        "api_hash", "bot_token", "bot_name", "default_bot_id", "default_bot_chat_id",
+        "admin_token", "admin_username", "admin_salt", "admin_password_hash", "web_host",
+        "ai_base_url", "ai_api_key", "ai_model", "proxy_url", "webhook_secret", "api_key",
+        "pip_index_url", "github_token", "browser_engine", "cloakbrowser_license_key",
+    }
+    for key in string_fields & value.keys():
+        if not isinstance(value[key], str):
+            fail(key)
+    if value.get("browser_engine") not in (None, "", "chromium", "cloakbrowser"):
+        fail("browser_engine")
+    if "cloakbrowser_use_free_key" in value and not isinstance(value["cloakbrowser_use_free_key"], bool):
+        fail("cloakbrowser_use_free_key")
+    salt, password_hash = value.get("admin_salt", ""), value.get("admin_password_hash", "")
+    if bool(salt) != bool(password_hash) or (salt and (
+            not re.fullmatch(r"[0-9a-fA-F]{32}", salt)
+            or not re.fullmatch(r"[0-9a-fA-F]{64}", password_hash))):
+        fail("admin_password_hash")
+    for key in ("enabled_plugins", "user_sessions", "plugin_order", "plugin_repos"):
+        if key not in value:
+            continue
+        if not isinstance(value[key], list) or any(not isinstance(item, str) for item in value[key]):
+            fail(key)
+        if key == "user_sessions" and any(not re.fullmatch(r"[A-Za-z0-9_]+", item) for item in value[key]):
+            fail(key)
+    bots = value.get("bots", [])
+    if not isinstance(bots, list):
+        fail("bots")
+    bot_ids: set[str] = set()
+    for item in bots:
+        if not isinstance(item, dict) or any(not isinstance(item.get(key, ""), str)
+                                             for key in ("id", "name", "token")):
+            fail("bots")
+        bot_id = item.get("id", "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", bot_id) or bot_id in bot_ids or bot_id == "default":
+            fail("bots")
+        bot_ids.add(bot_id)
+    if value.get("default_bot_id", "default") not in {"", "default", *bot_ids}:
+        fail("default_bot_id")
+    for key in ("plugin_config", "plugin_accounts", "bot_routing", "ai_settings", "cookie_settings", "log_cleaner"):
+        if key in value and not isinstance(value[key], dict):
+            fail(key)
+    for key, item in value.get("plugin_config", {}).items():
+        if not isinstance(key, str) or not isinstance(item, dict):
+            fail("plugin_config")
+    for key, item in value.get("plugin_accounts", {}).items():
+        if (not isinstance(key, str) or not isinstance(item, list)
+                or any(not isinstance(account, str) or not re.fullmatch(r"[A-Za-z0-9_]+", account)
+                       for account in item)):
+            fail("plugin_accounts")
+    if any(not isinstance(key, str) or not isinstance(item, str)
+           for key, item in value.get("bot_routing", {}).items()):
+        fail("bot_routing")
+    channels = value.get("notification_channels", [])
+    if not isinstance(channels, list) or any(not isinstance(item, dict) for item in channels):
+        fail("notification_channels")
+    for item in channels:
+        if any(key in item and not isinstance(item[key], str) for key in ("id", "type", "name")):
+            fail("notification_channels")
+        if "config" in item and not isinstance(item["config"], dict):
+            fail("notification_channels.config")
+    cleaner = value.get("log_cleaner", {})
+    for key, (minimum, maximum) in {"hour": (0, 23), "minute": (0, 59), "keep_lines": (1, 1000)}.items():
+        if key in cleaner and (isinstance(cleaner[key], bool) or not isinstance(cleaner[key], int)
+                               or not minimum <= cleaner[key] <= maximum):
+            fail(f"log_cleaner.{key}")
+    if "enabled" in cleaner and not isinstance(cleaner["enabled"], bool):
+        fail("log_cleaner.enabled")
+    ai = value.get("ai_settings", {})
+    for key in ("providers", "models"):
+        if key in ai and (not isinstance(ai[key], list)
+                         or any(not isinstance(item, dict) for item in ai[key])):
+            fail(f"ai_settings.{key}")
+        for item in ai.get(key, []):
+            if any(field in item and not isinstance(item[field], str)
+                   for field in ("id", "name", "alias", "api_key", "base_url", "model", "provider_id", "api_format")):
+                fail(f"ai_settings.{key}")
+            if "enabled" in item and not isinstance(item["enabled"], bool):
+                fail(f"ai_settings.{key}.enabled")
+            if "capabilities" in item and (not isinstance(item["capabilities"], list)
+                                            or any(not isinstance(capability, str) for capability in item["capabilities"])):
+                fail(f"ai_settings.{key}.capabilities")
+    for key in ("capabilities", "plugin_permissions"):
+        if key in ai and (not isinstance(ai[key], dict)
+                          or any(not isinstance(item, dict) for item in ai[key].values())):
+            fail(f"ai_settings.{key}")
+    for item in ai.get("plugin_permissions", {}).values():
+        if "models" in item and not isinstance(item["models"], dict):
+            fail("ai_settings.plugin_permissions.models")
+        if "capabilities" in item and (not isinstance(item["capabilities"], list)
+                                        or any(not isinstance(capability, str) for capability in item["capabilities"])):
+            fail("ai_settings.plugin_permissions.capabilities")
+    cookie = value.get("cookie_settings", {})
+    for key in ("uuid", "password", "token", "remote_url", "remote_uuid", "remote_password", "crypto_type", "remote_crypto_type"):
+        if key in cookie and not isinstance(cookie[key], str):
+            fail(f"cookie_settings.{key}")
+    if "remote_interval_minutes" in cookie:
+        interval = cookie["remote_interval_minutes"]
+        if (isinstance(interval, bool) or not isinstance(interval, (int, str))
+                or isinstance(interval, str) and not re.fullmatch(r"[0-9]+", interval)
+                or not 0 <= int(interval) <= 525600):
+            fail("cookie_settings.remote_interval_minutes")
+    if "remote_domains" in cookie and (not isinstance(cookie["remote_domains"], list)
+                                        or any(not isinstance(domain, str) for domain in cookie["remote_domains"])):
+        fail("cookie_settings.remote_domains")
 
 
 @dataclass(slots=True)

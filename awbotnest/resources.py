@@ -9,7 +9,7 @@ import psutil
 _MIB = 1024 * 1024
 
 
-def _read_positive_int(path: Path) -> int | None:
+def _read_positive_int(path: Path, *, allow_zero: bool = False) -> int | None:
     """Read a positive cgroup byte counter, ignoring unlimited values."""
     try:
         value = path.read_text(encoding="ascii").strip()
@@ -17,12 +17,12 @@ def _read_positive_int(path: Path) -> int | None:
             return None
         parsed = int(value)
         # Cgroup v1 commonly represents "unlimited" with a huge sentinel.
-        return parsed if 0 < parsed < (1 << 60) else None
+        return parsed if (0 if allow_zero else 1) <= parsed < (1 << 60) else None
     except (OSError, ValueError):
         return None
 
 
-def _linux_cgroup_memory() -> tuple[int, int] | None:
+def _linux_cgroup_memory() -> tuple[int, int | None] | None:
     candidates = (
         (
             Path("/sys/fs/cgroup/memory.current"),
@@ -34,10 +34,10 @@ def _linux_cgroup_memory() -> tuple[int, int] | None:
         ),
     )
     for usage_path, limit_path in candidates:
-        usage = _read_positive_int(usage_path)
+        usage = _read_positive_int(usage_path, allow_zero=True)
         limit = _read_positive_int(limit_path)
-        if usage is not None and limit is not None:
-            return min(usage, limit), limit
+        if usage is not None:
+            return usage, limit
     return None
 
 
@@ -56,8 +56,10 @@ class ResourceSampler:
 
         if platform.system() == "Linux":
             cgroup = _linux_cgroup_memory()
-            if cgroup is not None and cgroup[1] < limit_bytes:
-                used_bytes, limit_bytes = cgroup
+            if cgroup is not None:
+                used_bytes = cgroup[0]
+                if cgroup[1] is not None:
+                    limit_bytes = min(cgroup[1], limit_bytes)
 
         return {
             "cpu_percent": round(psutil.cpu_percent(interval=None), 1),

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import hashlib
 import io
+import re
 import shutil
 import stat
 import zipfile
@@ -79,6 +80,8 @@ class BackupManager:
                     or "\\" in item.orig_filename or stat.S_ISLNK(item.external_attr >> 16)):
                 raise ValueError("备份包含不安全路径")
             if not item.is_dir():
+                if name.as_posix() in members:
+                    raise ValueError("备份包含重复文件")
                 members[name.as_posix()] = item
         return members
 
@@ -221,6 +224,10 @@ class BackupManager:
 
     @classmethod
     def apply_pending(cls) -> bool:
+        # A previous process may have stopped between replacement and readiness.
+        # Never repeatedly boot an unconfirmed restored configuration.
+        if cls._transaction_path().exists():
+            cls.rollback_restore()
         if not PENDING_RESTORE.exists():
             return False
         config = cls._read_config(PENDING_RESTORE)
@@ -232,6 +239,12 @@ class BackupManager:
         temporary = DATA_DIR / ".config-restore.tmp"
         if target.exists():
             shutil.copy2(target, rollback)
+        transaction = cls._transaction_path()
+        transaction_temp = transaction.with_suffix(".tmp")
+        transaction_temp.write_text(json.dumps({
+            "rollback": rollback.name, "had_config": target.exists(),
+        }), encoding="utf-8")
+        transaction_temp.replace(transaction)
         try:
             temporary.write_text(
                 json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8",
@@ -241,4 +254,45 @@ class BackupManager:
             return True
         except Exception:
             temporary.unlink(missing_ok=True)
+            cls.rollback_restore()
             raise
+
+    @staticmethod
+    def _transaction_path() -> Path:
+        return DATA_DIR / ".restore-transaction.json"
+
+    @classmethod
+    def commit_restore(cls) -> None:
+        """Confirm the imported configuration only after the system is ready."""
+        cls._transaction_path().unlink(missing_ok=True)
+
+    @classmethod
+    def rollback_restore(cls) -> bool:
+        """Recover the previous file after startup failure or interrupted startup."""
+        transaction = cls._transaction_path()
+        if not transaction.exists():
+            return False
+        marker = json.loads(transaction.read_text(encoding="utf-8"))
+        rollback_name = marker.get("rollback", "") if isinstance(marker, dict) else ""
+        if not isinstance(rollback_name, str) or not re.fullmatch(
+                r"before-config-restore-[0-9-]+\.json", rollback_name):
+            raise ValueError("配置恢复记录格式不正确")
+        target = DATA_DIR / "config.json"
+        rollback = BACKUP_DIR / rollback_name
+        if marker.get("had_config") and not rollback.is_file():
+            raise ValueError("恢复前的配置备份不存在")
+        if target.exists():
+            failed = BACKUP_DIR / rollback_name.replace("before-config-restore-", "failed-config-restore-")
+            shutil.copy2(target, failed)
+        temporary = DATA_DIR / ".config-rollback.tmp"
+        try:
+            if marker.get("had_config"):
+                shutil.copy2(rollback, temporary)
+                temporary.replace(target)
+            else:
+                target.unlink(missing_ok=True)
+            PENDING_RESTORE.unlink(missing_ok=True)
+            transaction.unlink()
+            return True
+        finally:
+            temporary.unlink(missing_ok=True)

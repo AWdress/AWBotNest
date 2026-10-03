@@ -43,35 +43,39 @@ class BrowserService:
         options = {"headless": headless}
         if proxy:
             options["proxy"] = proxy
-        if self.engine == "cloakbrowser":
-            from ..cloak_proxy import configure_cloakbrowser
-            configure_cloakbrowser(self.settings)
-            from cloakbrowser import launch
-            browser = launch(**options)
-            playwright = None
-        else:
-            from playwright.sync_api import sync_playwright
-            playwright = sync_playwright().start()
-            browser = playwright.chromium.launch(**options)
+        elif proxy is False and self.engine == "cloakbrowser":
+            options["proxy"] = None
+        playwright = browser = context = None
         try:
+            if self.engine == "cloakbrowser":
+                from ..cloak_proxy import configure_cloakbrowser
+                configure_cloakbrowser(self.settings)
+                from cloakbrowser import launch
+                browser = launch(**options)
+            else:
+                from playwright.sync_api import sync_playwright
+                playwright = sync_playwright().start()
+                browser = playwright.chromium.launch(**options)
             context = browser.new_context(**({"user_agent": user_agent} if user_agent else {}))
-            try:
-                if isinstance(cookies, str):
-                    context.set_extra_http_headers({"Cookie": cookies})
-                elif cookies:
-                    context.add_cookies(cookies)
-                page = context.new_page()
-                page.set_default_timeout(timeout * 1000)
-                page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
-                return action(page)
-            finally:
-                context.close()
+            if isinstance(cookies, str):
+                context.set_extra_http_headers({"Cookie": cookies})
+            elif cookies:
+                context.add_cookies(cookies)
+            page = context.new_page()
+            page.set_default_timeout(timeout * 1000)
+            page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+            return action(page)
         finally:
             try:
-                browser.close()
+                if context is not None:
+                    context.close()
             finally:
-                if playwright is not None:
-                    playwright.stop()
+                try:
+                    if browser is not None:
+                        browser.close()
+                finally:
+                    if playwright is not None:
+                        playwright.stop()
 
     @property
     def engine(self) -> str:
@@ -82,7 +86,9 @@ class BrowserService:
                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
                   user_agent: str = "", ua: str | None = None, proxy=None) -> Any:
         user_agent = user_agent or ua or ""
-        resolved_proxy = self._proxy(self.settings.proxy_url if proxy is None else proxy)
+        # Preserve explicit direct mode for CloakBrowser's inheritance wrapper.
+        resolved_proxy = (False if proxy is False or proxy == "" else
+                          self._proxy(self.settings.proxy_url if proxy is None else proxy))
         if not (inspect.iscoroutinefunction(action) or inspect.iscoroutinefunction(getattr(action, "__call__", None))):
             # V1 的同步 action 必须收到同步 Page，否则 click 等调用不会执行。
             async with self._serial:
@@ -98,23 +104,24 @@ class BrowserService:
         launch_args: dict[str, object] = {"headless": headless}
         if resolved_proxy:
             launch_args["proxy"] = resolved_proxy
-        playwright = None
+        elif resolved_proxy is False and self.engine == "cloakbrowser":
+            launch_args["proxy"] = None
+        playwright = browser = context = None
         try:
-            if self.engine == "cloakbrowser":
-                from ..cloak_proxy import configure_cloakbrowser
-                configure_cloakbrowser(self.settings)
-                from cloakbrowser import launch_async
-                browser = await launch_async(**launch_args)
-            else:
-                from playwright.async_api import async_playwright
-                playwright = await async_playwright().start()
-                browser = await playwright.chromium.launch(**launch_args)
-        except ImportError as exc:
-            name = "CloakBrowser" if self.engine == "cloakbrowser" else "Playwright"
-            raise RuntimeError(f"浏览器能力未安装，请安装 {name}") from exc
-        context_args = {"user_agent": user_agent} if user_agent else {}
-        context = None
-        try:
+            try:
+                if self.engine == "cloakbrowser":
+                    from ..cloak_proxy import configure_cloakbrowser
+                    configure_cloakbrowser(self.settings)
+                    from cloakbrowser import launch_async
+                    browser = await launch_async(**launch_args)
+                else:
+                    from playwright.async_api import async_playwright
+                    playwright = await async_playwright().start()
+                    browser = await playwright.chromium.launch(**launch_args)
+            except ImportError as exc:
+                name = "CloakBrowser" if self.engine == "cloakbrowser" else "Playwright"
+                raise RuntimeError(f"浏览器能力未安装，请安装 {name}") from exc
+            context_args = {"user_agent": user_agent} if user_agent else {}
             context = await browser.new_context(**context_args)
             if isinstance(cookies, str):
                 await context.set_extra_http_headers({"Cookie": cookies})
@@ -131,7 +138,8 @@ class BrowserService:
                     await context.close()
             finally:
                 try:
-                    await browser.close()
+                    if browser is not None:
+                        await browser.close()
                 finally:
                     if playwright is not None:
                         await playwright.stop()

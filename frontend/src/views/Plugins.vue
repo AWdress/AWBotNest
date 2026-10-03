@@ -54,6 +54,7 @@ const configBotSaving = ref(false)
 const configBotReady = ref(false)
 let configRequestId = 0
 let configBotRequestId = 0
+let webhookRequestId = 0
 let selfCheckRequestId = 0
 const notificationSyncSource = `plugins_${Math.random().toString(36).slice(2)}`
 let stopNotificationSync = null
@@ -160,6 +161,30 @@ const acctReady = ref(false)
 const acctSaving = ref(false)
 let acctRequestId = 0
 
+function isConfigCurrent(pluginId, generation) {
+  return configRequestId === generation && configTarget.value?.id === pluginId
+}
+
+function closeConfig() {
+  configRequestId += 1
+  configBotRequestId += 1
+  acctRequestId += 1
+  webhookRequestId += 1
+  configOpen.value = false
+  configTarget.value = null
+  configScopeDropdown.value = ''
+  configScopeTrigger = null
+  configSaving.value = false
+  configBotSaving.value = false
+  configBotLoading.value = false
+  configBotReady.value = false
+  acctSaving.value = false
+  acctLoading.value = false
+  acctReady.value = false
+  webhookSecret.value = ''
+  webhookPath.value = ''
+}
+
 const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号', standalone: '独立运行' }
 
 async function load() {
@@ -234,6 +259,8 @@ async function remove(p) {
 
 async function loadConfigAccounts(pluginId) {
   const requestId = ++acctRequestId
+  const generation = configRequestId
+  const current = () => requestId === acctRequestId && isConfigCurrent(pluginId, generation)
   acctOptions.value = []
   acctSelected.value = []
   acctAllMode.value = true
@@ -241,15 +268,15 @@ async function loadConfigAccounts(pluginId) {
   acctReady.value = false
   try {
     const data = await api.getPluginAccounts(pluginId)
-    if (requestId !== acctRequestId) return
+    if (!current()) return
     acctOptions.value = data.accounts || []
     acctSelected.value = [...(data.selected || [])]
     acctAllMode.value = acctSelected.value.length === 0
     acctReady.value = true
   } catch (e) {
-    if (requestId === acctRequestId) toast.error('读取生效账号失败：' + e.message)
+    if (current()) toast.error('读取生效账号失败：' + e.message)
   } finally {
-    if (requestId === acctRequestId) acctLoading.value = false
+    if (current()) acctLoading.value = false
   }
 }
 
@@ -334,14 +361,14 @@ function eventLabel(type) {
 
 async function openConfig(p) {
   closeMenu()
-  configScopeDropdown.value = ''
+  closeConfig()
   configTarget.value = p
   // 请求序号守卫：快速连点两个插件的「配置」时，先发的请求可能后返回，
   // 若不丢弃过期响应，会把旧插件的表单写进已切到新插件的弹窗，保存时配置串号。
-  const requestId = ++configRequestId
+  const requestId = configRequestId
   try {
     const data = await api.getPluginConfig(p.id)
-    if (requestId !== configRequestId) return
+    if (!isConfigCurrent(p.id, requestId)) return
     configSchema.value = data.schema || {}
     configValues.value = data.values || {}
     configRenderMode.value = data.render_mode || 'schema'
@@ -351,13 +378,15 @@ async function openConfig(p) {
     loadConfigBot(p.id)
     if (p.scope === 'user' || p.scope === 'both') loadConfigAccounts(p.id)
   } catch (e) {
-    if (requestId !== configRequestId) return
+    if (!isConfigCurrent(p.id, requestId)) return
     error.value = e.message
   }
 }
 
 async function loadConfigBot(pluginId) {
   const requestId = ++configBotRequestId
+  const generation = configRequestId
+  const current = () => requestId === configBotRequestId && isConfigCurrent(pluginId, generation)
   configBotLoading.value = true
   configBotReady.value = false
   configBots.value = []
@@ -365,7 +394,7 @@ async function loadConfigBot(pluginId) {
   configBotConfirmed.value = []
   try {
     const data = await api.getBotsRouting()
-    if (requestId !== configBotRequestId) return
+    if (!current()) return
     const selectedStr = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
     configBots.value = data.bots || []
 
@@ -381,31 +410,35 @@ async function loadConfigBot(pluginId) {
     configBotConfirmed.value = [...selected]
     configBotReady.value = true
   } catch (e) {
-    if (requestId === configBotRequestId) toast.error('读取通知渠道失败：' + e.message)
+    if (current()) toast.error('读取通知渠道失败：' + e.message)
   } finally {
-    if (requestId === configBotRequestId) configBotLoading.value = false
+    if (current()) configBotLoading.value = false
   }
 }
 
 async function saveConfigBot() {
   if (!configTarget.value || configBotSaving.value) return
+  const target = configTarget.value
+  const generation = configRequestId
   const previous = [...configBotConfirmed.value]
   configBotSaving.value = true
   try {
     const botIdStr = configBotChoice.value.join(',')
-    const data = await api.setBotRouting(configTarget.value.id, botIdStr)
+    const data = await api.setBotRouting(target.id, botIdStr)
+    api.clearCache()
+    publishNotificationSync({ source: notificationSyncSource, type: 'routing', pluginId: target.id })
+    if (!isConfigCurrent(target.id, generation)) return
     const savedValue = data.bot ?? data.bot_id ?? ''
     const saved = savedValue ? savedValue.split(',').map(s => s.trim()).filter(Boolean) : []
     configBotChoice.value = saved
     configBotConfirmed.value = [...saved]
-    api.clearCache()
-    publishNotificationSync({ source: notificationSyncSource, type: 'routing', pluginId: configTarget.value.id })
-    toast.success(`「${configTarget.value.name}」通知渠道已更新`)
+    toast.success(`「${target.name}」通知渠道已更新`)
   } catch (e) {
+    if (!isConfigCurrent(target.id, generation)) return
     configBotChoice.value = previous
     toast.error('保存通知渠道失败：' + e.message)
   } finally {
-    configBotSaving.value = false
+    if (isConfigCurrent(target.id, generation)) configBotSaving.value = false
   }
 }
 
@@ -443,6 +476,7 @@ const configAccountSummary = computed(() => {
 })
 
 function toggleConfigBot(id) {
+  if (!configBotReady.value || configBotSaving.value) return
   const idx = configBotChoice.value.indexOf(id)
   if (idx >= 0) configBotChoice.value.splice(idx, 1)
   else configBotChoice.value.push(id)
@@ -481,11 +515,15 @@ const webhookUrl = computed(() => {
 })
 
 async function loadWebhook() {
+  const target = configTarget.value
+  const generation = configRequestId
+  const requestId = ++webhookRequestId
   webhookSecret.value = ''
   webhookPath.value = ''
-  if (!configTarget.value?.webhook) return
+  if (!target?.webhook) return
   try {
-    const d = await api.getPluginWebhook(configTarget.value.id)
+    const d = await api.getPluginWebhook(target.id)
+    if (requestId !== webhookRequestId || !isConfigCurrent(target.id, generation)) return
     webhookSecret.value = d.secret || ''
     webhookPath.value = d.path || ''
   } catch { /* 配置弹窗照常打开，webhook 区留空 */ }
@@ -500,23 +538,27 @@ async function copyWebhookUrl() {
 const configFormRef = ref(null)
 
 async function saveConfig() {
+  if (!configTarget.value || !configOpen.value || configSaving.value) return
   // 保存前校验（必填 / 数字范围）；不过就停在弹窗里提示，不提交
   if (configFormRef.value && !configFormRef.value.validate()) {
     toast.error('请检查标红的必填项或超范围的数值')
     return
   }
   configSaving.value = true
+  const target = configTarget.value
+  const generation = configRequestId
   try {
-    await api.setPluginConfig(configTarget.value.id, configValues.value)
-    configOpen.value = false
+    await api.setPluginConfig(target.id, configValues.value)
+    if (isConfigCurrent(target.id, generation)) closeConfig()
   } catch (e) {
-    error.value = e.message
+    if (isConfigCurrent(target.id, generation)) error.value = e.message
   } finally {
-    configSaving.value = false
+    if (isConfigCurrent(target.id, generation)) configSaving.value = false
   }
 }
 
 async function toggleAcct(session) {
+  if (!acctReady.value || acctSaving.value) return
   const i = acctSelected.value.indexOf(session)
   if (i >= 0 && acctSelected.value.length === 1) {
     toast.error('指定账号模式下请至少保留一个账号')
@@ -532,24 +574,29 @@ async function saveAccounts(previous = null) {
   if (!configTarget.value || acctSaving.value) return
   if (!acctAllMode.value && acctSelected.value.length === 0) return
   acctSaving.value = true
+  const target = configTarget.value
+  const generation = configRequestId
   try {
-    const sessions = acctAllMode.value ? [] : acctSelected.value
-    const data = await api.setPluginAccounts(configTarget.value.id, sessions)
+    const sessions = acctAllMode.value ? [] : [...acctSelected.value]
+    const data = await api.setPluginAccounts(target.id, sessions)
+    if (!isConfigCurrent(target.id, generation)) return
     acctSelected.value = [...(data.selected || [])]
     acctAllMode.value = acctSelected.value.length === 0
     toast.success('账号范围已保存')
   } catch (e) {
+    if (!isConfigCurrent(target.id, generation)) return
     if (previous) {
       acctAllMode.value = previous.allMode
       acctSelected.value = [...previous.selected]
     }
     toast.error('保存生效账号失败：' + e.message)
   } finally {
-    acctSaving.value = false
+    if (isConfigCurrent(target.id, generation)) acctSaving.value = false
   }
 }
 
 function useAllAccounts() {
+  if (!acctReady.value || acctSaving.value) return
   const previous = { allMode: acctAllMode.value, selected: [...acctSelected.value] }
   acctAllMode.value = true
   acctSelected.value = []
@@ -812,11 +859,28 @@ function applyStoreFilters(list) {
   return filtered
 }
 
-const storeAvailable = computed(() => applyStoreFilters(store.value.filter((p) => !p.installed)))
-// 已安装但仓库有新版本的插件：仅当系统记录过下载版本(local_version)且与远端不同才提示，
+function needsSourceConfirmation(plugin) {
+  return plugin.installed && plugin.source_confirmed === false
+}
+
+const storeAvailable = computed(() => applyStoreFilters(store.value.filter((p) =>
+  !p.installed || (needsSourceConfirmation(p) && !hasUpdate(p))
+)))
+// 已安装但仓库有新版本的插件：优先使用服务端的版本比较结果，
 // 本地上传/手动导入(无 local_version)不误报更新，避免静默覆盖本地改动。
 function hasUpdate(p) {
-  return p.installed && p.from_manifest && p.local_version && p.version && p.local_version !== p.version
+  if (typeof p.update_available === 'boolean') return p.installed && p.from_manifest && p.update_available
+  if (!p.installed || !p.from_manifest || !p.local_version || !p.version) return false
+  const parts = value => {
+    const text = String(value).replace(/^v/i, '')
+    return /^\d+(?:\.\d+)*$/.test(text) ? text.split('.').map(Number) : null
+  }
+  const remote = parts(p.version), local = parts(p.local_version)
+  if (!remote || !local) return false
+  for (let index = 0; index < Math.max(remote.length, local.length); index += 1) {
+    if ((remote[index] || 0) !== (local[index] || 0)) return (remote[index] || 0) > (local[index] || 0)
+  }
+  return false
 }
 const storeUpdatable = computed(() => applyStoreFilters(store.value.filter(hasUpdate)))
 const officialSet = computed(() => new Set(officialIds.value))
@@ -1085,15 +1149,19 @@ async function fetchStore(refresh) {
 }
 
 async function download(p) {
+  if (dlBusy.value[p.id] || updateAllBusy.value) return
   const isUpdate = hasUpdate(p)
   dlBusy.value[p.id] = true; storeErr.value = ''
   try {
+    if (!await confirmUpdateSources([p])) return
     const r = await api.storeDownload([p])
     const res = r.result || {}
     if (res.errors && res.errors.length) {
       showStoreNotice(res.errors.join('；'))
     } else {
       p.installed = true
+      p.source_confirmed = true
+      p.auto_update_allowed = true
       p.local_version = p.version   // 记录新版本，清除「有更新」提示
       p.install_count = res.install_counts?.[p.id] ?? p.install_count ?? 0
       await load()
@@ -1115,6 +1183,19 @@ async function download(p) {
   }
 }
 
+async function confirmUpdateSources(plugins) {
+  const unconfirmed = plugins.filter(needsSourceConfirmation)
+  if (!unconfirmed.length) return true
+  const sources = unconfirmed.map(plugin =>
+    `${plugin.name || plugin.id}：${shortRepo(plugin.repo || plugin.repo_url) || '未知仓库'}${plugin.path ? ` / ${plugin.path}` : ''}`
+  ).join('\n')
+  return confirm({
+    title: '确认更新来源',
+    message: `确认后将从以下仓库重新安装插件，并将其设为后续自动更新来源。\n\n${sources}`,
+    confirmText: '确认来源并安装',
+  })
+}
+
 async function updateAll() {
   if (updateAllBusy.value || !storeUpdatable.value.length) return
 
@@ -1124,6 +1205,7 @@ async function updateAll() {
   storeErr.value = ''
 
   try {
+    if (!await confirmUpdateSources(targets)) return
     // The API accepts up to 100 plugins per request. Keep the operation safe
     // for larger stores while preserving the order shown in the UI.
     for (let index = 0; index < targets.length; index += 100) {
@@ -1272,6 +1354,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   pluginPageMounted = false
+  closeConfig()
   loadRequestId += 1
   logsDisconnect()
   cancelStoreLoad()
@@ -1489,6 +1572,7 @@ onUnmounted(() => {
               </div>
 
               <p class="desc">{{ p.description || '（无描述）' }}</p>
+              <p v-if="needsSourceConfirmation(p)" class="hint muted small">先确认更新来源</p>
               <div v-if="pluginTags(p).length" class="plugin-tags" aria-label="插件功能">
                 <span v-for="tag in pluginTags(p)" :key="tag" :title="tag">{{ tag }}</span>
               </div>
@@ -1519,7 +1603,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">可安装</div>
+        <div class="section-label" v-if="storeUpdatable.length && storeAvailable.length">{{ storeAvailable.some(needsSourceConfirmation) ? '安装与来源确认' : '可安装' }}</div>
         <div v-if="storeAvailable.length === 0 && storeUpdatable.length === 0" class="empty card">
           <p class="muted" v-if="storeErr">当前仓库没有适用于此版本的插件，请确认仓库根目录有 manifest_v2.json。</p>
           <p class="muted" v-else>暂无可安装的新插件；也可能还没有添加额外仓库。</p>
@@ -1540,6 +1624,7 @@ onUnmounted(() => {
           </div>
 
           <p class="desc">{{ p.description || '（无描述）' }}</p>
+          <p v-if="needsSourceConfirmation(p)" class="hint muted small">先确认更新来源</p>
           <div v-if="pluginTags(p).length" class="plugin-tags" aria-label="插件功能">
             <span v-for="tag in pluginTags(p)" :key="tag" :title="tag">{{ tag }}</span>
           </div>
@@ -1562,7 +1647,7 @@ onUnmounted(() => {
                 <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                      stroke-linecap="round" stroke-linejoin="round">
                   <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/>
-                </svg>安装
+                </svg>{{ needsSourceConfirmation(p) ? '确认来源' : '安装' }}
               </template>
             </button>
           </div>
@@ -1783,7 +1868,7 @@ onUnmounted(() => {
 
     <!-- 配置弹窗 -->
     <Teleport to="#app">
-    <div v-if="configOpen" class="modal-mask config-modal-mask" @click.self="configOpen=false">
+    <div v-if="configOpen" class="modal-mask config-modal-mask" @click.self="closeConfig">
       <div class="modal card modal-wide">
         <div class="modal-head">
           <div class="config-modal-title">
@@ -1794,7 +1879,7 @@ onUnmounted(() => {
                  @error="useFallbackPluginIcon" />
             <h2>{{ configTarget?.name }} · 配置</h2>
           </div>
-          <button type="button" class="close" aria-label="关闭" @click="configOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <button type="button" class="close" aria-label="关闭" @click="closeConfig"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
         <RemotePluginConfig v-if="configRenderMode === 'vue'"
                     :key="configTarget?.id"
@@ -1903,7 +1988,7 @@ onUnmounted(() => {
         </div>
         <!-- vue 模式由插件组件自己管保存，右上角已有 × 关闭，底部不再重复关闭按钮；schema 模式提供统一保存按钮 -->
         <div v-if="configRenderMode !== 'vue'" class="modal-foot">
-          <button class="btn" @click="configOpen=false">取消</button>
+          <button class="btn" @click="closeConfig">取消</button>
           <button class="btn btn-primary" @click="saveConfig" :disabled="configSaving || !Object.keys(configSchema).length">
             {{ configSaving ? '保存中…' : '保存并应用' }}
           </button>

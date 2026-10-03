@@ -64,6 +64,16 @@ class PluginMarket:
         self._state_path = PLUGINS_DIR.parent / "data" / "repo_sync.json"
         self._last_sync: str | None = None
         self._skipped_manifest_logged: set[str] = set()
+        self._sources_path = PLUGINS_DIR.parent / "data" / "plugin_sources.json"
+        self._sources: dict[str, dict[str, str]] = {}
+        try:
+            source_state = json.loads(self._sources_path.read_text(encoding="utf-8"))
+            entries = source_state.get("plugins", {}) if isinstance(source_state, dict) else {}
+            if isinstance(entries, dict):
+                self._sources = {str(key): dict(item) for key, item in entries.items()
+                                 if isinstance(item, dict)}
+        except (OSError, json.JSONDecodeError):
+            pass
         try:
             state = json.loads(self._state_path.read_text(encoding="utf-8")) if self._state_path.exists() else {}
             if isinstance(state, dict) and isinstance(state.get("store"), dict):
@@ -94,6 +104,8 @@ class PluginMarket:
             plugin.update(installed=installed is not None, installed_version=installed,
                           local_version=installed,
                           update_available=self._newer(str(plugin.get("version") or "0"), installed))
+            plugin["source_confirmed"] = self.source_matches(plugin)
+            plugin["auto_update_allowed"] = installed is not None and plugin["source_confirmed"]
             result["plugins"].append(plugin)
         return result
 
@@ -139,6 +151,39 @@ class PluginMarket:
         temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
 
+    def source_matches(self, plugin: dict[str, Any]) -> bool:
+        """Only explicit successful installs establish an automatic update source."""
+        source = getattr(self, "_sources", {}).get(str(plugin.get("id") or ""), {})
+        if not source:
+            return False
+        try:
+            repo = normalize_repo(str(plugin.get("repo") or "")).casefold()
+            path = _safe_path(str(plugin.get("path") or f"{plugin['id']}.py")).as_posix()
+        except (ValueError, KeyError):
+            return False
+        return repo == str(source.get("repo") or "").casefold() and path == source.get("path")
+
+    def _save_sources(self) -> None:
+        self._sources_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self._sources_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"version": 1, "plugins": self._sources},
+                                         ensure_ascii=False, indent=2), encoding="utf-8")
+        temporary.replace(self._sources_path)
+
+    def confirm_source(self, plugin: dict[str, Any]) -> None:
+        plugin_id = str(plugin.get("id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", plugin_id):
+            raise ValueError("插件 ID 不合法")
+        self._sources[plugin_id] = {
+            "repo": normalize_repo(str(plugin.get("repo") or "")),
+            "path": _safe_path(str(plugin.get("path") or f"{plugin_id}.py")).as_posix(),
+        }
+        self._save_sources()
+
+    def forget_source(self, plugin_id: str) -> None:
+        if getattr(self, "_sources", {}).pop(plugin_id, None) is not None:
+            self._save_sources()
+
     async def record_install(self, plugin: dict[str, Any], event_type: str = "install") -> None:
         """记录本地安装热度并尽力上报中心；网络失败不影响安装。"""
         state_path = PLUGINS_DIR.parent / "data" / "plugin_heat_state.json"
@@ -146,6 +191,8 @@ class PluginMarket:
         plugin_id = str(plugin.get("id") or "").strip()
         if not plugin_id:
             return
+        if plugin.get("repo"):
+            self.confirm_source(plugin)
         event_type = event_type if event_type in {"install", "update"} else "install"
         cycles = state.setdefault("plugin_installations", {})
         cycle = str(cycles.get(plugin_id) or "")
@@ -184,6 +231,7 @@ class PluginMarket:
         state = self._heat_state()
         state.setdefault("plugin_installations", {}).pop(plugin_id, None)
         self._save_heat_state(state)
+        self.forget_source(plugin_id)
 
     async def poll_updates(self, runtime: Any) -> dict[str, Any]:
         async with self.install_lock:
@@ -196,6 +244,8 @@ class PluginMarket:
         errors: list[str] = []
         for plugin in listing.get("plugins", []):
             if not plugin.get("installed") or not plugin.get("update_available"):
+                continue
+            if not self.source_matches(plugin):
                 continue
             plugin_id = str(plugin.get("id") or "")
             plugin_name = str(plugin.get("name") or runtime.display_name(plugin_id))
@@ -484,6 +534,9 @@ class PluginMarket:
                         plugins.append(dict(source))
                 continue
             for plugin in listing["plugins"]:
+                bound = getattr(self, "_sources", {}).get(plugin["id"])
+                if bound and not self.source_matches(plugin):
+                    continue
                 if plugin["id"] not in seen:
                     seen.add(plugin["id"])
                     plugins.append(plugin)

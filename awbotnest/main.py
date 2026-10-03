@@ -16,7 +16,7 @@ from .plugins import PluginRuntime
 from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .services import PlatformServices
-from .logs import create_file_handler, memory_logs
+from .logs import create_file_handler, install_secret_filters, memory_logs
 from .routing import PluginRoutes
 from .notifier import NotificationService
 from .backup import BackupManager
@@ -36,6 +36,16 @@ async def run_once() -> bool:
     restored = BackupManager.apply_pending()
     if restored:
         logging.getLogger("awbotnest.backup").info("已应用待导入配置")
+    try:
+        return await _run_configured_once()
+    except BaseException:
+        if restored and BackupManager.rollback_restore():
+            logger.error("导入配置启动失败，已恢复导入前的配置")
+        raise
+
+
+async def _run_configured_once() -> bool:
+    logger = logging.getLogger("awbotnest.main")
     settings = load_settings()
     accounts = TelegramAccounts(settings)
     scheduler = PluginScheduler()
@@ -73,6 +83,15 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     services = runtime.services
     logger.info("正在初始化 Telegram 账号与插件服务")
 
+    telegram_plugins_ready = asyncio.Event()
+
+    async def refresh_recovered_account(kind: str, account_id: str) -> None:
+        await telegram_plugins_ready.wait()
+        await runtime.refresh_telegram_plugins(
+            scopes={kind, "both"}, account_name=account_id if kind == "user" else "",
+        )
+
+    accounts.on_recovered = refresh_recovered_account
     await accounts.start()
     bot_spec_map = {spec.id: spec.name for spec in settings.bot_specs()}
     bot_names = [bot_spec_map.get(bot_id, bot_id) for bot_id in accounts.bots.keys()]
@@ -86,6 +105,7 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
 
     scanned_plugins = runtime.scan()
     await runtime.restore()
+    telegram_plugins_ready.set()
     logger.info("插件恢复完成，已加载 %d 个（扫描到 %d 个）", len(runtime.loaded), len(scanned_plugins))
 
     async def poll_plugin_market():
@@ -219,7 +239,6 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
     async def initialize_platform() -> None:
         try:
             await start_platform(settings, accounts, runtime, scheduler, market)
-            app.state.platform_ready = True
         except Exception as exc:
             app.state.platform_startup_error = type(exc).__name__
             raise
@@ -231,6 +250,13 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         done, _ = await asyncio.wait({platform_task, server_task}, return_when=asyncio.FIRST_COMPLETED)
         if platform_task in done:
             await platform_task  # Propagate startup failures; do not leave a half-started server.
+            # Initializing plugins can finish before Uvicorn binds its port.
+            # Keep the restore rollback point until both startup paths succeed.
+            while not server.started and not server_task.done():
+                await asyncio.sleep(0.02)
+            if server.started and not server_task.done():
+                BackupManager.commit_restore()
+                app.state.platform_ready = True
         await server_task
     except Exception:
         logger.exception("系统后台任务异常，正在停止服务")
@@ -240,6 +266,7 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         restart_watcher.cancel()
         platform_task.cancel()
         await asyncio.gather(restart_watcher, platform_task, return_exceptions=True)
+        await accounts.stop_recovery()
         startup_refresh = getattr(market, "startup_task", None)
         if startup_refresh is not None:
             startup_refresh.cancel()
@@ -295,6 +322,7 @@ async def run() -> None:
     file_handler = create_file_handler(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
     if file_handler is not None:
         root_logger.addHandler(file_handler)
+    install_secret_filters(root_logger)
     try:
         while await run_once():
             logging.getLogger("awbotnest.main").info("系统正在重新加载配置并启动")

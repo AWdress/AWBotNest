@@ -109,6 +109,13 @@ V2 默认使用 `config_schema` 自动生成配置界面。需要自定义 Vue �
 
 该接口是 V2 的正式插件扩展点，不依赖或修改 V1 前端；插件仍可选择使用 `config_schema`。
 
+敏感字段支持递归声明：`list.fields`、`object.properties` 和 `array.items` 内的 `password`
+或 `secret: True` 字段也会脱敏。顶层 `secret: True` 列表整体返回 `********`，读取后保留数组类型。
+顶层字段仍可用 `host.revealSecret('token')`；嵌套字段使用 JSON Pointer，
+例如 `host.revealSecret('/accounts/0/password')`。字段名中的 `~`、`/` 分别写为 `~0`、`~1`。
+保存时同一路径的 `********` 会保留已保存值。列表删除或重排会改变下标，须先按原路径读取
+待保留行的敏感值，再提交调整后的数组；原生配置表单会自动完成这一步。
+
 ## Python 依赖声明与安装
 
 第三方 Python 包统一写在入口文件的 `__plugin__["requirements"]` 字符串列表中；无依赖时省略或填写 `[]`。仅放置 `requirements.txt`、`pyproject.toml` 或在市场清单中填写依赖，不会让平台自动安装。
@@ -400,6 +407,11 @@ results = await ctx.ocr.classification_many([original, processed])
 
 现有插件继续使用 `ddddocr.DdddOcr()` 也会自动接入同一服务。OCR 模型只在独立工作
 进程中加载，多个插件串行共用，空闲后自动退出；不要自行长期保存 ONNX Runtime 模型。
+
+`classification` 支持 `png_fix`、`probability` 和颜色过滤参数；兼容对象也支持
+`set_ranges`、`slide_comparison` 和自定义模型路径。不同对象的字符范围互不影响。
+只做滑块匹配时使用 `ddddocr.DdddOcr(ocr=False, det=False)`，不加载文字模型。
+异步识别的超时包含排队时间；取消任务后不再提交尚未开始的识别。
 
 ### KV 与文件
 

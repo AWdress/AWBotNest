@@ -22,6 +22,38 @@ HISTORY_FILE = LOG_DIR / "webui_history.jsonl"
 HISTORY_MAX_BYTES = 5 * 1024 * 1024
 HISTORY_COMPACT_WRITES = 200
 
+_AUTH_VALUE = re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token)\s+)?)[^\s,;\"']+")
+_SECRET_VALUE = re.compile(
+    r"(?i)(?<![\w])((?:[A-Za-z][\w]*_)?(?:token|secret|password|api[_-]?key|api_hash|cookies?|session|"
+    r"license[_-]?key|verification[_-]?code)[\"']?\s*[:=]\s*)"
+    r'(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\{[^\r\n]*|\[[^\r\n]*|[^\s,;&}]+)'
+)
+
+
+def redact_secrets(message: str) -> str:
+    message = _AUTH_VALUE.sub(r"\1***", message)
+    message = _SECRET_VALUE.sub(r"\1***", message)
+    # HTTP exception URLs can contain credentials without a named key.
+    message = re.sub(r"(?i)(https?|socks[45])://[^\s/@]+:[^\s/@]+@", r"\1://***:***@", message)
+    message = re.sub(r"(?i)(https?://[^\s/]+/bot)[0-9]+:[A-Za-z0-9_-]+", r"\1***", message)
+    return message
+
+
+class RedactingFormatter(logging.Formatter):
+    """Redact the final formatted message, including formatted exceptions."""
+    def __init__(self, formatter: logging.Formatter | None = None) -> None:
+        super().__init__()
+        self.original = formatter or logging.Formatter()
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_secrets(self.original.format(record))
+
+
+def install_secret_filters(logger: logging.Logger) -> None:
+    for handler in logger.handlers:
+        if not isinstance(handler.formatter, RedactingFormatter):
+            handler.setFormatter(RedactingFormatter(handler.formatter))
+
 
 class MemoryLogHandler(logging.Handler):
     def __init__(self, capacity: int = 1000) -> None:
@@ -109,8 +141,7 @@ class MemoryLogHandler(logging.Handler):
         message = self.format(record)
         if record.name == "asyncio" and "ConnectionResetError: [WinError 10054]" in message:
             return
-        message = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1***", message)
-        message = re.sub(r"(?i)((?:token|secret|password|api[_-]?key)\s*[:=]\s*)[^\s,;&]+", r"\1***", message)
+        message = redact_secrets(message)
         item = {
             "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
             "level": record.levelname,
@@ -171,7 +202,7 @@ def create_file_handler(formatter: logging.Formatter) -> logging.Handler | None:
         from logging.handlers import RotatingFileHandler
         handler = RotatingFileHandler(LOG_FILE, maxBytes=5 * 1024 * 1024,
                                       backupCount=5, encoding="utf-8")
-        handler.setFormatter(formatter)
+        handler.setFormatter(RedactingFormatter(formatter))
         handler.addFilter(PyrogramNoiseFilter())
         return handler
     except OSError as exc:

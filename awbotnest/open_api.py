@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import re
+import json
+from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ from .auth import api_key_dependency
 from .config import Settings, save_settings
 from .logs import memory_logs
 from .plugins import PluginRuntime
+from .plugin_config import mask_config, restore_config_secrets
 from .storage import PluginKV
 from .telegram import TelegramAccounts
 
@@ -21,6 +24,7 @@ def register_open_api(
     settings: Settings,
     accounts: TelegramAccounts,
     runtime: PluginRuntime,
+    market: Any = None,
 ) -> None:
     router = APIRouter(
         prefix="/api/v1",
@@ -67,6 +71,10 @@ def register_open_api(
     @router.post("/plugins/upload")
     async def upload_plugin(file: UploadFile = File(...)):
         """Upload and validate a single Python plugin without enabling it."""
+        async with (getattr(market, "install_lock", None) or nullcontext()):
+            return await _upload_plugin(file)
+
+    async def _upload_plugin(file: UploadFile):
         filename = file.filename or ""
         if not filename.endswith(".py") or not filename[:-3].replace("_", "").isalnum():
             raise HTTPException(status_code=400, detail="仅支持名称安全的 .py 插件文件")
@@ -93,6 +101,9 @@ def register_open_api(
             raise HTTPException(status_code=400, detail=f"插件校验失败：{exc}") from exc
         finally:
             temporary.unlink(missing_ok=True)
+        forget_source = getattr(market, "forget_source", None)
+        if forget_source is not None:
+            forget_source(target.stem)
         return {"ok": True, "plugin": plugin.to_dict(), "enabled": bool(plugin.enabled)}
 
     @router.get("/plugins/{plugin_id}")
@@ -137,23 +148,21 @@ def register_open_api(
     @router.get("/plugins/{plugin_id}/config")
     async def get_plugin_config(plugin_id: str):
         plugin = meta(plugin_id)
-        values = dict(settings.plugin_config.get(plugin_id, {}))
-        for key, spec in (plugin.config_schema or {}).items():
-            if runtime.secret_field(spec) and values.get(key):
-                values[key] = "********"
+        values = mask_config(plugin.config_schema or {}, settings.plugin_config.get(plugin_id, {}))
         return {"plugin_id": plugin_id, "config": values}
 
     @router.put("/plugins/{plugin_id}/config")
     async def put_plugin_config(plugin_id: str, request: Request):
         plugin = meta(plugin_id)
         raw = await request.json()
-        values = raw.get("config")
+        values = raw.get("config") if isinstance(raw, dict) else None
         if not isinstance(values, dict):
             raise HTTPException(status_code=400, detail="config 必须是对象")
-        for key, spec in (plugin.config_schema or {}).items():
-            if runtime.secret_field(spec) and values.get(key) == "********":
-                values[key] = settings.plugin_config.get(plugin_id, {}).get(key, "")
+        if len(json.dumps(values, ensure_ascii=False).encode("utf-8")) > 1024 * 1024:
+            raise HTTPException(status_code=413, detail="插件配置超过 1 MB")
         try:
+            values = restore_config_secrets(plugin.config_schema or {}, values,
+                                            settings.plugin_config.get(plugin_id, {}))
             runtime.validate_config(plugin.config_schema or {}, values,
                                     allow_extra=plugin.render_mode == "vue")
         except ValueError as exc:

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import importlib.metadata
 import importlib.machinery
 import logging
 import multiprocessing
 import sys
 import threading
+import time
 import types
+from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeoutError
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Callable
@@ -15,66 +18,157 @@ from typing import Any, Callable
 
 logger = logging.getLogger("awbotnest.services.ocr")
 
-_WORKER_MODELS: dict[str, Any] = {}
-_ALLOWED_MODELS = {"default", "old", "beta", "detection", "full"}
-_ALLOWED_OPERATIONS = {"classification", "classification_many", "detection", "slide_match"}
+_WORKER_MODELS: OrderedDict[Any, Any] = OrderedDict()
+_WORKER_RANGES: dict[Any, Any] = {}
+_ALLOWED_MODELS = {"default", "old", "beta", "detection", "full", "slider"}
+_ALLOWED_OPERATIONS = {
+    "classification", "classification_many", "detection", "slide_match",
+    "slide_comparison", "set_ranges", "get_charset", "get_model_info",
+}
 
 
-def _worker_model(name: str) -> Any:
+def _model_options(name: str, options: dict[str, Any] | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = {"show_ad": False}
+    if name == "old":
+        result["old"] = True
+    elif name == "beta":
+        result["beta"] = True
+    elif name in {"detection", "full"}:
+        result.update(det=True, ocr=name == "full")
+    elif name == "slider":
+        result.update(det=False, ocr=False)
+    result.update(options or {})
+    # Ads are not useful in the shared system log.
+    result["show_ad"] = False
+    return result
+
+
+def _model_key(name: str, options: dict[str, Any] | None = None) -> Any:
+    return name, tuple(sorted(_model_options(name, options).items()))
+
+
+def _worker_model(name: str, options: dict[str, Any] | None = None) -> Any:
     """Create OCR models only inside the disposable worker process."""
     if name not in _ALLOWED_MODELS:
         raise ValueError(f"不支持的 OCR 模型：{name}")
-    model = _WORKER_MODELS.get(name)
+    key = _model_key(name, options)
+    model = _WORKER_MODELS.get(key)
     if model is not None:
+        _WORKER_MODELS.move_to_end(key)
         return model
 
     import ddddocr
 
-    if name == "old":
-        model = ddddocr.DdddOcr(show_ad=False, old=True)
-    elif name == "beta":
-        model = ddddocr.DdddOcr(show_ad=False, beta=True)
-    elif name == "detection":
-        model = ddddocr.DdddOcr(det=True, ocr=False, show_ad=False)
-    elif name == "full":
-        model = ddddocr.DdddOcr(det=True, ocr=True, show_ad=False)
-    else:
-        model = ddddocr.DdddOcr(show_ad=False)
-    _WORKER_MODELS[name] = model
+    # Custom models/device choices must not grow this cache without a bound.
+    if len(_WORKER_MODELS) >= 3:
+        old_key, old_model = _WORKER_MODELS.popitem(last=False)
+        _WORKER_RANGES.pop(old_key, None)
+        cleanup = getattr(old_model, "cleanup", None)
+        if cleanup is not None:
+            cleanup()
+        del old_model
+    model = ddddocr.DdddOcr(**_model_options(name, options))
+    _WORKER_MODELS[key] = model
     return model
 
 
 def _worker_call(model_name: str, operation: str, args: tuple[Any, ...],
-                 kwargs: dict[str, Any]) -> Any:
+                 kwargs: dict[str, Any], options: dict[str, Any] | None = None,
+                 charset_range: Any = None) -> Any:
     if operation not in _ALLOWED_OPERATIONS:
         raise ValueError(f"不支持的 OCR 操作：{operation}")
-    model = _worker_model(model_name)
+    model = _worker_model(model_name, options)
+    key = _model_key(model_name, options)
+    if operation in {"classification", "classification_many", "get_charset"}:
+        previous_range = _WORKER_RANGES.get(key)
+        if charset_range is not None:
+            model.set_ranges(charset_range)
+            _WORKER_RANGES[key] = copy.deepcopy(charset_range)
+        elif previous_range is not None:
+            # Never let one plugin's character restriction affect another.
+            get_charset = getattr(model, "get_charset", None)
+            charset = get_charset() if get_charset else getattr(model, "_DdddOcr__charset", None)
+            if charset is not None:
+                model.set_ranges(charset)
+            else:
+                _WORKER_MODELS.pop(key, None)
+                cleanup = getattr(model, "cleanup", None)
+                if cleanup:
+                    cleanup()
+                model = _worker_model(model_name, options)
+            _WORKER_RANGES.pop(key, None)
+    if operation == "set_ranges":
+        result = model.set_ranges(*args, **kwargs)
+        _WORKER_RANGES[key] = copy.deepcopy(args[0])
+        return result
     if operation == "classification_many":
         images = args[0] if args else ()
-        return [model.classification(image) for image in images]
+        return [model.classification(image, **kwargs) for image in images]
     return getattr(model, operation)(*args, **kwargs)
 
 
 class OcrClient:
     """Synchronous ddddocr-compatible facade for code already running in a worker thread."""
 
-    def __init__(self, service: OcrService, model: str) -> None:
+    def __init__(self, service: OcrService, model: str,
+                 options: dict[str, Any] | None = None) -> None:
         self._service = service
         self._model = model
+        self._options = dict(options or {})
+        self._ranges: Any = None
+        self._closed = False
 
-    def classification(self, image: bytes) -> str:
-        return self._service.call_sync(self._model, "classification", image)
-
-    def classification_many(self, images: list[bytes] | tuple[bytes, ...]) -> list[str]:
-        return self._service.call_sync(self._model, "classification_many", list(images))
-
-    def detection(self, image: bytes) -> Any:
-        return self._service.call_sync(self._model, "detection", image)
-
-    def slide_match(self, target: bytes, background: bytes, **kwargs: Any) -> Any:
+    def _invoke(self, operation: str, *args: Any, **kwargs: Any) -> Any:
+        if self._closed:
+            raise RuntimeError("OCR 对象已清理")
         return self._service.call_sync(
-            self._model, "slide_match", target, background, **kwargs,
+            self._model, operation, *args, _model_config=self._options,
+            _charset_range=self._ranges, **kwargs,
         )
+
+    def classification(self, img: Any, png_fix: bool = False,
+                       probability: bool = False, color_filter_colors: Any = None,
+                       color_filter_custom_ranges: Any = None, **kwargs: Any) -> Any:
+        if png_fix:
+            kwargs["png_fix"] = png_fix
+        if probability:
+            kwargs["probability"] = probability
+        if color_filter_colors is not None:
+            kwargs["color_filter_colors"] = color_filter_colors
+        if color_filter_custom_ranges is not None:
+            kwargs["color_filter_custom_ranges"] = color_filter_custom_ranges
+        return self._invoke("classification", img, **kwargs)
+
+    def classification_many(self, images: list[Any] | tuple[Any, ...], **kwargs: Any) -> list[Any]:
+        return self._invoke("classification_many", list(images), **kwargs)
+
+    def detection(self, img: Any) -> Any:
+        return self._invoke("detection", img)
+
+    def slide_match(self, target_img: Any, background_img: Any,
+                    simple_target: bool = False) -> Any:
+        return self._invoke("slide_match", target_img, background_img, simple_target=simple_target)
+
+    def slide_comparison(self, target_img: Any, background_img: Any) -> Any:
+        return self._invoke("slide_comparison", target_img, background_img)
+
+    def set_ranges(self, charset_range: Any) -> None:
+        self._invoke("set_ranges", charset_range)
+        self._ranges = copy.deepcopy(charset_range)
+
+    def get_charset(self) -> list[str]:
+        return self._invoke("get_charset")
+
+    def get_model_info(self) -> dict[str, Any]:
+        return self._invoke("get_model_info")
+
+    def switch_device(self, use_gpu: bool, device_id: int = 0) -> None:
+        self._options.update(use_gpu=use_gpu, device_id=device_id)
+
+    def cleanup(self) -> None:
+        # A shared model may still be in use by another client. Idle shutdown
+        # owns its actual native resources; cleaning a client never breaks it.
+        self._closed = True
 
 
 class OcrService:
@@ -123,23 +217,27 @@ class OcrService:
 
         service = self
 
-        def create_model(*args: Any, **kwargs: Any) -> OcrClient:
-            if args:
-                raise TypeError("系统托管 OCR 只支持关键字参数")
-            unsupported = set(kwargs) - {"show_ad", "old", "det", "ocr", "beta"}
-            if unsupported:
-                raise TypeError("系统托管 OCR 不支持参数：" + "、".join(sorted(unsupported)))
-            if kwargs.get("old"):
-                model = "old"
-            elif kwargs.get("det"):
-                model = "full" if kwargs.get("ocr", True) else "detection"
-            elif kwargs.get("beta"):
-                model = "beta"
-            else:
-                model = "default"
-            return service.client(model)
+        class DdddOcr(OcrClient):
+            def __init__(self, ocr: bool = True, det: bool = False,
+                         old: bool = False, beta: bool = False,
+                         use_gpu: bool = False, device_id: int = 0,
+                         show_ad: bool = True, import_onnx_path: str = "",
+                         charsets_path: str = "") -> None:
+                if det:
+                    model = "full" if ocr else "detection"
+                elif not ocr and not import_onnx_path:
+                    model = "slider"
+                else:
+                    model = "old" if old else "beta" if beta else "default"
+                options = dict(ocr=ocr, det=det, old=old, beta=beta, use_gpu=use_gpu,
+                               device_id=device_id, import_onnx_path=str(import_onnx_path),
+                               charsets_path=str(charsets_path))
+                super().__init__(service, model, options)
+                self.det = self.det_enabled = det
+                self.ocr_enabled = ocr
+                self.old, self.beta = old, beta
 
-        facade.DdddOcr = create_model
+        facade.DdddOcr = DdddOcr
         self._module_facade = facade
         sys.modules["ddddocr"] = facade
 
@@ -214,20 +312,46 @@ class OcrService:
                 pass
 
     def call_sync(self, model: str, operation: str, *args: Any,
-                  timeout: float = 60.0, **kwargs: Any) -> Any:
+                  timeout: float = 60.0, _cancel_event: threading.Event | None = None,
+                  _model_config: dict[str, Any] | None = None,
+                  _charset_range: Any = None, **kwargs: Any) -> Any:
         if model not in _ALLOWED_MODELS or operation not in _ALLOWED_OPERATIONS:
             raise ValueError("OCR 调用参数不受支持")
         if not self.is_available():
             raise RuntimeError("OCR 依赖尚未安装")
 
-        with self._call_lock:
+        deadline = time.monotonic() + max(0.01, float(timeout))
+
+        def remaining() -> float:
+            if _cancel_event is not None and _cancel_event.is_set():
+                raise asyncio.CancelledError()
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise TimeoutError("OCR 识别超时")
+            return value
+
+        while not self._call_lock.acquire(timeout=min(0.05, remaining())):
+            pass
+        try:
+            remaining()  # A cancelled waiter must never submit work.
             with self._state_lock:
                 self._cancel_idle_timer_locked()
                 executor = self._ensure_executor_locked()
                 self._busy = True
             try:
-                future = executor.submit(_worker_call, model, operation, args, kwargs)
-                return future.result(timeout=max(1.0, float(timeout)))
+                future = executor.submit(
+                    _worker_call, model, operation, args, kwargs, _model_config, _charset_range,
+                )
+                while True:
+                    wait_seconds = min(0.1, remaining())
+                    try:
+                        return future.result(timeout=wait_seconds)
+                    except FutureTimeoutError:
+                        if future.done():
+                            raise
+            except asyncio.CancelledError:
+                self._discard_executor(executor, terminate=True)
+                raise
             except FutureTimeoutError as exc:
                 self._discard_executor(executor, terminate=True)
                 raise TimeoutError("OCR 识别超时") from exc
@@ -239,21 +363,32 @@ class OcrService:
                     self._busy = False
                     if self._executor is executor and not self._closed:
                         self._schedule_idle_shutdown_locked(executor)
+        finally:
+            self._call_lock.release()
 
     async def call(self, model: str, operation: str, *args: Any,
                    timeout: float = 60.0, **kwargs: Any) -> Any:
-        return await asyncio.to_thread(
-            self.call_sync, model, operation, *args, timeout=timeout, **kwargs,
-        )
+        cancel = threading.Event()
+        task = asyncio.create_task(asyncio.to_thread(
+            self.call_sync, model, operation, *args, timeout=timeout,
+            _cancel_event=cancel, **kwargs,
+        ))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancel.set()
+            await asyncio.gather(task, return_exceptions=True)
+            raise
 
     async def classification(self, image: bytes, *, model: str = "default",
-                             timeout: float = 60.0) -> str:
-        return await self.call(model, "classification", image, timeout=timeout)
+                             timeout: float = 60.0, **kwargs: Any) -> Any:
+        return await self.call(model, "classification", image, timeout=timeout, **kwargs)
 
     async def classification_many(self, images: list[bytes] | tuple[bytes, ...], *,
-                                  model: str = "default", timeout: float = 60.0) -> list[str]:
+                                  model: str = "default", timeout: float = 60.0,
+                                  **kwargs: Any) -> list[Any]:
         return await self.call(
-            model, "classification_many", list(images), timeout=timeout,
+            model, "classification_many", list(images), timeout=timeout, **kwargs,
         )
 
     def close_sync(self) -> None:
