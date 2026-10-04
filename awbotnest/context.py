@@ -16,7 +16,7 @@ from .delivery import TelegramDelivery
 from .config import DATA_DIR, Settings, save_settings
 from .services import PlatformServices, PluginAI
 from .plugin_cookies import PluginCookies
-from .routing import PluginRoutes
+from .routing import PluginRoutes, _normalize_wecom_filters
 from .notifier import NotificationService
 from .activity import set_current, reset_current, track_call
 from .interactive_profile import InteractiveProfiler
@@ -328,6 +328,27 @@ class PluginContext:
         if self.is_primary_instance:
             self.routes.webhook(self.plugin_id, path, self._managed(callback))
         return callback
+
+    def on_wecom_message(self, callback=None, *, message_types=("text", "image", "file", "event"),
+                         events=None):
+        """注册企业微信消息处理器；仅主实例接收已授权渠道分发的消息。"""
+        if self._closed:
+            raise RuntimeError("插件已停用")
+        types, event_names = _normalize_wecom_filters(message_types, events)
+
+        def register(handler):
+            if self._closed:
+                raise RuntimeError("插件已停用")
+            if not callable(handler):
+                raise TypeError("企业微信消息回调必须可调用")
+            if self.is_primary_instance:
+                self.routes.wecom_message(
+                    self.plugin_id, self._managed(handler, operation="wecom:message"),
+                    message_types=types, events=event_names,
+                )
+            return handler
+
+        return register(callback) if callback is not None else register
 
     def on_api(self, path: str, callback: Callable[..., Any] | None = None, *, methods=None):
         """注册管理员接口；支持直接调用及装饰器，回调接收 WebhookRequest。"""

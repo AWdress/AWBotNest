@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -16,7 +17,9 @@ from fastapi import HTTPException
 from . import __version__
 from .config import DATA_DIR
 from .logs import redact_secrets
-from .wecom_config import callback_member_allowed, channel_config, validate_callback_config
+from .wecom_config import (callback_application, callback_member_allowed, channel_config,
+                           validate_callback_config, validate_callback_message)
+from .wecom_messages import WeComMedia, WeComMessage
 
 
 logger = logging.getLogger("awbotnest.wecom")
@@ -36,11 +39,20 @@ class CommandJob:
     application: tuple[str, str]
 
 
+@dataclass(frozen=True)
+class MessageJob:
+    channel_id: str
+    user_id: str
+    message: dict
+    targets: tuple[tuple[str, str], ...]
+    application: tuple[str, str]
+
+
 class WeComCommandService:
     def __init__(self, settings, runtime, routes, *, store_path: Path | None = None) -> None:
         self.settings, self.runtime, self.routes = settings, runtime, routes
         self.store_path = Path(store_path) if store_path is not None else DATA_DIR / "wecom_commands.sqlite"
-        self._queue: asyncio.Queue[CommandJob] = asyncio.Queue(maxsize=16)
+        self._queue: asyncio.Queue[CommandJob | MessageJob] = asyncio.Queue(maxsize=16)
         self._lock = asyncio.Lock()
         self._worker: asyncio.Task | None = None
         self._admissions: set[asyncio.Task] = set()
@@ -68,13 +80,26 @@ class WeComCommandService:
         return (plugin_id in self._plugins(channel_id)
                 and action in self.routes.describe(plugin_id).get("actions", []))
 
-    def _check_job(self, job: CommandJob) -> None:
+    def _target_allowed(self, job: MessageJob, plugin_id: str, token: str) -> bool:
+        lookup = getattr(self.routes, "wecom_handler_token", None)
+        return (callable(lookup) and plugin_id in self._plugins(job.channel_id)
+                and lookup(plugin_id, job.message.get("MsgType", ""), job.message.get("Event", "")) == token)
+
+    def _check_job(self, job: CommandJob | MessageJob) -> None:
         if self._closed:
             raise HTTPException(503, "系统正在停止")
         config = self._authorize(job.channel_id, job.user_id)
-        application = (config["corpid"], str(config["agentid"]))
-        if application != job.application or not self._action_allowed(job.channel_id, job.plugin_id, job.action):
+        application = callback_application(config)
+        allowed = (any(self._target_allowed(job, pid, token) for pid, token in job.targets)
+                   if isinstance(job, MessageJob)
+                   else self._action_allowed(job.channel_id, job.plugin_id, job.action))
+        if application != job.application or not allowed:
             raise HTTPException(403, "插件动作权限或应用已变更")
+
+    def _check_target(self, job: MessageJob, plugin_id: str, token: str) -> None:
+        self._check_job(job)
+        if not self._target_allowed(job, plugin_id, token):
+            raise HTTPException(403, "插件消息接收权限已变更")
 
     def _name(self, plugin_id: str) -> str:
         return str(self.runtime.display_name(plugin_id))[:100]
@@ -129,11 +154,24 @@ class WeComCommandService:
         self._admissions.discard(task)
         self._consume_task(task)
 
+    @staticmethod
+    def _message_id(message: dict, application: tuple[str, str]) -> str:
+        message_id = message.get("MsgId", "")
+        if message.get("MsgType") == "event" and not message_id:
+            # Provider retries change the encryption nonce, not the plaintext.
+            identity = json.dumps([application, message], sort_keys=True, ensure_ascii=False,
+                                  separators=(",", ":"))
+            return "event:" + hashlib.sha256(identity.encode()).hexdigest()
+        return message_id
+
     async def handle(self, channel_id: str, message: dict[str, str]) -> str:
+        if not isinstance(message, dict):
+            raise HTTPException(400, "回调消息字段格式不正确")
         user_id = message.get("FromUserName", "")
         config = self._authorize(channel_id, user_id)
         if self._closed:
             raise HTTPException(503, "系统正在停止，请稍后重试")
+        self._validate_message(message, config)
         if message.get("MsgType") != "text":
             return ""
         text = message.get("Content", "").strip()
@@ -150,13 +188,15 @@ class WeComCommandService:
             lines = [f"{self._name(pid)}（{pid}）\n动作：{'、'.join(self.routes.describe(pid)['actions']) or '无'}"
                      for pid in self._plugins(channel_id)]
             return self._limited("\n\n".join(lines) or "此渠道没有已启用的关联插件。")
-        if command == "/动作" and len(parts) == 2:
+        if command == "/动作":
+            if len(parts) != 2:
+                return "用法：/动作 插件ID"
             pid = parts[1]
             if pid not in self._plugins(channel_id):
                 return "插件未关联此渠道，或尚未启用。"
             return self._limited(f"{self._name(pid)}\n动作：{'、'.join(self.routes.describe(pid)['actions']) or '无'}")
         if command not in {"/运行", "/run"}:
-            return HELP
+            return await self.handle_message(channel_id, message, fallback=HELP)
         if len(parts) < 3:
             return "用法：/运行 插件ID 动作名 [JSON 参数]"
         plugin_id, action = parts[1:3]
@@ -173,9 +213,51 @@ class WeComCommandService:
         message_id = message.get("MsgId", "")
         if not message_id or len(message_id) > 128:
             raise HTTPException(400, "消息 ID 无效")
-        admission = asyncio.create_task(self._submit(
-            CommandJob(channel_id, user_id, plugin_id, action, payload,
-                       (config["corpid"], str(config["agentid"]))), message_id))
+        fresh = await self._admit(CommandJob(channel_id, user_id, plugin_id, action, payload,
+                                            callback_application(config)), message_id)
+        if not fresh:
+            return "此消息已接收，请勿重复提交。"
+        return f"已提交：{self._name(plugin_id)} / {action}"
+
+    async def handle_message(self, channel_id: str, message: dict, *, fallback: str = "") -> str:
+        if not isinstance(message, dict):
+            raise HTTPException(400, "回调消息字段格式不正确")
+        config = self._authorize(channel_id, message.get("FromUserName", ""))
+        if self._closed:
+            raise HTTPException(503, "系统正在停止，请稍后重试")
+        if not self._validate_message(message, config):
+            return ""
+        lookup = getattr(self.routes, "wecom_handler_token", None)
+        targets = []
+        if callable(lookup):
+            for plugin_id in self._plugins(channel_id):
+                token = lookup(plugin_id, message.get("MsgType", ""), message.get("Event", ""))
+                if token is not None:
+                    targets.append((plugin_id, token))
+        if not targets:
+            return fallback
+        application = callback_application(config)
+        message_id = self._message_id(message, application)
+        if not isinstance(message_id, str) or not message_id or len(message_id) > 128:
+            raise HTTPException(400, "消息 ID 无效")
+        job = MessageJob(channel_id, message.get("FromUserName", ""), copy.deepcopy(message),
+                         tuple(targets), application)
+        await self._admit(job, message_id)
+        # The HTTP callback acknowledges promptly; plugins reply separately to
+        # the sender only. No default "completed" notification for every image.
+        return ""
+
+    @staticmethod
+    def _validate_message(message: dict, config: dict) -> bool:
+        try:
+            return validate_callback_message(message, config)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    async def _admit(self, job: CommandJob | MessageJob, message_id: str) -> bool:
+        admission = asyncio.create_task(self._submit(job, message_id))
         self._admissions.add(admission)
         admission.add_done_callback(self._admission_finished)
         try:
@@ -191,11 +273,9 @@ class WeComCommandService:
                 except Exception:
                     break
             raise
-        if not fresh:
-            return "此消息已接收，请勿重复提交。"
-        return f"已提交：{self._name(plugin_id)} / {action}"
+        return fresh
 
-    async def _submit(self, job: CommandJob, message_id: str) -> bool:
+    async def _submit(self, job: CommandJob | MessageJob, message_id: str) -> bool:
         async with self._lock:
             self._check_job(job)
             try:
@@ -230,6 +310,9 @@ class WeComCommandService:
             job = await self._queue.get()
             try:
                 self._check_job(job)
+                if isinstance(job, MessageJob):
+                    await self._dispatch_message(job)
+                    continue
                 name = self._name(job.plugin_id)
                 try:
                     # Isolate current_task().cancel() in a plugin callback from
@@ -270,6 +353,62 @@ class WeComCommandService:
                 logger.warning("企业微信指令结果发送失败（%s）", type(exc).__name__)
             finally:
                 self._queue.task_done()
+
+    async def _dispatch_message(self, job: MessageJob) -> None:
+        for plugin_id, token in job.targets:
+            try:
+                self._check_target(job, plugin_id, token)
+            except HTTPException:
+                continue
+
+            def permission_check(pid=plugin_id, generation=token):
+                self._check_target(job, pid, generation)
+
+            async def reply(text: str, check=permission_check):
+                check()
+                if not isinstance(text, str) or not text:
+                    raise ValueError("企业微信回复内容不能为空")
+                return await asyncio.wait_for(self.runtime.notifier.send_wecom_text(
+                    job.channel_id, job.user_id, self._limited(redact_secrets(text)),
+                    permission_check=check), timeout=30)
+
+            async def download(max_bytes: int, check=permission_check):
+                check()
+                media = await self.runtime.notifier.download_wecom_media(
+                    job.channel_id, job.user_id, job.message.get("MediaId", ""),
+                    permission_check=check, max_bytes=max_bytes)
+                check()
+                return WeComMedia(content=media["content"], filename=media["filename"],
+                                  content_type=media["content_type"])
+
+            fields = copy.deepcopy(job.message)
+            file_size = fields.get("FileSize")
+            message = WeComMessage(channel_id=job.channel_id, user_id=job.user_id,
+                corp_id=job.application[0], agent_id=job.application[1],
+                message_id=self._message_id(fields, job.application), create_time=int(fields.get("CreateTime", "0")),
+                message_type=fields.get("MsgType", ""), text=fields.get("Content", ""),
+                media_id=fields.get("MediaId", ""), pic_url=fields.get("PicUrl", ""),
+                file_name=fields.get("FileName", ""), file_size=int(file_size) if file_size else None,
+                event=fields.get("Event", ""), event_key=fields.get("EventKey", ""), fields=fields,
+                _reply=reply, _download=download)
+            try:
+                async def invoke(pid=plugin_id, generation=token, event=message, check=permission_check):
+                    check()
+                    return await self.routes.dispatch_wecom_message(pid, event, expected_token=generation)
+
+                dispatch = asyncio.create_task(invoke(), name="wecom-message")
+                result = await dispatch
+                if isinstance(result, str) and result:
+                    await reply(result)
+            except asyncio.CancelledError:
+                if self._closed or asyncio.current_task().cancelling():
+                    raise
+                logger.warning("企业微信插件消息处理已取消：插件=%s", self._name(plugin_id))
+            except HTTPException:
+                pass
+            except Exception as exc:
+                logger.warning("企业微信插件消息处理失败：插件=%s 错误=%s",
+                               self._name(plugin_id), type(exc).__name__)
 
     async def close(self) -> None:
         first_close = not self._closed

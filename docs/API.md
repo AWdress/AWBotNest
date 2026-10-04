@@ -226,6 +226,17 @@ Content-Type: application/json
 
 插件公开 Webhook 地址为 `/api/plugin/{plugin_id}/{path}`，插件应自行验证签名或共享密钥。
 
+### 企业微信自建应用回调
+
+企业微信使用现有 `/api/wecom/callback/{channel_id}`，不是开放 API Key 接口：
+GET 用于企业微信验证地址，POST 接收签名校验和 AES 解密后的消息。
+管理员在通知渠道配置回调 Token、EncodingAESKey 和允许操作的成员，并把插件关联到该渠道。
+不要用开放 API Key 或通知入站 Webhook Secret 代替企业微信回调凭据。
+
+插件通过 `ctx.on_wecom_message()` 订阅文字、图片、文件或按钮事件，附件按需下载，
+无需单独回调地址。原有文字指令保持优先；未注册的插件不会收到消息。
+完整 SDK 和迁移示例见 [企业微信统一消息回调](PLUGIN_GUIDE.md#企业微信统一消息回调)。
+
 ## 错误格式
 
 ```json

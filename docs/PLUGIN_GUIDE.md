@@ -76,7 +76,7 @@ __plugin__ = {
 | `id` | 是 | 唯一 ID，与入口名称一致 |
 | `name` | 是 | 用户看到的名称 |
 | `version` | 是 | 推荐语义化版本 |
-| `scope` | 是 | `standalone`、`bot`、`user`、`both` |
+| `scope` | 是 | `standalone`、`bot`、`user`、`both`、`wecom` |
 | `description` | 否 | 面向用户的功能说明 |
 | `author` | 否 | 插件卡片中 GitHub 图标旁显示的作者名 |
 | `repository` | 否 | 源码所在的 GitHub 仓库，填写 `owner/repo` 或仓库根地址；旧安装核对更新来源时使用。从商店安装或更新的插件会自动记录来源。 |
@@ -96,6 +96,10 @@ __plugin__ = {
 | `max_platform_version` | 否 | 支持的最高平台版本 |
 
 作用域：`standalone` 不监听 Telegram；`bot` 监听 Bot；`user` 监听用户账号；`both` 同时挂载两者。
+`wecom` 是企业微信专用插件，不需要 Telegram API_ID/API_HASH、Bot 或用户账号，
+使用共享实例，通过 `ctx.on_wecom_message()` 接收系统统一回调。成员任务按 UserID 在插件内隔离。
+专用插件不要填写 Telegram `bot` 字段，也不要使用 `instance_mode="account"`。
+现有其他作用域的插件仍可订阅企业微信消息，不必更改作用域。
 
 ### Vue / 模块联邦配置界面（可选）
 
@@ -362,6 +366,107 @@ async def setup(ctx):
 执行结果私信发起成员；返回字符串或 `{"ok": true, "message": "连接正常"}` 可附带简短说明，
 不要返回密码、Cookie 等敏感值。Telegram 消息处理函数不会通过此接口调用。
 耗时动作应使用 `async def`，不要在动作中使用 `time.sleep()` 或同步网络请求阻塞事件循环。
+
+## 企业微信统一消息回调
+
+插件可使用系统已配置的企业微信自建应用回调，接收文字、图片、文件和菜单按钮事件，
+不需要另配回调地址、Token、EncodingAESKey 或应用 Secret。
+管理员需开启该通知渠道的消息回调、设置允许操作的成员，并在插件通知设置中关联此渠道。
+只有已启用、已关联且主动注册消息处理器的插件会收到消息；不会调用 Telegram handler。
+
+### 注册与过滤
+
+只使用企业微信的插件可声明如下元数据，仍使用同一安装、启用、停用和重载流程：
+
+```python
+__plugin__ = {
+    "id": "wecom_printer",
+    "name": "企业微信打印",
+    "version": "1.0.0",
+    "scope": "wecom",
+    "instance_mode": "shared",
+}
+```
+
+通知渠道在系统中关联，不在 `bot` 字段填写渠道 ID。未绑定渠道时插件可以启用，但不会收到消息。
+
+在 `setup(ctx)` 中注册一个处理器。下面的 `enqueue_file` 和 `print_job` 是打印插件自己的业务函数，
+接入时替换为实际实现；`print` 也需换成该应用打印按钮的 EventKey。
+
+```python
+async def setup(ctx):
+    @ctx.on_wecom_message(
+        message_types=("image", "file", "event"),
+        events=("click", "template_card_event"),
+    )
+    async def receive(message):
+        if message.message_type in {"image", "file"}:
+            media = await message.download_media(max_bytes=10 * 1024 * 1024)
+            # 按发送者隔离待打印任务，并校验文件格式、大小与文件名。
+            await enqueue_file(message.user_id, media.content, media.filename)
+            await message.reply("文件已接收，请选择打印。")
+        elif message.event_key == "print":
+            await print_job(message.user_id, message.fields)
+```
+
+支持 `@ctx.on_wecom_message()`、`ctx.on_wecom_message(receive, ...)` 两种写法。
+默认 `message_types=("text", "image", "file", "event")`；还可选择
+`voice`、`video`、`shortvideo`、`location`、`link`。
+`events` 只过滤 event 消息，不影响同时订阅的图片、文件等类型；省略时接收所有支持的应用事件。
+类型和事件过滤不区分大小写，消息字段保留原值。每插件只有一个处理器，重复注册替换旧处理器。
+账号多实例插件仅主实例注册并接收，不会为每个 Telegram 账号重复执行。
+
+内置 `/帮助`、`/help`、`帮助`、`/状态`、`/status`、`/插件`、`/plugins`、`/动作`、`/运行`、`/run`
+指令优先由系统处理，其他文字交给订阅 text 的插件；没有接收插件时仍返回指令帮助。
+未识别的消息类型，以及缺少 AgentID 的系统事件只确认接收，不交给插件。
+
+### 消息、回复与附件
+
+回调参数是 `WeComMessage`，不需要导入系统内部模块。常用属性：
+
+| 属性 | 含义 |
+| --- | --- |
+| `channel_id`、`user_id` | 通知渠道 ID、发送成员 UserID |
+| `corp_id`、`agent_id` | 已核对的企业 ID、应用 ID |
+| `message_id`、`create_time` | 消息 ID、发送时间戳（整数秒） |
+| `message_type`、`text` | 消息类型、文字内容 |
+| `media_id`、`pic_url` | 附件 ID、原始图片地址 |
+| `file_name`、`file_size` | 回调中的文件名、大小（缺少大小时为 `None`） |
+| `event`、`event_key` | 事件名称、按钮键 |
+| `fields` | 完整结构化明文，保留嵌套按钮参数 |
+
+`fields` 中 XML 标量是字符串，嵌套节点是字典。
+`SelectedItems.SelectedItem`、`OptionIds.OptionId` 等官方重复节点始终是列表，只有一个元素也不例外。
+每个插件收到独立副本，不能通过修改字段改变其他插件的消息或系统鉴权结果。
+
+`await message.reply(text)` 只回复发送成员，不广播，也不转发到其他通知渠道。
+处理器返回非空字符串时，系统也会私聊发送者；不要同时回复并返回同一段文字。
+系统不为每张图片、每个文件额外发送默认“完成”消息。回复中不要包含密码、Cookie 等敏感值。
+
+`await message.download_media(max_bytes=...)` 返回带 `content`（bytes）、`filename`、`content_type` 的媒体对象。
+只按本消息的 MediaId 获取附件，默认和最大上限为 20 MiB；可设置更小限制。
+不会自动下载图片、文件，也不会访问 PicUrl、事件参数或接口控制响应中的任意下载 URL。
+若媒体接口只返回视频 URL 而非附件内容，此方法会报错，不跟随该 URL。
+应用 Secret 和 access token 不提供给插件。下载期间会复查绑定和成员权限，并限制响应大小。
+文件名已去除路径和控制字符，但插件仍需校验文件类型，不能直接执行文件或信任扩展名。
+下载失败、超限等异常由插件按业务处理；耗时网络和打印任务需使用异步调用，不要阻塞事件循环。
+
+### 重试、停用与迁移
+
+系统先检查签名、解密内容、企业/应用身份和成员权限，再进入有界异步队列，HTTP 回调及时确认接收。
+系统启动、插件尚在恢复时，有效的用户回调返回可重试的 `503`，不提前确认并丢弃消息；地址验证不受影响。
+同一通知渠道的 MsgId 在 24 小时内去重；无 MsgId 的事件用完整明文生成稳定 ID，改变重试 nonce 不会重复执行。
+同一用户在同一秒发出的完全相同无 ID 事件可能合并，打印插件仍应按 TaskId 或自己的任务状态防重复打印。
+去重记录不保存正文或附件；内存队列不是持久任务队列，系统重启后不保证重放未完成任务。
+需要可靠打印时，插件应在确认业务接收后将待打印任务写入自己的 storage。
+
+处理器经过系统并发、超时、熔断和生命周期管理，插件间异常隔离。
+解绑、停用或重载后，不再投递排队中的旧消息；旧消息对象也不能继续回复或下载。
+后台任务使用 `ctx.create_task()`，不要自行创建无法随插件停用取消的任务。
+
+原先使用独立回调的插件，可将验签解密、读取附件和按钮分支迁移到此处理器，
+保留原有打印业务和任务状态，验证后再移除独立回调及其配置。
+已有 `ctx.action()`、Webhook、Telegram 事件和通知发送接口不变；插件未注册新处理器时行为不变。
 
 ## 调度与后台任务
 

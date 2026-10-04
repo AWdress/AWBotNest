@@ -12,6 +12,7 @@ import re
 import secrets
 import struct
 import xml.etree.ElementTree as ET
+from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
@@ -20,7 +21,17 @@ MAX_CALLBACK_BYTES = 64 * 1024
 MAX_CIPHERTEXT_CHARS = 4 * ((MAX_CALLBACK_BYTES + 512 + 52 + 2) // 3)
 _XML_DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _XML_FIELD = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
-_XML_SCALAR_FIELDS = {"ToUserName", "FromUserName", "CreateTime", "MsgType", "AgentID", "MsgId", "Content", "Event"}
+_XML_SCALAR_FIELDS = {
+    "ToUserName", "FromUserName", "CreateTime", "MsgType", "AgentID", "MsgId", "Content", "Event",
+    "MediaId", "PicUrl", "FileName", "FileSize", "EventKey", "ThumbMediaId", "TaskId", "ChangeType",
+}
+_XML_LIST_ITEMS = {
+    "SelectedItems": frozenset({"SelectedItem"}),
+    "OptionIds": frozenset({"OptionId"}),
+    "PicList": frozenset({"item"}),
+    "ApprovalNodes": frozenset({"ApprovalNode"}),
+    "Items": frozenset({"Item"}),
+}
 
 
 class WeComCryptoError(ValueError):
@@ -33,9 +44,9 @@ def message_signature(token: str, timestamp: str, nonce: str, ciphertext: str) -
     return hashlib.sha1("".join(sorted((token, timestamp, nonce, ciphertext))).encode("utf-8")).hexdigest()
 
 
-def _validate_event_details(node: ET.Element) -> None:
-    """Validate ignored event trees; repeated list items are part of the protocol."""
-    pending = [(node, 1)]
+def _validate_xml_tree(root: ET.Element) -> None:
+    """Apply resource and shape limits once to the whole callback document."""
+    pending = [(root, 0)]
     count = 0
     while pending:
         current, depth = pending.pop()
@@ -48,8 +59,7 @@ def _validate_event_details(node: ET.Element) -> None:
         pending.extend((child, depth + 1) for child in current)
 
 
-def parse_xml_fields(content: bytes | str, *, allow_event_details: bool = False) -> dict[str, str]:
-    """Keep command/envelope fields flat, optionally ignoring valid event trees."""
+def _callback_xml_root(content: bytes | str) -> ET.Element:
     try:
         if isinstance(content, bytes):
             if len(content) > MAX_CALLBACK_BYTES:
@@ -66,25 +76,48 @@ def parse_xml_fields(content: bytes | str, *, allow_event_details: bool = False)
         root = ET.fromstring(text)
         if root.tag != "xml" or root.attrib or (root.text and root.text.strip()):
             raise WeComCryptoError("企业微信回调 XML 格式不正确")
-        event_details = allow_event_details and root.findtext("MsgType") == "event"
-        fields: dict[str, str] = {}
-        for node in root:
-            if (not isinstance(node.tag, str) or not _XML_FIELD.fullmatch(node.tag)
-                    or node.tag in fields or node.attrib
-                    or (node.tail and node.tail.strip())):
-                raise WeComCryptoError("企业微信回调包含重复或不合法字段")
-            if len(node):
-                if not event_details or node.tag in _XML_SCALAR_FIELDS:
-                    raise WeComCryptoError("企业微信回调包含不合法嵌套字段")
-                _validate_event_details(node)
-                fields[node.tag] = ""
-            else:
-                fields[node.tag] = node.text or ""
-        if not fields:
-            raise WeComCryptoError("企业微信回调缺少消息字段")
-        return fields
+        _validate_xml_tree(root)
+        return root
     except (ET.ParseError, UnicodeError) as exc:
         raise WeComCryptoError("企业微信回调 XML 格式不正确") from exc
+
+
+def _event_fields(parent: ET.Element) -> dict[str, Any]:
+    fields: dict[str, Any] = {}
+    list_items = _XML_LIST_ITEMS.get(parent.tag, frozenset())
+    for node in parent:
+        if len(node) and node.tag in _XML_SCALAR_FIELDS:
+            raise WeComCryptoError("企业微信回调包含不合法嵌套字段")
+        value = _event_fields(node) if len(node) else (node.text or "")
+        if node.tag in list_items:
+            fields.setdefault(node.tag, []).append(value)
+        else:
+            if node.tag in fields:
+                raise WeComCryptoError("企业微信回调包含重复或不合法字段")
+            fields[node.tag] = value
+    return fields
+
+
+def _callback_fields(root: ET.Element, *, allow_event_details: bool) -> dict[str, Any]:
+    event_details = allow_event_details and root.findtext("MsgType") == "event"
+    for node in root:
+        if len(node) and (not event_details or node.tag in _XML_SCALAR_FIELDS):
+            raise WeComCryptoError("企业微信回调包含不合法嵌套字段")
+    fields = _event_fields(root)
+    if not fields:
+        raise WeComCryptoError("企业微信回调缺少消息字段")
+    return fields
+
+
+def parse_xml_fields(content: bytes | str, *, allow_event_details: bool = False) -> dict[str, str]:
+    """Keep the existing flat envelope API, optionally validating event details."""
+    fields = _callback_fields(_callback_xml_root(content), allow_event_details=allow_event_details)
+    return {name: value if isinstance(value, str) else "" for name, value in fields.items()}
+
+
+def parse_callback_message(content: bytes | str) -> dict[str, Any]:
+    """Preserve nested event objects and protocol lists; ordinary messages stay flat."""
+    return _callback_fields(_callback_xml_root(content), allow_event_details=True)
 
 
 class WeComCrypto:

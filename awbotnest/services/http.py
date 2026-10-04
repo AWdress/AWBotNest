@@ -5,7 +5,8 @@ import base64
 import inspect
 import json
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -31,6 +32,16 @@ class HttpService:
 
     async def post(self, url: str, **kwargs: Any) -> httpx.Response:
         return await self.request("POST", url, **kwargs)
+
+    @asynccontextmanager
+    async def stream(self, method: str, url: str, **kwargs: Any) -> AsyncIterator[httpx.Response]:
+        """Read bounded responses without buffering their bodies or following redirects."""
+        timeout = kwargs.pop("timeout", 30)
+        follow_redirects = kwargs.pop("follow_redirects", False)
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=follow_redirects,
+                                     proxy=self.settings.proxy_url or None) as client:
+            async with client.stream(method, url, **kwargs) as response:
+                yield response
 
     async def download(self, url: str, destination: str | Path, *,
                        max_bytes: int = 100 * 1024 * 1024) -> Path:

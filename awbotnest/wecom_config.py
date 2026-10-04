@@ -4,6 +4,8 @@ from __future__ import annotations
 import base64
 import re
 
+from .wecom_messages import WECOM_MEDIA_TYPES, WECOM_MESSAGE_TYPES, valid_wecom_media_id
+
 
 CALLBACK_SECRETS = ("callback_token", "callback_aes_key")
 CALLBACK_CHANNEL_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
@@ -28,6 +30,51 @@ def callback_member_allowed(config: dict, user_id: str) -> bool:
     """WeCom UserIDs are case-insensitive; retain the original ID for replies."""
     return (isinstance(user_id, str) and bool(CALLBACK_MEMBER_ID.fullmatch(user_id))
             and user_id.lower() in {member.lower() for member in callback_members(config)})
+
+
+def callback_application(config: dict) -> tuple[str, str]:
+    return config["corpid"].strip(), str(int(config["agentid"]))
+
+
+def validate_callback_message(message: dict, config: dict) -> bool:
+    """Validate parsed messages at both HTTP and internal dispatch boundaries.
+
+    Unknown types and background events without an application are ACK-only.
+    This checks plaintext fields, not the signature/AES envelope.
+    """
+    scalar_fields = {"ToUserName", "FromUserName", "AgentID", "MsgType", "CreateTime", "MsgId",
+                     "Content", "MediaId", "PicUrl", "FileName", "FileSize", "Event", "EventKey"}
+    if (not isinstance(message, dict)
+            or any(not isinstance(message[key], str) for key in scalar_fields if key in message)):
+        raise ValueError("回调消息字段格式不正确")
+    corp_id, agent_id = callback_application(config)
+    kind = message.get("MsgType", "")
+    if (message.get("ToUserName") != corp_id
+            or "AgentID" in message and message["AgentID"] != agent_id
+            or kind in WECOM_MESSAGE_TYPES - {"event"} and not message.get("AgentID")):
+        raise PermissionError("回调应用身份不匹配")
+    if not CALLBACK_MEMBER_ID.fullmatch(message.get("FromUserName", "")):
+        raise ValueError("回调发送成员格式不正确")
+    if not kind or not re.fullmatch(r"[0-9]{1,12}", message.get("CreateTime", "")):
+        raise ValueError("回调消息字段不完整")
+    if kind not in WECOM_MESSAGE_TYPES:
+        return False
+    if kind == "event":
+        # Never infer an application's identity from the callback URL/config.
+        if not message.get("AgentID") or not message.get("Event"):
+            return False
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", message["Event"]):
+            raise ValueError("回调事件格式不正确")
+    if kind != "event" or message.get("MsgId"):
+        if not re.fullmatch(r"[0-9]{1,20}", message.get("MsgId", "")):
+            raise ValueError("回调消息 ID 格式不正确")
+    if kind == "text" and "Content" not in message:
+        raise ValueError("回调文字消息格式不正确")
+    if kind in WECOM_MEDIA_TYPES and not valid_wecom_media_id(message.get("MediaId")):
+        raise ValueError("回调缺少有效的附件 ID")
+    if "FileSize" in message and not re.fullmatch(r"[0-9]{1,12}", message["FileSize"]):
+        raise ValueError("回调文件大小格式不正确")
+    return True
 
 
 def validate_callback_channels(channels: list[dict]) -> None:

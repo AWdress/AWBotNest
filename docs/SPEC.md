@@ -48,7 +48,7 @@ Platform Services / Scheduler / Governance
 3. `__plugin__` 必须是可由 `ast.literal_eval` 读取的顶层字面量字典。
 4. 插件必须提供可调用的 `setup(ctx)`；可选提供 `teardown(ctx)`。
 5. 单个入口文件不得超过 2 MB。
-6. 必需元数据为 `id`、`name`、`version`、`scope`；作用域仅允许 `standalone`、`bot`、`user`、`both`。
+6. 必需元数据为 `id`、`name`、`version`、`scope`；作用域仅允许 `standalone`、`bot`、`user`、`both`、`wecom`。
 7. 可选 `author` 用于显示作者名；可选 `tags` 为功能标签字符串列表，平台最多展示前 4 个。
 
 ## 运行模型
@@ -134,6 +134,36 @@ Platform Services / Scheduler / Governance
 ### 统一治理
 
 `setup`、事件、Webhook、插件 API、动作和定时任务经过平台执行治理。`teardown` 有独立的 15 秒超时及失败清理，不因熔断跳过资源释放。自检接口报告配置、依赖和加载状态。插件自行创建的连接、文件句柄必须通过 `ctx.add_cleanup` 或 `teardown` 释放，后台任务通过 `ctx.create_task` 创建以纳入停用取消。
+
+### 企业微信统一消息分发
+
+为图片、文件和应用按钮复用已有系统回调，正式 Plugin SDK 增加
+`ctx.on_wecom_message(callback=None, *, message_types=("text", "image", "file", "event"), events=None)`。
+这是一项可选新增能力，保留 Plugin API version 2；未注册的插件行为不变，不要求插件新增公开 Webhook。
+接口、消息属性、示例和独立回调迁移见 `PLUGIN_GUIDE.md` 的企业微信章节。
+专用插件可声明 `scope="wecom"`，按共享实例运行，不依赖 Telegram 账号或凭据。
+禁止把 Telegram `instance_mode="account"` 用作企业微信成员实例；成员状态仍由插件按 UserID 隔离。
+已有其他作用域均可订阅，不强制迁移；安装与启停流程不变，自检仅对 Telegram 作用域核对 Telegram 客户端。
+
+1. 现有 `/api/wecom/callback/{channel_id}` 的 GET 验证、POST 签名/AES、回调时效、企业/应用身份和成员白名单继续有效。
+   HTTP 与内部分发服务使用相同明文字段校验；缺少 AgentID 的系统事件只 ACK，不通过渠道配置补齐身份。
+2. 只有已启用、绑定当前渠道、主动订阅匹配类型/事件的插件主实例接收消息。
+   重复注册替换旧 handler；停用、解绑或重载时，队列快照及实际调用前均检查 handler generation，不能误投新实例。
+   内置文字指令优先，其他文字可交给插件；Telegram handler、已有动作和 Webhook 不变。
+3. 沿用有界异步队列及现有 SQLite 去重表，快速确认 HTTP 回调，不增加外部消息队列。
+   系统尚未就绪时，有效用户消息返回可重试的 503，不提前 ACK 丢掉尚未恢复插件的消息；GET 地址验证不受影响。
+   MsgId 或无 ID 事件的完整结构化明文哈希用于 24 小时去重，不保存消息正文、成员或附件。
+   去重不等同于持久任务投递，重启后的未完成任务不保证重放，打印等业务须自行持久化并防重复。
+4. `WeComMessage` 每插件深拷贝明文字段并隐藏对象摘要中的业务内容；插件修改字段不能改变系统权限。
+   `reply()` 只发送给原成员；`download_media()` 只读取原 MediaId，流式限制最大 20 MiB，禁重定向，
+   校验下载中及交付前的权限。不得把 Secret/token 交给插件、日志或异常，不自动访问消息或媒体控制响应中的 URL。
+5. 回调经过现有 Governor、任务追踪、超时和停用取消；单插件失败或自行取消不得中断其他插件及队列。
+   旧实例保存的消息对象在权限撤销后不能回复或下载。插件仍承担文件格式校验与业务授权责任。
+
+兼容范围：不改变开放 REST、WebSocket、前端配置、Telegram、配置文件或 SQLite schema；
+元数据新增可选 wecom 作用域，插件列表增加对应中文标识，原有作用域含义不变。
+已有扁平 XML 解析接口继续保留。公开回调仍只接受企业微信签名加密消息，不新增任意外部调用插件的入口。
+仅主动订阅的插件可读取绑定渠道白名单成员发来的正文和附件，管理员应只关联可信插件。
 
 ### Session Runtime
 

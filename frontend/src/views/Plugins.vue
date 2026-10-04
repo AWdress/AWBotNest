@@ -185,7 +185,7 @@ function closeConfig() {
   webhookPath.value = ''
 }
 
-const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号', standalone: '独立运行' }
+const scopeLabel = { user: '用户账号', bot: '机器人', both: '双账号', standalone: '独立运行', wecom: '企业微信' }
 
 async function load() {
   const requestId = ++loadRequestId
@@ -1450,6 +1450,7 @@ onUnmounted(() => {
                   <span v-if="p.version" class="plugin-version">v{{ p.version }}</span>
                   <span v-if="isOfficial(p)" class="badge-official">官方</span>
                   <span v-if="p.render_mode === 'vue'" class="badge-vue">Vue</span>
+                  <span v-if="p.scope === 'wecom'" class="plugin-version plugin-scope">企业微信</span>
                 </span>
                 <span class="badge" :class="p.error ? 'badge-err' : (p.enabled ? 'badge-on' : 'badge-off')">
                   {{ p.error ? '异常' : busy[p.id] ? (p.enabled ? '启用中' : '处理中') : (p.enabled ? '已启用' : '未启用') }}
@@ -2240,6 +2241,7 @@ onUnmounted(() => {
   flex: 0 0 auto; color: var(--text-muted); font-size: 12px; font-weight: 500;
   font-variant-numeric: tabular-nums; white-space: nowrap;
 }
+.plugin-scope { color: var(--text-secondary); }
 
 .badge-official {
   display: inline-flex; align-items: center; gap: 4px;

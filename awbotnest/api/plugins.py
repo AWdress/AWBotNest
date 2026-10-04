@@ -177,9 +177,11 @@ def create_router(deps) -> APIRouter:
             raise HTTPException(status_code=404, detail="插件不存在")
         loaded = runtime.loaded.get(plugin_id)
         context = loaded.context if loaded else None
+        wecom_handlers = routes.wecom_handler_count(plugin_id) if loaded else 0
         return {"id": plugin_id, "enabled": meta.enabled, "loaded": bool(loaded),
                 "error": meta.error or runtime._errors.get(plugin_id, ""),
-                "handlers": sum(len(item._handlers) for item in loaded.contexts) if loaded else 0,
+                "handlers": (sum(len(item._handlers) for item in loaded.contexts) + wecom_handlers) if loaded else 0,
+                "wecom_handlers": wecom_handlers,
                 "background_tasks": runtime.services.governor.status(plugin_id)["background_tasks"],
                 "instances": ([{"id": item.instance_id, "account": item.account_name or "全局实例"}
                                for item in loaded.contexts] if loaded else []),

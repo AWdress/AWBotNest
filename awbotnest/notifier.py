@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 import time
 import logging
+import re
+from email.message import Message
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -12,6 +15,7 @@ from .services import HttpService
 from .telegram import TelegramAccounts
 from .notification_text import content, notification
 from .rich_delivery import send_rich, DeliveryUncertain
+from .wecom_messages import valid_wecom_media_id
 
 
 class NotificationService:
@@ -85,7 +89,7 @@ class NotificationService:
             raise DeliveryUncertain("企业微信通知结果未确认，请检查接收端；未重复发送")
         try:
             data = response.json()
-        except ValueError:
+        except (ValueError, RecursionError):
             raise DeliveryUncertain("企业微信未返回有效的投递结果；未重复发送") from None
         if not isinstance(data, dict) or type(data.get("errcode")) is not int:
             raise DeliveryUncertain("企业微信未返回有效的投递结果；未重复发送")
@@ -96,7 +100,7 @@ class NotificationService:
             raise DeliveryUncertain("企业微信通知未送达全部收件人，请检查接收范围；未重复发送")
         return data
 
-    async def _wecom_application_request(self, config: dict, text: str, user_id: str, *, before_send=None):
+    async def _wecom_application_token(self, config: dict, *, follow_redirects: bool = True) -> tuple[str, str, str]:
         corpid = str(config.get("corpid") or "")
         secret = str(config.get("secret") or "")
         agentid = str(config.get("agentid") or "")
@@ -104,18 +108,36 @@ class NotificationService:
         if not corpid or not secret or not agentid:
             raise RuntimeError("企业微信通知配置不完整")
         try:
-            token_response = await self.http.get(
-                f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
-            )
-            token_response.raise_for_status()
-            token_data = token_response.json()
+            if follow_redirects:
+                token_response = await self.http.get(
+                    f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
+                )
+                token_response.raise_for_status()
+                token_data = token_response.json()
+            else:
+                token_body = bytearray()
+                async with self.http.stream(
+                        "GET", f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
+                        headers={"Accept-Encoding": "identity"}, follow_redirects=False) as token_response:
+                    token_response.raise_for_status()
+                    if token_response.headers.get("content-encoding", "").strip().lower() not in {"", "identity"}:
+                        raise ValueError("Unsupported token encoding")
+                    async for chunk in token_response.aiter_bytes(chunk_size=16 * 1024):
+                        if len(token_body) + len(chunk) > 64 * 1024:
+                            raise ValueError("Oversized token response")
+                        token_body.extend(chunk)
+                token_data = json.loads(token_body)
             token = token_data.get("access_token") if isinstance(token_data, dict) else None
             if (not isinstance(token, str) or not token
                     or type(token_data.get("errcode")) is not int or token_data["errcode"] != 0):
                 raise ValueError("Invalid token response")
-        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, RecursionError):
             # HTTPStatusError includes the query URL, which contains the application Secret.
             raise RuntimeError("企业微信获取令牌失败") from None
+        return base, token, agentid
+
+    async def _wecom_application_request(self, config: dict, text: str, user_id: str, *, before_send=None):
+        base, token, agentid = await self._wecom_application_token(config)
         if before_send is not None:
             before_send()
         return await self._wecom_post(
@@ -153,6 +175,132 @@ class NotificationService:
 
         response = await self._wecom_application_request(config, text, user_id, before_send=before_send)
         return self._wecom_delivery_data(response)
+
+    @staticmethod
+    def _wecom_media_base(config: dict) -> str:
+        base = str(config.get("proxy") or "https://qyapi.weixin.qq.com").rstrip("/")
+        try:
+            parsed = urlsplit(base)
+            valid = (parsed.scheme in {"http", "https"} and parsed.hostname
+                     and parsed.username is None and parsed.password is None
+                     and not parsed.query and not parsed.fragment and "\\" not in base
+                     and not any(ord(char) <= 32 or ord(char) == 127 for char in base))
+            parsed.port  # Reject invalid ports before attaching application credentials.
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("企业微信应用接口地址不正确")
+        return base
+
+    @staticmethod
+    def _wecom_media_filename(disposition: str, content_type: str) -> str:
+        default = {"image/jpeg": "image.jpg", "image/png": "image.png", "image/gif": "image.gif",
+                   "image/webp": "image.webp"}.get(content_type, "image" if content_type.startswith("image/") else "attachment.bin")
+        if not disposition or len(disposition) > 4096:
+            return default
+        try:
+            message = Message()
+            message["Content-Disposition"] = disposition
+            filename = message.get_filename()
+        except (TypeError, ValueError):
+            return default
+        if not isinstance(filename, str):
+            return default
+        filename = filename.replace("\\", "/").rsplit("/", 1)[-1]
+        filename = re.sub(r'[\x00-\x1f\x7f<>:"|?*]', "_", filename).strip(" .")
+        return filename[:200] or default
+
+    async def download_wecom_media(self, channel_id: str, user_id: str, media_id: str, *,
+                                   permission_check=None, max_bytes: int = 20 * 1024 * 1024) -> dict:
+        """Download only the callback sender's authorized media, without exposing credentials."""
+        from .wecom_config import callback_member_allowed, channel_config, validate_callback_config
+
+        if type(max_bytes) is not int or not 0 < max_bytes <= 20 * 1024 * 1024:
+            raise ValueError("企业微信媒体大小限制须为 1 字节至 20 MiB")
+        if not valid_wecom_media_id(media_id):
+            raise ValueError("企业微信 MediaID 格式不正确，不能使用下载地址")
+        config = channel_config(self.settings, channel_id)
+        if (config is None or config.get("enabled", True) is not True
+                or config.get("callback_enabled") is not True):
+            raise PermissionError("企业微信消息回调已停用")
+        validate_callback_config(config)
+        if not callback_member_allowed(config, user_id):
+            raise PermissionError("此成员无权下载消息附件")
+        guarded_fields = ("id", "type", "enabled", "callback_enabled", "callback_token", "callback_aes_key",
+                          "callback_users", "corpid", "agentid", "secret", "proxy", "url", "webhook")
+        snapshot = {key: config.get(key) for key in guarded_fields}
+
+        def check_permission() -> None:
+            current = channel_config(self.settings, channel_id)
+            if (current is None or current.get("enabled", True) is not True
+                    or current.get("callback_enabled") is not True):
+                raise PermissionError("企业微信消息回调已停用")
+            validate_callback_config(current)
+            if (not callback_member_allowed(current, user_id)
+                    or any(current.get(key) != snapshot[key] for key in guarded_fields)):
+                raise PermissionError("企业微信下载权限或应用配置已变更")
+            if permission_check is not None:
+                permission_check()
+
+        check_permission()
+        base = self._wecom_media_base(config)
+        _, token, _ = await self._wecom_application_token(config, follow_redirects=False)
+        check_permission()
+        content = bytearray()
+        try:
+            async with self.http.stream(
+                    "GET", f"{base}/cgi-bin/media/get", params={"access_token": token, "media_id": media_id},
+                    headers={"Accept-Encoding": "identity"}, follow_redirects=False) as response:
+                response.raise_for_status()
+                encoding = response.headers.get("content-encoding", "").strip().lower()
+                if encoding not in {"", "identity"}:
+                    raise RuntimeError("企业微信媒体返回了不支持的压缩内容")
+                declared = response.headers.get("content-length")
+                if declared is not None:
+                    if not re.fullmatch(r"[0-9]{1,20}", declared):
+                        raise RuntimeError("企业微信媒体长度信息不正确")
+                    if int(declared) > max_bytes:
+                        raise ValueError("企业微信媒体超过允许的大小")
+                mime = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                content_type = mime if re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", mime) and len(mime) <= 127 else "application/octet-stream"
+                disposition = response.headers.get("content-disposition", "")
+                attachment = False
+                if 0 < len(disposition) <= 4096:
+                    try:
+                        metadata = Message()
+                        metadata["Content-Disposition"] = disposition
+                        attachment = (metadata.get_content_disposition() in {"attachment", "inline"}
+                                      and bool(metadata.get_filename()))
+                    except (TypeError, ValueError):
+                        pass
+                filename = self._wecom_media_filename(disposition, content_type)
+                async for chunk in response.aiter_bytes(chunk_size=min(64 * 1024, max_bytes + 1)):
+                    check_permission()
+                    if len(content) + len(chunk) > max_bytes:
+                        raise ValueError("企业微信媒体超过允许的大小")
+                    content.extend(chunk)
+        except (httpx.HTTPError, httpx.InvalidURL):
+            raise RuntimeError("企业微信媒体下载失败") from None
+        check_permission()
+        if not content:
+            raise RuntimeError("企业微信媒体未返回附件内容")
+        json_response = content_type == "application/json" or content_type.endswith("+json")
+        if not attachment and (json_response or content.lstrip().startswith(b"{")):
+            try:
+                # Error/control responses are small. Do not parse a potentially
+                # large document into an unbounded Python object graph.
+                data = json.loads(content) if len(content) <= 64 * 1024 else None
+            except (ValueError, UnicodeError, RecursionError):
+                if json_response:
+                    raise RuntimeError("企业微信媒体接口返回了无效的 JSON") from None
+                data = None
+            if isinstance(data, dict) and type(data.get("errcode")) is int and data["errcode"] != 0:
+                raise RuntimeError(f"企业微信媒体下载失败（错误码 {data['errcode']}）")
+            if json_response or isinstance(data, dict) and "video_url" in data:
+                raise RuntimeError("企业微信媒体接口未返回可下载的附件")
+        if not attachment and content_type == "text/html":
+            raise RuntimeError("企业微信媒体接口未返回可下载的附件")
+        return {"content": bytes(content), "filename": filename, "content_type": content_type}
 
     async def send(self, text: str, *, channel: str = "", entity: object = None,
                    bot_id: str = "", plugin_id: str = "", plugin_name: str = "",

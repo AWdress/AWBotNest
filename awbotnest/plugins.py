@@ -333,7 +333,8 @@ class PluginRuntime:
         missing_dependencies = {key: value for key, value in missing_dependencies.items() if value}
         missing_clients = [
             item.id for item in scanned
-            if item.enabled and item.scope != "standalone" and not self.accounts.clients_for_scope(item.scope, item.bot)
+            if item.enabled and item.scope in {"bot", "user", "both"}
+            and not self.accounts.clients_for_scope(item.scope, item.bot)
         ]
         return {
             "ok": not errors and not missing_clients and not missing_dependencies,

@@ -9,7 +9,7 @@ from .. import __version__
 from .models import PluginMeta
 
 
-VALID_SCOPES = {"standalone", "bot", "user", "both"}
+VALID_SCOPES = {"standalone", "bot", "user", "both", "wecom"}
 VALID_RENDER_MODES = {"schema", "vue"}
 
 
@@ -43,6 +43,8 @@ class PluginResolver:
             raise ValueError("__plugin__.id 必须与插件文件或目录名一致")
         if scope not in VALID_SCOPES:
             raise ValueError(f"scope 必须是 {', '.join(sorted(VALID_SCOPES))}")
+        if scope == "wecom" and str(raw.get("instance_mode") or "shared") != "shared":
+            raise ValueError("企业微信插件须使用 instance_mode=shared，成员任务由插件按 UserID 隔离")
         if render_mode not in VALID_RENDER_MODES:
             raise ValueError(f"render_mode 必须是 {', '.join(sorted(VALID_RENDER_MODES))}")
         if render_mode == "vue" and entry.name != "__init__.py":

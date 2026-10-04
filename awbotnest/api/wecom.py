@@ -10,11 +10,12 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 
-from ..wecom_config import callback_member_allowed, channel_config, validate_callback_config
-from ..wecom_crypto import MAX_CALLBACK_BYTES, WeComCrypto, WeComCryptoError, message_signature, parse_xml_fields
+from ..wecom_config import (callback_member_allowed, channel_config, validate_callback_config,
+                            validate_callback_message)
+from ..wecom_crypto import (MAX_CALLBACK_BYTES, WeComCrypto, WeComCryptoError,
+                            message_signature, parse_callback_message, parse_xml_fields)
 
 
-_MEMBER_ID = re.compile(r"[A-Za-z0-9_.@-]{1,64}")
 MAX_REPLY_BYTES = 2048
 CALLBACK_TIME_WINDOW = 300
 
@@ -129,25 +130,34 @@ def create_router(deps) -> APIRouter:
         crypto = WeComCrypto(config["callback_token"], config["callback_aes_key"], config["corpid"])
         try:
             crypto.verify_signature(signature, timestamp, nonce, ciphertext)
-            message = parse_xml_fields(crypto.decrypt(ciphertext), allow_event_details=True)
+            message = parse_callback_message(crypto.decrypt(ciphertext))
         except WeComCryptoError:
             raise HTTPException(status_code=403, detail="回调验证失败") from None
-        # Some official non-text events omit AgentID. They can only be ignored,
-        # never dispatched; text commands always require the application ID.
-        _matches_application(message, config, required=True,
-                             require_agent=message.get("MsgType") == "text")
-        sender = message.get("FromUserName", "")
-        if not _MEMBER_ID.fullmatch(sender):
-            raise HTTPException(status_code=400, detail="回调发送成员格式不正确")
-        if not message.get("MsgType") or not re.fullmatch(r"[0-9]{1,12}", message.get("CreateTime", "")):
-            raise HTTPException(status_code=400, detail="回调消息字段不完整")
-        if message.get("MsgType") != "text":
+        try:
+            dispatchable = validate_callback_message(message, config)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+        if not dispatchable:
             return PlainTextResponse("success", headers={"Cache-Control": "no-store"})
+        sender = message["FromUserName"]
         if not callback_member_allowed(config, sender):
             raise HTTPException(status_code=403, detail="回调成员未获授权")
-        if ("Content" not in message or not re.fullmatch(r"[0-9]{1,20}", message.get("MsgId", ""))
-                or not re.fullmatch(r"[0-9]{1,12}", message.get("CreateTime", ""))):
-            raise HTTPException(status_code=400, detail="回调文字消息格式不正确")
+        # While enabled plugins are still being restored, ACK would discard
+        # user messages before their handlers exist. Let the provider retry.
+        if getattr(request.app.state, "platform_ready", True) is False:
+            raise HTTPException(status_code=503, detail="系统正在启动，请稍后重试")
+        if message.get("MsgType") != "text":
+            receiver = getattr(request.app.state.wecom_commands, "handle_message", None)
+            try:
+                if receiver is not None:
+                    await receiver(channel_id, message)
+            except HTTPException:
+                raise
+            except Exception:
+                raise HTTPException(status_code=503, detail="回调服务暂不可用") from None
+            return PlainTextResponse("success", headers={"Cache-Control": "no-store"})
         try:
             reply = await request.app.state.wecom_commands.handle(channel_id, message)
         except HTTPException:
