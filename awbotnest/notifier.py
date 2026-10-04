@@ -302,6 +302,74 @@ class NotificationService:
             raise RuntimeError("企业微信媒体接口未返回可下载的附件")
         return {"content": bytes(content), "filename": filename, "content_type": content_type}
 
+    async def send_to_default_bot(self, text: str, *, level: str = "info",
+                                  category: str = "", format: str = "text") -> Any:
+        """Send a system notice only through the selected Telegram Bot."""
+        if category == "系统更新" and self.settings.system_update_notify_enabled is not True:
+            return False
+        plain_text, rich_text = content(text, format)
+        if not plain_text:
+            raise ValueError("通知内容不能为空")
+        if level not in {"info", "success", "warning", "error"}:
+            level = "info"
+
+        def delivery_config():
+            selected_id = str(self.settings.default_bot_id or "default")
+            configured = next((item for item in self.settings.bot_specs() if item.id == selected_id), None)
+            token = configured.token if configured else ""
+            # A non-Telegram channel or plugin route must not redirect this notice.
+            channel_config = {}
+            for raw in self.settings.notification_channels:
+                if not isinstance(raw, dict):
+                    continue
+                nested = raw.get("config") if isinstance(raw.get("config"), dict) else {}
+                config = {**nested, **raw}
+                if str(config.get("type") or "telegram") != "telegram":
+                    continue
+                if str(config.get("id") or "") == selected_id:
+                    channel_config = config
+                    break
+                if not channel_config and str(config.get("bot_id") or "") == selected_id:
+                    channel_config = config
+            return (selected_id, token, channel_config.get("enabled") is not False,
+                    channel_config.get("chat_id"), self.settings.default_bot_chat_id,
+                    tuple(self.settings.user_sessions[:1]), self.settings.proxy_url)
+
+        snapshot = delivery_config()
+        selected_id, token, enabled, target, default_target, _, proxy = snapshot
+        bot = self.accounts.bots.get(selected_id)
+        if not enabled or (not token and (bot is None or not bot.is_connected())):
+            return False
+        if isinstance(target, str):
+            target = target.strip()
+        if target in (None, "", 0, "0"):
+            target = default_target
+        if isinstance(target, str):
+            target = target.strip()
+        if target in (None, "", 0):
+            target = await self.accounts.default_notification_target()
+        if target in (None, "", 0):
+            return False
+        if isinstance(target, str) and target.lstrip("-").isdigit():
+            target = int(target)
+        if target == 0:
+            return False
+
+        # Resolving an account may await network I/O; do not use a stale recipient or credential.
+        if ((category == "系统更新" and self.settings.system_update_notify_enabled is not True)
+                or delivery_config() != snapshot or self.accounts.bots.get(selected_id) is not bot):
+            return False
+
+        delivered_plain, delivered_rich = notification("AWBotNest", plain_text, rich_text, level, category)
+        result = await send_rich(bot, target, delivered_rich, delivered_plain,
+                                 token=token, proxy=proxy)
+        self._append_history({
+            "id": str(time.time_ns()), "t": time.time(), "plugin_id": "__system_updates__",
+            "plugin_name": "AWBotNest", "level": level, "category": str(category or ""),
+            "account": "", "text": plain_text,
+        })
+        return result
+
     async def send(self, text: str, *, channel: str = "", entity: object = None,
                    bot_id: str = "", plugin_id: str = "", plugin_name: str = "",
                    level: str = "info", category: str = "", _record: bool = True,

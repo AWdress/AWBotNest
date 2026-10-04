@@ -274,6 +274,16 @@ def create_router(deps) -> APIRouter:
             "version_source": "local",
         }
 
+    @router.get("/api/system/updates", dependencies=[Depends(require_admin)],
+                summary="检查系统更新", description="读取正式版本和更新说明；发现新版本后向默认 Bot 发送通知。")
+    async def system_updates(response: Response, refresh: bool = False, include_history: bool = False):
+        from ..system_updates import get_system_update_service
+        response.headers["Cache-Control"] = "no-store"
+        checker = get_system_update_service(settings, runtime)
+        result = await checker.check(force=refresh, include_history=include_history, notify=False)
+        checker.start_notification()
+        return result
+
     @router.get("/api/ui/about/versions/{version}", dependencies=[Depends(require_admin)])
     async def ui_about_version(version: str):
         return {"version": version, "current": version.lstrip("v") == __version__.lstrip("v"), "notes": ""}

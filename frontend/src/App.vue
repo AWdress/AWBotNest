@@ -24,10 +24,10 @@ const route = useRoute()
 const router = useRouter()
 const online = ref(false)
 const version = ref('')
-const latestVersion = ref('')   // GitHub 最新发布版本
+const latestVersion = ref('')   // 最新发布版本
 const latestNote = ref('')      // 新版本的一句更新说明（hover 提示用）
 const hasUpdate = ref(false)    // 是否有新版本
-const RELEASE_URL = 'https://github.com/AWdress/AWBotNest/releases/latest'
+const latestReleaseUrl = ref('https://github.com/AWdress/AWBotNest/releases')
 const connectionLabel = computed(() => online.value
   ? '连接正常'
   : (platformStatusError.value ? '连接异常' : '正在连接'))
@@ -145,8 +145,7 @@ function isNewer(remote, local) {
   return /(?:_dev|[-.]dev)/i.test(String(local)) && !/(?:_dev|[-.]dev)/i.test(String(remote))
 }
 
-// 查 GitHub 最新发布版本，与当前对比（失败静默，不影响使用）
-// 注意：GitHub 未鉴权接口限流 60 次/小时/IP，必须低频调用，不能跟随心跳
+// 更新信息由系统统一检查；日常读取缓存，查看版本记录时刷新。
 async function checkUpdate(includeHistory = false) {
   if (!version.value) {
     // 还没拿到本地版本就先取一次，避免 onMounted 时序导致跳过
@@ -154,29 +153,8 @@ async function checkUpdate(includeHistory = false) {
     if (!version.value) return
   }
   try {
-    const url = includeHistory
-      ? 'https://api.github.com/repos/AWdress/AWBotNest/releases?per_page=30'
-      : 'https://api.github.com/repos/AWdress/AWBotNest/releases/latest'
-    const r = await fetch(url, {
-      headers: { Accept: 'application/vnd.github+json' },
-      cache: 'no-store',
-    })
-    if (!r.ok) return []
-    const data = await r.json()
-    const releases = (Array.isArray(data) ? data : [data])
-      .filter(item => item && !item.draft)
-      .map(item => {
-        const match = String(item.tag_name || '').match(/^v?(\d+(?:\.\d+)+)$/i)
-        if (!match) return null
-        return {
-          version: match[1],
-          name: item.name || '',
-          notes: String(item.body || '').slice(0, 12000),
-          url: item.html_url || '',
-          published_at: item.published_at || null,
-        }
-      })
-      .filter(Boolean)
+    const data = await api.checkSystemUpdates(includeHistory, includeHistory)
+    const releases = Array.isArray(data.releases) ? data.releases : []
     if (releases[0]) syncVersionCheck(releases[0])
     return releases
   } catch {
@@ -188,6 +166,10 @@ function syncVersionCheck(result = {}) {
   const remote = String(result.version || '').replace(/^v/i, '')
   if (!remote) return
   latestVersion.value = remote
+  const releaseUrl = String(result.url || '')
+  latestReleaseUrl.value = /^https:\/\/github\.com\/AWdress\/AWBotNest\/releases\/tag\/[vV]?2\.\d+\.\d+(?:\.\d+)?$/.test(releaseUrl)
+    ? releaseUrl
+    : `https://github.com/AWdress/AWBotNest/releases/tag/v${encodeURIComponent(remote)}`
   hasUpdate.value = isNewer(remote, version.value)
   let note = String(result.name || '').trim()
   if (!note || /^v?[\d.]+$/i.test(note)) {
@@ -239,8 +221,8 @@ onMounted(async () => {
     await onAuthed()
   }
   if (authed.value) startPlatformStatusPolling().catch(() => {})
-  // 查更新独立低频：每 6 小时一次，避免打满 GitHub 限流
-  updateTimer = setInterval(() => { if (authed.value) checkUpdate() }, 6 * 3600 * 1000)
+  // 每半小时读取一次系统缓存，不由浏览器直接访问发布源。
+  updateTimer = setInterval(() => { if (authed.value) checkUpdate() }, 30 * 60 * 1000)
 })
 
 onUnmounted(() => {
@@ -314,7 +296,7 @@ onUnmounted(() => {
               </svg>
               v{{ version }}
               <span v-if="hasUpdate" class="update-wrap">
-                <a :href="RELEASE_URL" target="_blank" rel="noopener" class="update-arrow"
+                <a :href="latestReleaseUrl" target="_blank" rel="noopener" class="update-arrow"
                    title="发现新版本">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
                        stroke-linecap="round" stroke-linejoin="round">

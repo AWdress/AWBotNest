@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictBool
 
 class LoginStartBody(BaseModel):
     session: str = Field(min_length=1, max_length=64)
@@ -33,6 +33,7 @@ class SettingsBody(BaseModel):
     ai_model: str = Field(default="gpt-4.1-mini", max_length=128)
     plugin_repos: list[str] = Field(default_factory=list)
     notification_channels: list[dict[str, object]] = Field(default_factory=list)
+    system_update_notify_enabled: StrictBool = True
     proxy_url: str = Field(default="", max_length=512)
     webhook_secret: str = Field(default="", max_length=512)
     api_key: str = Field(default="", max_length=512)

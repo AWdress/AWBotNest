@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 const props = defineProps({
   modelValue: { type: String, default: '' },
@@ -9,30 +9,68 @@ const props = defineProps({
   disabled: { type: Boolean, default: false },
   readonly: { type: Boolean, default: false },
   mono: { type: Boolean, default: false },
+  multiline: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'reveal'])
 const visible = ref(false)
+const revealing = ref(false)
 const isMasked = computed(() => props.modelValue === props.maskedValue)
+const showValue = computed(() => visible.value && !revealing.value && !isMasked.value)
+const showTextarea = computed(() => props.multiline && (showValue.value || !props.modelValue))
+let revealRequest = 0
+
+watch(() => props.modelValue, (value) => {
+  if (!value || value === props.maskedValue) visible.value = false
+})
+onBeforeUnmount(() => { revealRequest += 1 })
+
+function updateValue(value) {
+  if (props.multiline) visible.value = true
+  emit('update:modelValue', value)
+}
 
 function toggleVisibility() {
   visible.value = !visible.value
-  if (visible.value && isMasked.value) emit('reveal')
+  if (!visible.value || !isMasked.value || revealing.value) return
+  revealing.value = true
+  const request = ++revealRequest
+  emit('reveal', async (success) => {
+    // 父表单更新后再显示，避免把掩码当作已读取的内容。
+    await nextTick()
+    if (request !== revealRequest) return
+    revealing.value = false
+    if (!success || isMasked.value) visible.value = false
+  })
 }
 </script>
 
 <template>
-  <div class="secret-input">
-    <input
-      class="input"
+  <div class="secret-input" :class="{ multiline: showTextarea }">
+    <textarea
+      v-if="showTextarea"
+      class="textarea"
       :class="{ mono }"
-      :type="visible ? 'text' : 'password'"
       :value="modelValue"
       :placeholder="placeholder"
       :autocomplete="autocomplete"
       :disabled="disabled"
-      :readonly="readonly"
-      @input="emit('update:modelValue', $event.target.value)"
+      :readonly="readonly || revealing"
+      :aria-busy="revealing"
+      @input="updateValue($event.target.value)"
+    ></textarea>
+    <input
+      v-else
+      class="input"
+      :class="{ mono }"
+      :type="showValue ? 'text' : 'password'"
+      :value="modelValue"
+      :placeholder="placeholder"
+      :autocomplete="autocomplete"
+      :disabled="disabled"
+      :readonly="readonly || revealing || multiline"
+      :aria-busy="revealing"
+      @input="updateValue($event.target.value)"
     />
     <button
       type="button"
@@ -55,6 +93,8 @@ function toggleVisibility() {
 <style scoped>
 .secret-input { position: relative; flex: 1; width: 100%; min-width: 0; }
 .secret-input .input { width: 100%; padding-right: 44px; }
+.secret-input .textarea { width: 100%; padding-right: 44px; }
+.secret-input.multiline .secret-toggle { top: 6px; transform: none; }
 .secret-toggle {
   position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
   width: 34px; height: 34px; display: grid; place-items: center;

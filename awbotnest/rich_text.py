@@ -63,7 +63,7 @@ def sanitize_rich_html(content: str) -> str:
                     clean_attrs[attr] = span
         tag.attrs = clean_attrs
 
-    return "".join(str(node) for node in soup.contents).strip()
+    return soup.decode_contents().strip()
 
 
 def _cell_text(cell: Any) -> str:

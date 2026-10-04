@@ -49,14 +49,17 @@ function fieldSnapshot() {
 }
 
 async function revealSecret() {
-  if (!props.pluginId || props.value !== '********' || secretLoading.value) return
+  if (!props.pluginId || props.value !== '********' || secretLoading.value) return false
   const snapshot = fieldSnapshot()
   secretLoading.value = true
   try {
     const data = await api.revealPluginSecret(snapshot.pluginId, snapshot.pointer)
-    if (snapshot.current()) set(data.value ?? '')
+    if (!snapshot.current()) return false
+    set(data.value ?? '')
+    return data.value !== '********'
   } catch (e) {
     if (snapshot.current()) toast.error(e.message || '读取敏感配置失败')
+    return false
   } finally {
     secretLoading.value = false
   }
@@ -80,6 +83,7 @@ function toggleMulti(val) {
 const selectOptions = computed(() => normOptions(props.spec.options))
 onMounted(() => {
   if (props.spec.type !== 'select') return
+  if (props.spec.secret && props.value === '********') return
   const opts = selectOptions.value
   if (!opts.length || opts.some((o) => o.value === props.value)) return
   // 兼容旧表单把数字/布尔选项保存成字符串的配置。
@@ -244,6 +248,8 @@ const infoText = computed(() => {
 
 const showHead = computed(() => props.spec.type !== 'action')
 const cronField = computed(() => isCronField(props.spec, props.name))
+const textSecret = computed(() => props.spec.secret && !cronField.value
+  && (!props.spec.type || ['string', 'text'].includes(props.spec.type)))
 
 // 框型单控件（文本/密码/数字/下拉/多行）用 outlined 浮动 label；
 // 其余（开关/滑块/多选/会话/列表/说明/按钮）保持 label 在上或各自样式
@@ -261,9 +267,9 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
       <!-- slider 当前值 -->
       <span v-else-if="spec.type === 'slider'" class="slider-val">{{ value }}</span>
     </div>
-    <SecretInput v-if="spec.secret && !['password', 'list'].includes(spec.type) && value === '********'"
-                 :model-value="value" :disabled="secretLoading"
-                 @reveal="revealSecret" @update:model-value="set" />
+    <SecretInput v-if="textSecret || (spec.secret && !['password', 'list'].includes(spec.type) && value === '********')"
+                 :model-value="String(value ?? '')" :readonly="secretLoading" :multiline="spec.type === 'text'"
+                 @reveal="revealSecret().then($event)" @update:model-value="set" />
 
     <!-- info → 只读展示 -->
     <div v-else-if="spec.type === 'info'" class="info-box">
@@ -351,8 +357,8 @@ const isBoxField = computed(() => BOX_TYPES.includes(props.spec.type))
     <!-- password -->
     <SecretInput v-else-if="spec.type === 'password'"
                  :model-value="String(value ?? '')"
-                 :disabled="secretLoading"
-                 @reveal="revealSecret"
+                 :readonly="secretLoading"
+                 @reveal="revealSecret().then($event)"
                  @update:model-value="set" />
 
     <!-- Cron → 平台自动识别的可视化编辑器，最终仍保存原字符串 -->

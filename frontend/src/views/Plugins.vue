@@ -3071,10 +3071,11 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
     gap: 14px;
   }
   .plugin-search-fab {
-    right: 20px;
-    bottom: 20px;
+    right: 16px;
+    bottom: calc(92px + var(--safe-area-bottom, env(safe-area-inset-bottom, 0px)));
     width: 52px;
     height: 52px;
+    border-radius: 16px;
   }
   .plugin-search-fab::after {
     display: none;
@@ -3095,7 +3096,6 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .repo-row { grid-template-columns: minmax(0, 1fr) 44px; }
   .repo-delete { width: 44px; height: 44px; min-width: 44px; }
   .modal { --modal-pad: 14px; }
-  .plugin-search-fab { right: 16px; bottom: 82px; width: 52px; height: 52px; border-radius: 16px; }
   .search-modal {
     width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh;
     border: 0; border-radius: 0;

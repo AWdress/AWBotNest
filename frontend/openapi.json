@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AWBotNest API",
-    "version": "2.0.0.9"
+    "version": "2.0.0.10"
   },
   "paths": {
     "/api/v1/plugins": {
@@ -1599,6 +1599,60 @@
             "HTTPBearer": []
           }
         ]
+      }
+    },
+    "/api/system/updates": {
+      "get": {
+        "summary": "检查系统更新",
+        "description": "读取正式版本和更新说明；发现新版本后向默认 Bot 发送通知。",
+        "operationId": "system_updates_api_system_updates_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
+          },
+          {
+            "name": "include_history",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Include History"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/ui/about/versions/{version}": {

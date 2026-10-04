@@ -84,6 +84,7 @@ def create_router(deps) -> APIRouter:
             "ai_model": settings.ai_model,
             "plugin_repos": settings.plugin_repos,
             "notification_channels": masked_channels(),
+            "system_update_notify_enabled": settings.system_update_notify_enabled,
             "proxy_url": masked_proxy(),
         }
         return {
@@ -99,6 +100,7 @@ def create_router(deps) -> APIRouter:
                 "WEB_UI_URL": current["web_host"],
                 "ACCOUNTS": [],
                 "NOTIFICATION_CHANNELS": current["notification_channels"],
+                "SYSTEM_UPDATE_NOTIFY_ENABLED": current["system_update_notify_enabled"],
                 "proxy_set": {"proxy_enable": bool(settings.proxy_url), "PROXY_URL": current["proxy_url"], "proxy": {}},
                 "PIP_INDEX_URL": settings.pip_index_url,
                 "GITHUB_TOKEN": "********" if settings.github_token else "",
@@ -126,7 +128,7 @@ def create_router(deps) -> APIRouter:
         provider_id = "default"
         return {
             "providers": [{"id": provider_id, "name": "OpenAI 兼容服务", "enabled": True,
-                           "base_url": settings.ai_base_url, "api_key": "********" if settings.ai_api_key else "",
+                           "base_url": settings.ai_base_url, "api_key": settings.ai_api_key,
                            "api_format": "auto"}],
             "models": [{"id": "default", "alias": settings.ai_model, "name": settings.ai_model,
                         "enabled": True, "provider_id": provider_id, "model": settings.ai_model,
@@ -493,8 +495,10 @@ def create_router(deps) -> APIRouter:
         raw = await request.json()
         if not isinstance(raw, dict):
             raise HTTPException(status_code=400, detail="设置必须是对象")
+        update_system_notification = "system_update_notify_enabled" in raw
         if isinstance(raw.get("settings"), dict):
             legacy = raw["settings"]
+            update_system_notification = "SYSTEM_UPDATE_NOTIFY_ENABLED" in legacy
             proxy = legacy.get("proxy_set") or {}
             legacy_cloak_key = legacy.get(
                 "CLOAKBROWSER_LICENSE_KEY",
@@ -520,6 +524,9 @@ def create_router(deps) -> APIRouter:
                 "ai_model": settings.ai_model,
                 "plugin_repos": legacy.get("PLUGIN_REPOS", settings.plugin_repos),
                 "notification_channels": legacy.get("NOTIFICATION_CHANNELS", settings.notification_channels),
+                "system_update_notify_enabled": legacy.get(
+                    "SYSTEM_UPDATE_NOTIFY_ENABLED", settings.system_update_notify_enabled,
+                ),
                 "proxy_url": proxy.get("PROXY_URL", settings.proxy_url) if proxy.get("proxy_enable") else "",
                 "webhook_secret": legacy.get("WEBHOOK_SECRET", "********" if settings.webhook_secret else ""),
                 "api_key": legacy.get("API_KEY", "********" if settings.api_key else ""),
@@ -647,6 +654,8 @@ def create_router(deps) -> APIRouter:
         settings.ai_model = body.ai_model.strip() or "gpt-4.1-mini"
         settings.plugin_repos = new_repos
         settings.notification_channels = channels
+        if update_system_notification:
+            settings.system_update_notify_enabled = body.system_update_notify_enabled
         settings.proxy_url = proxy_url
         if body.webhook_secret != "********":
             settings.webhook_secret = body.webhook_secret.strip()

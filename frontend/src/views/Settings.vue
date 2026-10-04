@@ -39,6 +39,7 @@ function saveAppearance() {
 
 // 未保存改动检测：快照 vs 当前
 const savedSnap = ref('')
+let secretsMounted = true
 const dirty = computed(() => !!s.value && JSON.stringify(s.value) !== savedSnap.value)
 const ai = ref(null)
 const aiSavedSnap = ref('')
@@ -537,49 +538,72 @@ function updateSnapshot(snapshot, update) {
 }
 
 async function revealCookieSecret(field) {
+  const form = cookieSettings.value
+  const current = () => secretsMounted && cookieSettings.value === form && form?.[field] === '********'
+  if (!current()) return false
   try {
     const data = await api.revealSecret('cookie', field)
-    cookieSettings.value[field] = data.value || ''
+    if (!current() || data.value === '********') return false
+    form[field] = data.value || ''
     updateSnapshot(cookieSavedSnap, (value) => { value[field] = data.value || '' })
+    return true
   } catch (e) {
-    toast.error('读取已保存内容失败：' + e.message)
+    if (current()) toast.error('读取已保存内容失败：' + e.message)
+    return false
   }
 }
 
 async function revealAiSecret(provider) {
+  const form = ai.value
+  const providerId = provider.id
+  const current = () => secretsMounted && ai.value === form && form?.providers?.includes(provider)
+    && provider.id === providerId && provider.api_key === '********'
+  if (!current()) return false
   try {
-    const data = await api.revealSecret('ai', 'api_key', provider.id)
+    const data = await api.revealSecret('ai', 'api_key', providerId)
+    if (!current() || data.value === '********') return false
     provider.api_key = data.value || ''
     updateSnapshot(aiSavedSnap, (value) => {
-      const saved = (value.providers || []).find((item) => item.id === provider.id)
+      const saved = (value.providers || []).find((item) => item.id === providerId)
       if (saved) saved.api_key = data.value || ''
     })
+    return true
   } catch (e) {
-    toast.error('读取 API Key 失败：' + e.message)
+    if (current()) toast.error('读取 API Key 失败：' + e.message)
+    return false
   }
 }
 
 async function revealSystemSecret(field, apply) {
+  const form = s.value
+  const fieldValue = () => field === 'db_password' ? form?.DB_INFO?.password : form?.[field]
+  const current = () => secretsMounted && s.value === form && fieldValue() === '********'
+  if (!current()) return ''
   try {
     const data = await api.revealSecret('system', field)
-    apply(s.value, data.value || '')
+    if (!current() || data.value === '********') return ''
+    apply(form, data.value || '')
     updateSnapshot(savedSnap, (value) => apply(value, data.value || ''))
     return data.value || ''
   } catch (e) {
-    toast.error('读取已保存内容失败：' + e.message)
+    if (current()) toast.error('读取已保存内容失败：' + e.message)
     return ''
   }
 }
 
 async function revealChannelSecret(field) {
   const form = channelForm.value
-  if (channelModalMode.value !== 'edit' || form.config?.[field] !== '********') return
+  const current = () => secretsMounted && channelModalOpen.value && channelModalMode.value === 'edit'
+    && channelForm.value === form && form.config?.[field] === '********'
+  if (!current()) return false
   try {
     const data = await api.revealSecret('channel', field, form.id)
-    if (!channelModalOpen.value || channelForm.value !== form || form.config[field] !== '********') return
+    if (!current() || data.value === '********') return false
     form.config[field] = data.value || ''
+    return true
   } catch (e) {
-    if (channelModalOpen.value && channelForm.value === form) toast.error('读取渠道密钥失败：' + e.message)
+    if (current()) toast.error('读取渠道密钥失败：' + e.message)
+    return false
   }
 }
 
@@ -968,6 +992,7 @@ async function load(silent = false) {
     if (s.value.DEFAULT_BOT_CHAT_ID === undefined) s.value.DEFAULT_BOT_CHAT_ID = ''
     if (s.value.BOT_NAME === undefined) s.value.BOT_NAME = '主要通知渠道'
     if (s.value.DEFAULT_BOT_ID === undefined) s.value.DEFAULT_BOT_ID = 'default'
+    if (s.value.SYSTEM_UPDATE_NOTIFY_ENABLED === undefined) s.value.SYSTEM_UPDATE_NOTIFY_ENABLED = true
     // 初始化通知渠道配置（数组格式）
     s.value.NOTIFICATION_CHANNELS = Array.isArray(s.value.NOTIFICATION_CHANNELS) ? s.value.NOTIFICATION_CHANNELS : []
 
@@ -981,6 +1006,10 @@ async function load(silent = false) {
 // 同步通知渠道到旧Bot配置，保持后端兼容
 function syncChannelsToOldBots() {
   if (!Array.isArray(s.value.NOTIFICATION_CHANNELS)) return
+  if (savedSnap.value) {
+    const saved = JSON.parse(savedSnap.value)
+    if (JSON.stringify(s.value.NOTIFICATION_CHANNELS) === JSON.stringify(saved.NOTIFICATION_CHANNELS)) return
+  }
 
   // 清空旧配置
   s.value.BOTS = []
@@ -1266,7 +1295,7 @@ async function copyText(text) {
 }
 async function copyPlatformWebhook() {
   if (s.value?.WEBHOOK_SECRET === '********') {
-    await revealSystemSecret('WEBHOOK_SECRET', (value, secret) => { value.WEBHOOK_SECRET = secret })
+    if (!await revealSystemSecret('WEBHOOK_SECRET', (value, secret) => { value.WEBHOOK_SECRET = secret })) return
   }
   if (!platformWebhookUrl.value) return
   if (await copyText(platformWebhookUrl.value)) toast.success('已复制 webhook 地址')
@@ -1274,7 +1303,7 @@ async function copyPlatformWebhook() {
 }
 async function copyApiKey() {
   if (s.value?.API_KEY === '********') {
-    await revealSystemSecret('API_KEY', (value, secret) => { value.API_KEY = secret })
+    if (!await revealSystemSecret('API_KEY', (value, secret) => { value.API_KEY = secret })) return
   }
   if (!s.value?.API_KEY) return
   if (await copyText(s.value.API_KEY)) toast.success('已复制 API Key')
@@ -1806,6 +1835,7 @@ onMounted(() => {
   stopNotificationSync = subscribeNotificationSync(refreshNotificationSync)
 })
 onUnmounted(() => {
+  secretsMounted = false
   channelDialogRequestId += 1
   routingRequestId += 1
   channelModalOpen.value = false
@@ -1937,7 +1967,7 @@ onBeforeRouteLeave(async () => {
             <input class="input" type="number" v-model.number="s.API_ID" /></div>
           <div class="field"><label>API HASH</label>
             <SecretInput v-model="s.API_HASH"
-                         @reveal="revealSystemSecret('API_HASH', (value, secret) => { value.API_HASH = secret })" /></div>
+                         @reveal="revealSystemSecret('API_HASH', (value, secret) => { value.API_HASH = secret }).then($event)" /></div>
         </div>
         <div class="actions">
           <button class="btn btn-primary" @click="save" :disabled="saving || !dirty">
@@ -1945,6 +1975,25 @@ onBeforeRouteLeave(async () => {
           </button>
         </div>
       </div>
+
+      <section v-if="tab === 'notify'" class="card system-update-notify-card"
+               aria-labelledby="system-update-notify-title">
+        <div class="system-update-notify-heading">
+          <div class="system-update-notify-copy">
+            <div id="system-update-notify-title" class="card-title">系统更新通知</div>
+            <div id="system-update-notify-description" class="hint muted small">
+              发现新版本时，将版本和更新内容发送到默认 Bot。
+            </div>
+          </div>
+          <button type="button" class="system-update-notify-switch" role="switch"
+                  :aria-checked="s.SYSTEM_UPDATE_NOTIFY_ENABLED" aria-label="系统更新通知"
+                  :disabled="saving"
+                  aria-describedby="system-update-notify-description"
+                  @click="s.SYSTEM_UPDATE_NOTIFY_ENABLED = !s.SYSTEM_UPDATE_NOTIFY_ENABLED">
+            <span class="toggle" :class="{ on: s.SYSTEM_UPDATE_NOTIFY_ENABLED }" aria-hidden="true"></span>
+          </button>
+        </div>
+      </section>
 
       <!-- 通知渠道 -->
       <div v-if="tab === 'notify'" class="card notify-channels-card">
@@ -2243,7 +2292,7 @@ onBeforeRouteLeave(async () => {
                 </div>
                 <div class="field">
                   <label>API Key</label>
-                  <SecretInput v-model="provider.api_key" @reveal="revealAiSecret(provider)"
+                  <SecretInput v-model="provider.api_key" @reveal="revealAiSecret(provider).then($event)"
                          placeholder="本地服务不需要时可留空" />
                 </div>
                 <button class="btn sm" @click="fetchAiModels(provider)"
@@ -2628,7 +2677,7 @@ onBeforeRouteLeave(async () => {
               <div class="field">
                 <label>端到端加密密码</label>
                 <div class="input-action">
-                  <SecretInput v-model="cookieSettings.password" mono @reveal="revealCookieSecret('password')"
+                  <SecretInput v-model="cookieSettings.password" mono @reveal="revealCookieSecret('password').then($event)"
                          autocomplete="new-password" placeholder="点击重新生成凭据" />
                   <button class="btn sm"
                           :disabled="!cookieSettings.password || cookieSettings.password === '********'"
@@ -2677,7 +2726,7 @@ onBeforeRouteLeave(async () => {
               </div>
               <div class="field">
                 <label>远程端到端加密密码</label>
-                <SecretInput v-model="cookieSettings.remote_password" mono @reveal="revealCookieSecret('remote_password')"
+                <SecretInput v-model="cookieSettings.remote_password" mono @reveal="revealCookieSecret('remote_password').then($event)"
                        autocomplete="new-password" placeholder="CookieCloud 浏览器扩展中的加密密码" />
                 <div v-if="cookieSettings.remote_password === '********'" class="hint muted small">
                   远程密码已安全保存。
@@ -2792,7 +2841,7 @@ onBeforeRouteLeave(async () => {
         </div>
         <div class="row gap">
           <SecretInput style="flex:1" v-model="s.WEBHOOK_SECRET" placeholder="点右侧随机生成，或自定义密钥"
-                       @reveal="revealSystemSecret('WEBHOOK_SECRET', (value, secret) => { value.WEBHOOK_SECRET = secret })" />
+                       @reveal="revealSystemSecret('WEBHOOK_SECRET', (value, secret) => { value.WEBHOOK_SECRET = secret }).then($event)" />
           <button class="btn sm" @click="genWebhookSecret" title="随机生成密钥">
             <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -2818,7 +2867,7 @@ onBeforeRouteLeave(async () => {
         </div>
         <div class="row gap">
           <SecretInput style="flex:1" v-model="s.API_KEY" placeholder="点右侧随机生成，或自定义密钥"
-                       @reveal="revealSystemSecret('API_KEY', (value, secret) => { value.API_KEY = secret })" />
+                       @reveal="revealSystemSecret('API_KEY', (value, secret) => { value.API_KEY = secret }).then($event)" />
           <button class="btn sm" @click="genApiKey" title="随机生成 API Key">
             <svg class="btn-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
                  stroke-linecap="round" stroke-linejoin="round">
@@ -2876,7 +2925,7 @@ onBeforeRouteLeave(async () => {
         <div class="field" style="margin-top:14px">
           <label>GitHub Token</label>
           <SecretInput v-model="s.GITHUB_TOKEN" mono
-                       @reveal="revealSystemSecret('GITHUB_TOKEN', (value, secret) => { value.GITHUB_TOKEN = secret })"
+                       @reveal="revealSystemSecret('GITHUB_TOKEN', (value, secret) => { value.GITHUB_TOKEN = secret }).then($event)"
                        placeholder="可选，填写 GitHub Personal Access Token" />
           <div class="hint muted small">用于查询插件仓库、自动发现和更新，可提高 GitHub API 配额。保存后立即生效；留空保存即可移除 Token。</div>
         </div>
@@ -2916,7 +2965,7 @@ onBeforeRouteLeave(async () => {
              class="field browser-license-field">
           <label>CloakBrowser License Key</label>
           <SecretInput v-model="s.CLOAKBROWSER_LICENSE_KEY" mono
-                       @reveal="revealSystemSecret('CLOAKBROWSER_LICENSE_KEY', (value, secret) => { value.CLOAKBROWSER_LICENSE_KEY = secret })"
+                       @reveal="revealSystemSecret('CLOAKBROWSER_LICENSE_KEY', (value, secret) => { value.CLOAKBROWSER_LICENSE_KEY = secret }).then($event)"
                        placeholder="cb_你的完整 Key" />
           <div class="hint muted small">
             系统保存后直接提供给 CloakBrowser；依赖自动安装到持久化插件依赖目录。
@@ -3006,7 +3055,7 @@ onBeforeRouteLeave(async () => {
             <div class="field"><label>用户</label><input class="input" v-model="s.DB_INFO.user" /></div>
             <div class="field"><label>密码</label>
               <SecretInput v-model="s.DB_INFO.password"
-                           @reveal="revealSystemSecret('db_password', (value, secret) => { value.DB_INFO.password = secret })" /></div>
+                           @reveal="revealSystemSecret('db_password', (value, secret) => { value.DB_INFO.password = secret }).then($event)" /></div>
           </div>
         </template>
         <div class="test-row">
@@ -3177,7 +3226,7 @@ onBeforeRouteLeave(async () => {
         <template v-if="channelForm.type === 'telegram'">
           <div class="field">
             <label>Bot Token</label>
-            <SecretInput v-model="channelForm.config.token" @reveal="revealChannelSecret('token')"
+            <SecretInput v-model="channelForm.config.token" @reveal="revealChannelSecret('token').then($event)"
                    placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" />
             <div class="hint muted small">Telegram 机器人 Token，格式：123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11。</div>
           </div>
@@ -3205,7 +3254,7 @@ onBeforeRouteLeave(async () => {
           </div>
           <div class="field">
             <label>应用Secret</label>
-            <SecretInput v-model="channelForm.config.secret" @reveal="revealChannelSecret('secret')"
+            <SecretInput v-model="channelForm.config.secret" @reveal="revealChannelSecret('secret').then($event)"
                    placeholder="企业微信自建应用的Secret" />
             <div class="hint muted small">填写企业微信自建应用的 Secret。</div>
           </div>
@@ -3233,7 +3282,7 @@ onBeforeRouteLeave(async () => {
               <label class="callback-secret-label">
                 <span>回调 Token</span>
                 <SecretInput v-model="channelForm.config.callback_token" mono
-                             @reveal="revealChannelSecret('callback_token')"
+                             @reveal="revealChannelSecret('callback_token').then($event)"
                              placeholder="企业微信 API 接收消息的 Token" />
               </label>
             </div>
@@ -3241,7 +3290,7 @@ onBeforeRouteLeave(async () => {
               <label class="callback-secret-label">
                 <span>EncodingAESKey</span>
                 <SecretInput v-model="channelForm.config.callback_aes_key" mono
-                             @reveal="revealChannelSecret('callback_aes_key')"
+                             @reveal="revealChannelSecret('callback_aes_key').then($event)"
                              placeholder="企业微信 API 接收消息的 EncodingAESKey" />
               </label>
             </div>
@@ -3272,7 +3321,7 @@ onBeforeRouteLeave(async () => {
           </div>
           <div class="field">
             <label>设备密钥</label>
-            <SecretInput v-model="channelForm.config.device_key" @reveal="revealChannelSecret('device_key')"
+            <SecretInput v-model="channelForm.config.device_key" @reveal="revealChannelSecret('device_key').then($event)"
                    placeholder="从 Bark App 中获取" />
             <div class="hint muted small">填写从 Bark App 获取的设备密钥。</div>
           </div>
@@ -3598,6 +3647,14 @@ onBeforeRouteLeave(async () => {
 .route-search { margin-bottom: 8px; }
 .panel { display: flex; flex-direction: column; }
 /* 通知路由优先于渠道卡片，保持与 V1 的菜单顺序一致。 */
+.system-update-notify-card { margin-bottom: 16px; }
+.system-update-notify-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.system-update-notify-copy { min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.system-update-notify-switch {
+  display: flex; align-items: center; justify-content: center; flex: 0 0 44px;
+  width: 44px; height: 44px; padding: 0; border: 0; background: transparent; cursor: pointer;
+}
+.system-update-notify-switch:disabled { opacity: 0.5; cursor: not-allowed; }
 .notify-channels-card { order: 1; position: relative; z-index: 3; }
 .notify-route-card { order: 2; position: relative; z-index: 1; }
 .route-table { display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }

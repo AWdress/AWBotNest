@@ -24,6 +24,7 @@ from .activity import activity
 from .market import PluginMarket
 from .cloak_proxy import reset_cloakbrowser_runtime
 from .cloak_updates import check_cloakbrowser_update
+from .system_updates import get_system_update_service
 
 
 async def run_once() -> bool:
@@ -107,6 +108,15 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
     await runtime.restore()
     telegram_plugins_ready.set()
     logger.info("插件恢复完成，已加载 %d 个（扫描到 %d 个）", len(runtime.loaded), len(scanned_plugins))
+
+    system_updates = get_system_update_service(settings, runtime)
+    scheduler.add_interval(
+        "__platform__", "系统更新检查", system_updates.check,
+        seconds=6 * 60 * 60,
+    )
+    runtime.system_update_task = asyncio.create_task(
+        system_updates.check(), name="system-update-check",
+    )
 
     async def poll_plugin_market():
         try:
@@ -271,6 +281,13 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         except Exception:
             logger.debug("企业微信回调任务清理失败")
         await accounts.stop_recovery()
+        system_update_task = getattr(runtime, "system_update_task", None)
+        if system_update_task is not None:
+            system_update_task.cancel()
+            await asyncio.gather(system_update_task, return_exceptions=True)
+        system_updates = getattr(runtime, "system_updates", None)
+        if system_updates is not None:
+            await system_updates.close()
         startup_refresh = getattr(market, "startup_task", None)
         if startup_refresh is not None:
             startup_refresh.cancel()

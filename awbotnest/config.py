@@ -57,6 +57,8 @@ def validate_config_format(value: object) -> None:
         fail("browser_engine")
     if "cloakbrowser_use_free_key" in value and not isinstance(value["cloakbrowser_use_free_key"], bool):
         fail("cloakbrowser_use_free_key")
+    if "system_update_notify_enabled" in value and type(value["system_update_notify_enabled"]) is not bool:
+        fail("system_update_notify_enabled")
     salt, password_hash = value.get("admin_salt", ""), value.get("admin_password_hash", "")
     if bool(salt) != bool(password_hash) or (salt and (
             not re.fullmatch(r"[0-9a-fA-F]{32}", salt)
@@ -190,6 +192,7 @@ class Settings:
     plugin_repos: list[str] = field(default_factory=lambda: ["AWdress/AWBotNest-Plugins"])
     plugin_repo_interval: int = 20
     notification_channels: list[dict[str, object]] = field(default_factory=list)
+    system_update_notify_enabled: bool = True
     proxy_url: str = ""
     webhook_secret: str = ""
     api_key: str = ""
@@ -293,6 +296,7 @@ def load_settings(*, persist_defaults: bool = True) -> Settings:
         plugin_repo_interval=max(1, int(raw.get("plugin_repo_interval", 20) or 20)),
         notification_channels=[dict(item) for item in (raw.get("notification_channels") or [])
                                if isinstance(item, dict)],
+        system_update_notify_enabled=raw.get("system_update_notify_enabled", True),
         proxy_url=str(_env("proxy_url", raw.get("proxy_url", "")) or "").strip(),
         webhook_secret=str(_env("webhook_secret", raw.get("webhook_secret", "")) or "").strip(),
         api_key=str(_env("api_key", raw.get("api_key", "")) or "").strip(),
@@ -316,6 +320,8 @@ def load_settings(*, persist_defaults: bool = True) -> Settings:
 
 def save_settings(settings: Settings) -> None:
     import tempfile
+    if type(settings.system_update_notify_enabled) is not bool:
+        raise ValueError("配置项 system_update_notify_enabled 格式不正确")
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(asdict(settings), ensure_ascii=False, indent=2)
     with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=DATA_DIR,

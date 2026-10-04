@@ -163,6 +163,8 @@ export const api = {
   // 系统状态
   // 页面外壳和状态页可能同时读取状态，短时间内共用同一个请求。
   status: getStatus,
+  checkSystemUpdates: (includeHistory = false, refresh = false) =>
+    request('GET', `/api/system/updates?refresh=${refresh}&include_history=${includeHistory}`),
 
   // 运行日志
   recentLogs: () => request('GET', '/api/logs/recent'),
