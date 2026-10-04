@@ -20,6 +20,7 @@ from .plugin_routes import create_router as plugin_routes_router
 from .plugins import create_router as plugins_router
 from .settings import create_router as settings_router
 from .system import create_router as system_router
+from .wecom import register_wecom_callback
 
 
 @dataclass(slots=True)
@@ -61,6 +62,7 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
     market = market or PluginMarket(settings)
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
                            admin_dependency(settings), time.monotonic(), ResourceSampler())
+    register_wecom_callback(app, deps)
     register_open_api(app, settings, accounts, runtime, market=market)
     app.include_router(system_router(deps))
     plugin_router, list_plugins = plugin_routes_router(deps)

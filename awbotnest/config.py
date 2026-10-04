@@ -105,6 +105,8 @@ def validate_config_format(value: object) -> None:
             fail("notification_channels")
         if "config" in item and not isinstance(item["config"], dict):
             fail("notification_channels.config")
+        from .wecom_config import validate_callback_config
+        validate_callback_config({**item.get("config", {}), **item})
     cleaner = value.get("log_cleaner", {})
     for key, (minimum, maximum) in {"hour": (0, 23), "minute": (0, 59), "keep_lines": (1, 1000)}.items():
         if key in cleaner and (isinstance(cleaner[key], bool) or not isinstance(cleaner[key], int)

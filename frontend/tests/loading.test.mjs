@@ -395,3 +395,225 @@ test('store follows the server version comparison and does not offer older versi
   assert.equal(p.hasUpdate({ installed: true, from_manifest: true, local_version: '1.9', version: '1.10' }), true)
   assert.equal(p.hasUpdate({ installed: true, from_manifest: true, local_version: '1.0', version: '1.0.0' }), false)
 })
+
+function settingsPage(api, expose, extra = {}) {
+  return page('Settings', api, expose, {
+    localStorage: { getItem: () => '' },
+    uiProfile: { value: { username: 'admin' } },
+    onBeforeRouteLeave() {},
+    location: { origin: 'https://system.example.test' },
+    ...extra,
+  })
+}
+
+function channelSettingsApi(calls, plugins = []) {
+  let saved = []
+  return {
+    getBotsRouting: async () => ({ bots: [], plugins }),
+    saveNotificationChannels: async channels => {
+      saved = JSON.parse(JSON.stringify(channels))
+      calls.push(saved)
+      return {}
+    },
+    getSettings: async () => ({ settings: { NOTIFICATION_CHANNELS: saved } }),
+    setBotRouting: async () => ({}),
+  }
+}
+
+test('WeCom callback defaults off for new and old channels and encodes its URL', async () => {
+  const copied = []
+  const p = settingsPage({ getBotsRouting: async () => ({ bots: [], plugins: [] }) },
+    's, selectChannelType, openEditChannel, channelForm, wecomCallbackUrl, copyWecomCallbackUrl', {
+      navigator: { clipboard: { writeText: async text => { copied.push(text) } } },
+      window: { isSecureContext: true },
+    })
+  p.s.value = { NOTIFICATION_CHANNELS: [{ id: 'wecom/业务?#', type: 'wechat', config: { corpid: 'corp' } }] }
+  await p.selectChannelType('wechat')
+  assert.equal(p.channelForm.value.config.callback_enabled, false)
+  assert.equal(p.channelForm.value.config.callback_token, '')
+  assert.equal(p.channelForm.value.config.callback_aes_key, '')
+  assert.equal(p.channelForm.value.config.callback_users, '')
+  assert.equal(p.channelForm.value.plugins.length, 0)
+  await p.openEditChannel(0)
+  assert.equal(p.channelForm.value.config.callback_enabled, false)
+  assert.equal(p.channelForm.value.config.corpid, 'corp')
+  const url = `https://system.example.test/api/wecom/callback/${encodeURIComponent('wecom/业务?#')}`
+  assert.equal(p.wecomCallbackUrl.value, url)
+  await p.copyWecomCallbackUrl()
+  assert.deepEqual(copied, [url])
+})
+
+test('WeCom one-way notifications need no callback credentials and disabled fields survive save', async () => {
+  const calls = []
+  const p = settingsPage(channelSettingsApi(calls), 's, selectChannelType, openEditChannel, channelForm, saveChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: [] }
+  await p.selectChannelType('wechat')
+  p.channelForm.value.name = '企业通知'
+  await p.saveChannel()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0].config.callback_enabled, false)
+  assert.equal(calls[0][0].config.callback_token, '')
+  await p.openEditChannel(0)
+  p.channelForm.value.config.callback_token = 'keep-token'
+  p.channelForm.value.config.callback_aes_key = 'keep-key'
+  p.channelForm.value.config.callback_users = 'operator'
+  await p.saveChannel()
+  assert.equal(calls[1][0].config.callback_enabled, false)
+  assert.equal(calls[1][0].config.callback_token, 'keep-token')
+  assert.equal(calls[1][0].config.callback_aes_key, 'keep-key')
+  assert.equal(calls[1][0].config.callback_users, 'operator')
+})
+
+test('WeCom enabled callbacks require real new secrets and named members before saving', async () => {
+  const calls = [], errors = []
+  const p = settingsPage(channelSettingsApi(calls), 's, selectChannelType, channelForm, saveChannel', {
+    toast: { success() {}, error: message => errors.push(message) },
+  })
+  p.s.value = { NOTIFICATION_CHANNELS: [] }
+  await p.selectChannelType('wechat')
+  p.channelForm.value.name = '企业指令'
+  const config = p.channelForm.value.config
+  Object.assign(config, { corpid: 'corp', agentid: '1', secret: 'app-secret' })
+  config.callback_enabled = true
+  await p.saveChannel()
+  assert.match(errors.at(-1), /回调 Token/)
+  config.callback_token = '********'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /回调 Token/)
+  config.callback_token = 'callback-token'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /EncodingAESKey/)
+  config.callback_aes_key = '********'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /EncodingAESKey/)
+  config.callback_aes_key = 'a'.repeat(43)
+  config.callback_users = ' | | '
+  await p.saveChannel()
+  assert.match(errors.at(-1), /允许操作的成员/)
+  assert.equal(calls.length, 0)
+  config.callback_users = 'alice'
+  config.callback_token = 'has space'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /不能包含空白/)
+  config.callback_token = 'a'.repeat(129)
+  await p.saveChannel()
+  assert.match(errors.at(-1), /128/)
+  for (const control of ['\x00', '\x01', '\x1f', '\x7f']) {
+    config.callback_token = `token${control}value`
+    await p.saveChannel()
+    assert.match(errors.at(-1), /控制字符/)
+  }
+  config.callback_token = 'callback-token'
+  config.callback_aes_key = 'short-key'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /43 位 Base64/)
+  config.callback_aes_key = 'A'.repeat(43)
+  config.callback_users = 'bad member'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /每个 UserID/)
+  config.callback_users = Array.from({ length: 65 }, (_, index) => `user${index}`).join('|')
+  await p.saveChannel()
+  assert.match(errors.at(-1), /最多 64 个/)
+  config.callback_users = 'a'.repeat(65)
+  await p.saveChannel()
+  assert.match(errors.at(-1), /每个 UserID/)
+  for (const users of ['@all', 'alice|@ALL']) {
+    config.callback_users = users
+    await p.saveChannel()
+    assert.match(errors.at(-1), /不能使用 @all/)
+  }
+  config.callback_users = ' alice | bob '
+  await p.saveChannel()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0].config.callback_users, 'alice|bob')
+})
+
+test('WeCom editing preserves masked callback secrets and only selected plugin routing', async () => {
+  const calls = [], routes = [], errors = []
+  const plugins = [{ id: 'selected', scope: 'standalone', bot: 'wecom' }, { id: 'other', scope: 'standalone', bot: '' }]
+  const api = channelSettingsApi(calls, plugins)
+  api.setBotRouting = async (id, bot) => { routes.push({ id, bot }) }
+  const p = settingsPage(api, 's, openEditChannel, channelForm, saveChannel', {
+    toast: { success() {}, error: message => errors.push(message) },
+  })
+  p.s.value = { NOTIFICATION_CHANNELS: [{ id: 'wecom', type: 'wechat', name: '企业指令', enabled: true,
+    config: { corpid: 'corp', agentid: '1', secret: '********',
+      callback_enabled: true, callback_token: '********', callback_aes_key: '********', callback_users: 'alice' } }] }
+  await p.openEditChannel(0)
+  assert.deepEqual([...p.channelForm.value.plugins], ['selected'])
+  await p.saveChannel()
+  assert.equal(errors.length, 0)
+  assert.equal(calls[0][0].config.callback_token, '********')
+  assert.equal(calls[0][0].config.callback_aes_key, '********')
+  assert.equal(calls[0][0].plugins, undefined)
+  assert.deepEqual(routes, [])
+  p.s.value.NOTIFICATION_CHANNELS[0].config.callback_aes_key = ''
+  await p.openEditChannel(0)
+  p.channelForm.value.config.callback_aes_key = '********'
+  await p.saveChannel()
+  assert.match(errors.at(-1), /EncodingAESKey/)
+  assert.equal(calls.length, 1)
+})
+
+test('WeCom enabled callbacks require valid application credentials and reject group webhooks', async () => {
+  const calls = [], errors = []
+  const p = settingsPage(channelSettingsApi(calls), 's, selectChannelType, channelForm, saveChannel', {
+    toast: { success() {}, error: message => errors.push(message) },
+  })
+  p.s.value = { NOTIFICATION_CHANNELS: [] }
+  await p.selectChannelType('wechat')
+  p.channelForm.value.name = '企业指令'
+  const valid = { callback_enabled: true, corpid: 'corp', agentid: '1', secret: 'app-secret',
+    callback_token: 'callback-token', callback_aes_key: 'A'.repeat(43), callback_users: 'alice' }
+  for (const [change, error] of [
+    [{ corpid: '' }, /企业 ID/],
+    [{ agentid: '0' }, /正整数/],
+    [{ agentid: '1.5' }, /正整数/],
+    [{ agentid: '2147483648' }, /小于 2147483648/],
+    [{ agentid: '999999999999999' }, /正整数/],
+    [{ agentid: '00000000001' }, /正整数/],
+    [{ secret: '' }, /应用 Secret/],
+    [{ secret: '********' }, /应用 Secret/],
+    [{ url: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=demo' }, /群机器人/],
+    [{ webhook: 'demo' }, /群机器人/],
+  ]) {
+    p.channelForm.value.config = { ...valid, ...change }
+    await p.saveChannel()
+    assert.match(errors.at(-1), error)
+  }
+  assert.equal(calls.length, 0)
+  p.channelForm.value.config = { ...valid, agentid: '2147483647' }
+  await p.saveChannel()
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0][0].config.agentid, '2147483647')
+})
+
+test('WeCom callback secrets load on demand and stale or edited responses do not change the form', async () => {
+  const first = deferred(), second = deferred(), reads = []
+  const p = settingsPage({
+    getBotsRouting: async () => ({ bots: [], plugins: [] }),
+    revealSecret: (kind, field, id) => {
+      reads.push({ kind, field, id })
+      return reads.length === 1 ? first.promise : second.promise
+    },
+  }, 's, openEditChannel, channelForm, revealChannelSecret')
+  p.s.value = { NOTIFICATION_CHANNELS: ['first', 'second'].map(id => ({ id, type: 'wechat', config: {
+    callback_enabled: true, callback_token: '********', callback_aes_key: '********', callback_users: 'alice',
+  } })) }
+  await p.openEditChannel(0)
+  assert.equal(reads.length, 0)
+  const old = p.revealChannelSecret('callback_token')
+  await p.openEditChannel(1)
+  first.resolve({ value: 'first-token' })
+  await old
+  assert.equal(p.channelForm.value.config.callback_token, '********')
+  const edited = p.revealChannelSecret('callback_aes_key')
+  p.channelForm.value.config.callback_aes_key = 'new-key'
+  second.resolve({ value: 'second-key' })
+  await edited
+  assert.equal(p.channelForm.value.config.callback_aes_key, 'new-key')
+  assert.deepEqual(reads, [
+    { kind: 'channel', field: 'callback_token', id: 'first' },
+    { kind: 'channel', field: 'callback_aes_key', id: 'second' },
+  ])
+})

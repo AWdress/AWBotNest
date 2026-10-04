@@ -25,7 +25,7 @@ HISTORY_COMPACT_WRITES = 200
 _AUTH_VALUE = re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token)\s+)?)[^\s,;\"']+")
 _SECRET_VALUE = re.compile(
     r"(?i)(?<![\w])((?:[A-Za-z][\w]*_)?(?:token|secret|password|api[_-]?key|api_hash|cookies?|session|"
-    r"license[_-]?key|verification[_-]?code)[\"']?\s*[:=]\s*)"
+    r"license[_-]?key|aes[_-]?key|verification[_-]?code)[\"']?\s*[:=]\s*)"
     r'(?:"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|\{[^\r\n]*|\[[^\r\n]*|[^\s,;&}]+)'
 )
 

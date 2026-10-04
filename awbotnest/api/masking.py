@@ -22,12 +22,13 @@ def masked_channels(settings) -> list[dict[str, object]]:
     for source in settings.notification_channels:
         item = dict(source)
         nested = dict(item.get("config") or {}) if isinstance(item.get("config"), dict) else {}
-        config = {**{key: value for key, value in item.items() if key not in metadata}, **nested}
+        config = {**nested, **{key: value for key, value in item.items() if key not in metadata}}
         channel_type = "wechat" if item.get("type") == "wecom" else str(item.get("type") or "telegram")
         channel_id = str(item.get("id") or "")
         if channel_type == "telegram" and bot_tokens.get(channel_id):
             config["token"] = "********"
-        for key in ("url", "webhook", "server", "token", "password", "secret", "device_key"):
+        for key in ("url", "webhook", "server", "token", "password", "secret", "device_key",
+                    "callback_token", "callback_aes_key"):
             if config.get(key):
                 config[key] = "********"
         result.append({

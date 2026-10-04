@@ -38,6 +38,7 @@ from ..services.http import HttpService
 from ..logs import memory_logs
 from ..market import normalize_repo
 from ..routing import WebhookRequest
+from ..wecom_config import validate_callback_config
 from .models import *
 from .masking import masked_channels as mask_channels, masked_proxy as mask_proxy
 from ..services.ai_protocol import API_FORMATS, normalize_api_format
@@ -565,11 +566,16 @@ def create_router(deps) -> APIRouter:
             previous_channel = current_channels.get(str(item.get("id") or ""), {})
             previous_nested = (previous_channel.get("config")
                                if isinstance(previous_channel.get("config"), dict) else {})
-            for key in ("url", "webhook", "server", "token", "password", "secret", "device_key"):
+            for key in ("url", "webhook", "server", "token", "password", "secret", "device_key",
+                        "callback_token", "callback_aes_key"):
                 if item.get(key) == "********":
                     item[key] = previous_channel.get(key, previous_nested.get(key, ""))
             if item.get("type") == "wechat":
                 item["type"] = "wecom"
+            try:
+                validate_callback_config(item)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if item.get("type") == "telegram":
                 # Telegram tokens are owned by the Bot settings above. Keeping
                 # a masked duplicate in the channel would corrupt later saves.
@@ -682,7 +688,8 @@ def create_router(deps) -> APIRouter:
             item.pop("config", None)
             previous = existing_channels.get(str(item.get("id") or ""), {})
             previous_nested = previous.get("config") if isinstance(previous.get("config"), dict) else {}
-            for key in ("url", "webhook", "server", "token", "password", "secret", "device_key"):
+            for key in ("url", "webhook", "server", "token", "password", "secret", "device_key",
+                        "callback_token", "callback_aes_key"):
                 if item.get(key) == "********":
                     if key == "token" and item.get("type") == "telegram":
                         # Telegram Token 存在 Bot 配置中，渠道中只有掩码。
@@ -691,6 +698,10 @@ def create_router(deps) -> APIRouter:
                         item[key] = previous.get(key, previous_nested.get(key, ""))
             if item.get("type") == "wechat":
                 item["type"] = "wecom"
+            try:
+                validate_callback_config(item)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
             if item.get("type") == "telegram":
                 channel_id = str(item.get("id") or "")
                 token = str(item.get("token", existing_tokens.get(channel_id, "")) or "")

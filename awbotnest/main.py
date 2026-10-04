@@ -266,6 +266,10 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         restart_watcher.cancel()
         platform_task.cancel()
         await asyncio.gather(restart_watcher, platform_task, return_exceptions=True)
+        try:
+            await app.state.wecom_commands.close()
+        except Exception:
+            logger.debug("企业微信回调任务清理失败")
         await accounts.stop_recovery()
         startup_refresh = getattr(market, "startup_task", None)
         if startup_refresh is not None:

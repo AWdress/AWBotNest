@@ -572,11 +572,14 @@ async function revealSystemSecret(field, apply) {
 }
 
 async function revealChannelSecret(field) {
+  const form = channelForm.value
+  if (channelModalMode.value !== 'edit' || form.config?.[field] !== '********') return
   try {
-    const data = await api.revealSecret('channel', field, channelForm.value.id)
-    channelForm.value.config[field] = data.value || ''
+    const data = await api.revealSecret('channel', field, form.id)
+    if (!channelModalOpen.value || channelForm.value !== form || form.config[field] !== '********') return
+    form.config[field] = data.value || ''
   } catch (e) {
-    toast.error('读取渠道密钥失败：' + e.message)
+    if (channelModalOpen.value && channelForm.value === form) toast.error('读取渠道密钥失败：' + e.message)
   }
 }
 
@@ -1296,6 +1299,28 @@ const channelTypes = [
   { value: 'bark', label: 'Bark', icon: 'bark' }
 ]
 
+function defaultChannelConfig(type, config = {}) {
+  if (type !== 'wechat') return { ...config }
+  return {
+    callback_token: '',
+    callback_aes_key: '',
+    callback_users: '',
+    ...config,
+    callback_enabled: config?.callback_enabled === true,
+  }
+}
+
+const wecomCallbackUrl = computed(() => {
+  if (channelForm.value.type !== 'wechat' || !channelForm.value.id) return ''
+  return `${location.origin}/api/wecom/callback/${encodeURIComponent(channelForm.value.id)}`
+})
+
+async function copyWecomCallbackUrl() {
+  if (!wecomCallbackUrl.value) return
+  if (await copyText(wecomCallbackUrl.value)) toast.success('已复制回调 URL')
+  else toast.error('复制失败，请手动选择复制')
+}
+
 // 添加渠道下拉菜单
 const addMenuOpen = ref(false)
 
@@ -1314,7 +1339,7 @@ async function selectChannelType(type) {
     type: type,
     enabled: true,
     is_default: false,
-    config: {},
+    config: defaultChannelConfig(type),
     plugins: []  // 新增：选择的插件列表
   }
   channelModalOpen.value = true
@@ -1330,7 +1355,7 @@ async function openAddChannel() {
     type: 'telegram',
     enabled: true,
     is_default: false,
-    config: {},
+    config: defaultChannelConfig('telegram'),
     plugins: []  // 新增：选择的插件列表
   }
   channelModalOpen.value = true
@@ -1348,6 +1373,7 @@ async function openEditChannel(index) {
   channelEditIndex.value = index
   const ch = s.value.NOTIFICATION_CHANNELS[index]
   channelForm.value = JSON.parse(JSON.stringify(ch))
+  channelForm.value.config = defaultChannelConfig(ch.type, channelForm.value.config)
   // 确保字段存在
   if (channelForm.value.is_default === undefined) {
     channelForm.value.is_default = false
@@ -1361,6 +1387,58 @@ async function saveChannel() {
   if (!channelForm.value.name.trim()) {
     toast.error('请输入名称')
     return
+  }
+
+  const config = channelForm.value.config
+  if (channelForm.value.type === 'wechat' && config.callback_enabled) {
+    if (config.url || config.webhook) {
+      toast.error('消息回调需要企业微信自建应用，不能使用群机器人 Webhook')
+      return
+    }
+    if (typeof config.corpid !== 'string' || !config.corpid.trim()) {
+      toast.error('请填写企业 ID')
+      return
+    }
+    const agentId = Number(config.agentid)
+    if (!/^\d{1,10}$/.test(String(config.agentid || '')) || !Number.isSafeInteger(agentId) || agentId <= 0 || agentId >= 2 ** 31) {
+      toast.error('应用 AgentId 必须是小于 2147483648 的正整数')
+      return
+    }
+    const savedChannel = channelModalMode.value === 'edit'
+      ? s.value.NOTIFICATION_CHANNELS.find(channel => channel.id === channelForm.value.id)
+      : null
+    for (const [field, label] of [['secret', '应用 Secret'], ['callback_token', '回调 Token'], ['callback_aes_key', 'EncodingAESKey']]) {
+      const value = typeof config[field] === 'string' ? config[field].trim() : ''
+      const savedValue = savedChannel?.config?.[field]
+      if (!value || (value === '********' && !(typeof savedValue === 'string' && savedValue.trim()))) {
+        toast.error(`请填写${label}`)
+        return
+      }
+    }
+    if (config.callback_token !== '********' && !/^[^\s\x00-\x20\x7f]{1,128}$/.test(config.callback_token)) {
+      toast.error('回调 Token 最多 128 个字符，不能包含空白或控制字符')
+      return
+    }
+    if (config.callback_aes_key !== '********' && !/^[A-Za-z0-9+/]{43}$/.test(config.callback_aes_key)) {
+      toast.error('EncodingAESKey 必须是 43 位 Base64 字符')
+      return
+    }
+    const users = typeof config.callback_users === 'string'
+      ? config.callback_users.split('|').map(user => user.trim()).filter(Boolean)
+      : []
+    if (!users.length) {
+      toast.error('请填写允许操作的成员')
+      return
+    }
+    if (users.some(user => user.toLowerCase() === '@all')) {
+      toast.error('允许操作的成员不能使用 @all，请填写具体成员 UserID')
+      return
+    }
+    if (users.length > 64 || users.some(user => !/^[A-Za-z0-9_@.-]{1,64}$/.test(user))) {
+      toast.error('允许操作的成员最多 64 个，每个 UserID 限 64 位字母、数字或 _@.-')
+      return
+    }
+    config.callback_users = users.join('|')
   }
 
   const originalSettings = JSON.parse(JSON.stringify(s.value))
@@ -3119,6 +3197,45 @@ onBeforeRouteLeave(async () => {
                    placeholder="@all" />
           <div class="hint muted small">默认发送给全部成员；指定多个成员时用竖线分隔。</div>
           </div>
+          <div class="field">
+            <label class="checkbox-label">
+              <input type="checkbox" v-model="channelForm.config.callback_enabled" />
+              <span>消息回调</span>
+            </label>
+            <div class="hint muted small">接收成员发送的指令。只发通知时无需开启。</div>
+          </div>
+          <template v-if="channelForm.config.callback_enabled">
+            <div class="field">
+              <label class="callback-secret-label">
+                <span>回调 Token</span>
+                <SecretInput v-model="channelForm.config.callback_token" mono
+                             @reveal="revealChannelSecret('callback_token')"
+                             placeholder="企业微信 API 接收消息的 Token" />
+              </label>
+            </div>
+            <div class="field">
+              <label class="callback-secret-label">
+                <span>EncodingAESKey</span>
+                <SecretInput v-model="channelForm.config.callback_aes_key" mono
+                             @reveal="revealChannelSecret('callback_aes_key')"
+                             placeholder="企业微信 API 接收消息的 EncodingAESKey" />
+              </label>
+            </div>
+            <div class="field">
+              <label for="wecom-callback-users">允许操作的成员</label>
+              <input id="wecom-callback-users" class="input" v-model="channelForm.config.callback_users"
+                     placeholder="zhangsan|lisi" autocomplete="off" />
+              <div class="hint muted small">填写成员 UserID，多个用竖线分隔；留空不能开启。</div>
+            </div>
+            <div class="field">
+              <label for="wecom-callback-url">回调 URL</label>
+              <input id="wecom-callback-url" class="input mono" :value="wecomCallbackUrl" readonly />
+              <button class="btn sm" type="button" style="margin-top:8px" @click="copyWecomCallbackUrl">复制回调 URL</button>
+              <div class="hint muted small">先保存渠道，再到自建应用「API 接收消息」填写回调 URL、Token 和 EncodingAESKey。</div>
+            </div>
+            <div class="hint muted small">支持 /帮助、/状态、/插件、/运行 插件ID 动作名。</div>
+            <div class="hint muted small">只能执行上方所选通知插件已有的操作；未选择插件时不能运行插件。</div>
+          </template>
         </template>
 
         <!-- Bark 配置 -->
@@ -3339,6 +3456,7 @@ onBeforeRouteLeave(async () => {
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-size: 12px; color: var(--text-secondary); }
+.callback-secret-label { display: flex; flex-direction: column; gap: 6px; }
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .row.between { display: flex; align-items: center; justify-content: space-between; }
 .browser-engine-options {

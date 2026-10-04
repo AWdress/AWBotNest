@@ -66,6 +66,63 @@ class NotificationService:
         self.history_path.unlink(missing_ok=True)
         self.mark_read()
 
+    async def _wecom_application_request(self, config: dict, text: str, user_id: str, *, before_send=None):
+        corpid = str(config.get("corpid") or "")
+        secret = str(config.get("secret") or "")
+        agentid = str(config.get("agentid") or "")
+        base = str(config.get("proxy") or "https://qyapi.weixin.qq.com").rstrip("/")
+        if not corpid or not secret or not agentid:
+            raise RuntimeError("企业微信通知配置不完整")
+        token_response = await self.http.get(
+            f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
+        )
+        token_response.raise_for_status()
+        token_data = token_response.json()
+        token = str(token_data.get("access_token") or "") if isinstance(token_data, dict) else ""
+        if not token:
+            raise RuntimeError("企业微信获取令牌失败")
+        if before_send is not None:
+            before_send()
+        return await self.http.post(
+            f"{base}/cgi-bin/message/send", params={"access_token": token},
+            json={"touser": user_id, "msgtype": "text", "agentid": int(agentid),
+                  "text": {"content": text}, "safe": 0},
+        )
+
+    async def send_wecom_text(self, channel_id: str, user_id: str, text: str, *, permission_check=None) -> dict:
+        """Reply only to the authorized sender, never broadcast or fall back."""
+        from .wecom_config import callback_members, channel_config, validate_callback_config
+
+        config = channel_config(self.settings, channel_id)
+        if (config is None or config.get("enabled", True) is not True
+                or config.get("callback_enabled") is not True):
+            raise RuntimeError("企业微信消息回调已停用")
+        validate_callback_config(config)
+        if user_id not in callback_members(config):
+            raise PermissionError("此成员无权接收指令结果")
+        if not isinstance(text, str) or not text or len(text.encode("utf-8")) > 2000:
+            raise ValueError("企业微信指令结果长度不正确")
+
+        def before_send() -> None:
+            current = channel_config(self.settings, channel_id)
+            if (current is None or current.get("enabled", True) is not True
+                    or current.get("callback_enabled") is not True):
+                raise PermissionError("企业微信消息回调已停用")
+            validate_callback_config(current)
+            if user_id not in callback_members(current) or any(
+                    str(current.get(key) or "") != str(config.get(key) or "")
+                    for key in ("corpid", "agentid", "secret", "proxy")):
+                raise PermissionError("企业微信接收权限或应用配置已变更")
+            if permission_check is not None:
+                permission_check()
+
+        response = await self._wecom_application_request(config, text, user_id, before_send=before_send)
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict) or data.get("errcode") != 0 or data.get("invaliduser"):
+            raise RuntimeError("企业微信指令结果投递失败")
+        return data
+
     async def send(self, text: str, *, channel: str = "", entity: object = None,
                    bot_id: str = "", plugin_id: str = "", plugin_name: str = "",
                    level: str = "info", category: str = "", _record: bool = True,
@@ -173,25 +230,7 @@ class NotificationService:
             if url:
                 response = await self.http.post(url, json={"msgtype": "text", "text": {"content": plain_text}})
             else:
-                corpid = str(config.get("corpid") or "")
-                secret = str(config.get("secret") or "")
-                agentid = str(config.get("agentid") or "")
-                base = str(config.get("proxy") or "https://qyapi.weixin.qq.com").rstrip("/")
-                if not corpid or not secret or not agentid:
-                    raise RuntimeError("企业微信通知配置不完整")
-                token_response = await self.http.get(
-                    f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
-                )
-                token_response.raise_for_status()
-                token_data = token_response.json()
-                token = str(token_data.get("access_token") or "")
-                if not token:
-                    raise RuntimeError(f"企业微信获取令牌失败：{token_data.get('errmsg') or '未知错误'}")
-                response = await self.http.post(
-                    f"{base}/cgi-bin/message/send", params={"access_token": token},
-                    json={"touser": str(config.get("touser") or "@all"), "msgtype": "text",
-                          "agentid": int(agentid), "text": {"content": plain_text}, "safe": 0},
-                )
+                response = await self._wecom_application_request(config, plain_text, str(config.get("touser") or "@all"))
         elif kind == "webhook":
             url = str(config.get("url") or "")
             if not url:

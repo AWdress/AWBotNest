@@ -631,6 +631,119 @@ test('旧安装无需确认来源，同版本不重装，手动更新后不再�
   await expect(page.getByRole('button', { name: '更新', exact: true })).toHaveCount(0)
 })
 
+test('企业微信回调默认关闭，按需读取密钥且关闭后保留配置', async ({ page }) => {
+  const channelSettings = JSON.parse(JSON.stringify(settings))
+  const saves = [], reads = [], routes = []
+  const routingPlugins = [
+    { id: 'checkin', name: '签到插件', scope: 'standalone', bot: '' },
+    { id: 'other', name: '其他插件', scope: 'standalone', bot: '' },
+    { id: 'bot_only', name: '仅 Telegram 事件插件', scope: 'bot', bot: '' },
+  ]
+  await page.route('**/api/settings', route => {
+    const masked = JSON.parse(JSON.stringify(channelSettings))
+    for (const channel of masked.NOTIFICATION_CHANNELS) {
+      for (const field of ['secret', 'callback_token', 'callback_aes_key']) {
+        if (channel.config[field]) channel.config[field] = '********'
+      }
+    }
+    return json(route, { settings: masked })
+  })
+  await page.route('**/api/settings/notification-channels', route => {
+    const channels = route.request().postDataJSON().channels
+    saves.push(JSON.parse(JSON.stringify(channels)))
+    for (const channel of channels) {
+      const previous = channelSettings.NOTIFICATION_CHANNELS.find(item => item.id === channel.id)
+      for (const field of ['secret', 'callback_token', 'callback_aes_key']) {
+        if (channel.config[field] === '********') channel.config[field] = previous?.config[field] || ''
+      }
+    }
+    channelSettings.NOTIFICATION_CHANNELS = channels
+    return json(route, { ok: true, restart_required: false })
+  })
+  await page.route('**/api/settings/reveal-secret', route => {
+    const body = route.request().postDataJSON()
+    reads.push(body)
+    const channel = channelSettings.NOTIFICATION_CHANNELS.find(item => item.id === body.id)
+    return json(route, { value: channel.config[body.field] })
+  })
+  await page.route('**/api/bots/routing', route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON()
+      routes.push(body)
+      routingPlugins.find(plugin => plugin.id === body.plugin_id).bot = body.bot_id
+      return json(route, { ok: true })
+    }
+    return json(route, { bots: [], plugins: routingPlugins })
+  })
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: '通知渠道', exact: true }).click()
+  await page.locator('.btn-add-mp').click()
+  await page.getByRole('button', { name: '企业微信', exact: true }).click()
+  const modal = page.locator('.channel-modal')
+  await modal.getByPlaceholder('如：通知1、订单通知').fill('企业指令测试')
+  await expect(modal.getByLabel('消息回调', { exact: true })).not.toBeChecked()
+  await expect(modal.getByLabel('回调 Token', { exact: true })).toHaveCount(0)
+  await modal.getByRole('button', { name: '确认', exact: true }).click()
+  await expect(modal).toBeHidden()
+  expect(saves).toHaveLength(1)
+  expect(saves[0][0].config.callback_enabled).toBe(false)
+  expect(saves[0][0].config.callback_token).toBe('')
+
+  await page.locator('.channel-card-mp .channel-bottom-row').click()
+  await modal.getByLabel('消息回调', { exact: true }).check()
+  await modal.getByPlaceholder('企业微信后台企业信息中的企业ID').fill('corp-test')
+  await modal.getByPlaceholder('企业微信自建应用的AgentId').fill('1')
+  await modal.getByPlaceholder('企业微信自建应用的Secret').fill('app-secret')
+  await modal.getByLabel('回调 Token', { exact: true }).fill('callback-token')
+  await modal.getByLabel('EncodingAESKey', { exact: true }).fill('A'.repeat(43))
+  await expect(modal.getByLabel('回调 URL', { exact: true })).toHaveAttribute('readonly', '')
+  await expect(modal.getByLabel('回调 URL', { exact: true })).toHaveValue(
+    `${new URL(page.url()).origin}/api/wecom/callback/${encodeURIComponent(channelSettings.NOTIFICATION_CHANNELS[0].id)}`,
+  )
+  await expect(modal.getByText(/先保存渠道，再到自建应用/)).toBeVisible()
+  await expect(modal.getByText(/支持 \/帮助、\/状态、\/插件、\/运行 插件ID 动作名/)).toBeVisible()
+  await expect(modal.getByLabel('签到插件', { exact: true })).not.toBeChecked()
+  await expect(modal.getByLabel('其他插件', { exact: true })).not.toBeChecked()
+  await expect(modal.getByLabel('仅 Telegram 事件插件', { exact: true })).toHaveCount(0)
+  await modal.getByRole('button', { name: '确认', exact: true }).click()
+  await expect(page.getByText('请填写允许操作的成员', { exact: true })).toBeVisible()
+  expect(saves).toHaveLength(1)
+  await modal.getByLabel('允许操作的成员', { exact: true }).fill('alice|bob')
+  await modal.getByLabel('签到插件', { exact: true }).check()
+  await modal.getByRole('button', { name: '确认', exact: true }).click()
+  await expect(modal).toBeHidden()
+  await expect.poll(() => routes.length).toBe(1)
+  expect(routes[0]).toEqual({ plugin_id: 'checkin', bot_id: channelSettings.NOTIFICATION_CHANNELS[0].id })
+  expect(saves[1][0].config.callback_enabled).toBe(true)
+  expect(saves[1][0].config.callback_users).toBe('alice|bob')
+  expect(reads).toEqual([])
+
+  await page.locator('.channel-card-mp .channel-bottom-row').click()
+  await expect(modal.getByLabel('回调 Token', { exact: true })).toHaveValue('********')
+  await expect(modal.getByLabel('EncodingAESKey', { exact: true })).toHaveValue('********')
+  expect(reads).toEqual([])
+  await modal.locator('.callback-secret-label').filter({ hasText: '回调 Token' })
+    .getByRole('button', { name: '显示内容', exact: true }).click()
+  await expect(modal.getByLabel('回调 Token', { exact: true })).toHaveValue('callback-token')
+  expect(reads).toEqual([{ kind: 'channel', field: 'callback_token', id: channelSettings.NOTIFICATION_CHANNELS[0].id }])
+  await modal.getByLabel('消息回调', { exact: true }).uncheck()
+  await expect(modal.getByLabel('回调 Token', { exact: true })).toHaveCount(0)
+  await modal.getByRole('button', { name: '确认', exact: true }).click()
+  await expect(modal).toBeHidden()
+  expect(saves[2][0].config.callback_enabled).toBe(false)
+  expect(saves[2][0].config.callback_token).toBe('callback-token')
+  expect(saves[2][0].config.callback_aes_key).toBe('********')
+  expect(saves[2][0].config.callback_users).toBe('alice|bob')
+  await page.locator('.channel-card-mp .channel-bottom-row').click()
+  await expect(modal.getByLabel('消息回调', { exact: true })).not.toBeChecked()
+  await modal.getByLabel('消息回调', { exact: true }).check()
+  await expect(modal.getByLabel('回调 Token', { exact: true })).toHaveValue('********')
+  await expect(modal.getByLabel('EncodingAESKey', { exact: true })).toHaveValue('********')
+  await expect(modal.getByLabel('允许操作的成员', { exact: true })).toHaveValue('alice|bob')
+  await expect(page.locator('.toast-enter-active, .toast-leave-active')).toHaveCount(0)
+  await expectInsideViewport(page)
+})
+
 test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {
   await page.goto('/#/plugins')
   await page.getByRole('button', { name: /插件市场/ }).click()
