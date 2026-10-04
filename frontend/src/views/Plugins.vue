@@ -1018,7 +1018,7 @@ function openPluginSearch() {
   searchActiveIndex.value = 0
   searchOpen.value = true
   if (!storeLoaded) loadStore(false)
-  nextTick(() => searchInput.value?.focus())
+  nextTick(() => searchInput.value?.focus({ preventScroll: true }))
 }
 
 function onSearchInputKeydown(e) {
@@ -3097,16 +3097,31 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .search-modal {
     width: 100vw; max-width: 100vw; height: 100dvh; max-height: 100dvh;
     border: 0; border-radius: 0;
+    padding-left: var(--safe-area-left, env(safe-area-inset-left, 0px));
+    padding-right: var(--safe-area-right, env(safe-area-inset-right, 0px));
+    overscroll-behavior: contain;
   }
-  .search-head { padding: 15px 16px 10px; }
-  .search-input-wrap { margin: 0 16px 10px; }
+  .search-head {
+    flex: 0 0 auto;
+    padding: calc(var(--safe-area-top, env(safe-area-inset-top, 0px)) + 15px) 16px 10px;
+  }
+  .search-close {
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+  }
+  .search-input-wrap { flex: 0 0 auto; margin: 0 16px 10px; }
+  .search-input-wrap input { font-size: 16px; }
   .search-filters { margin: 0 16px 9px; }
-  .search-list { padding: 2px 6px 8px; }
+  .search-list { min-height: 0; padding: 2px 6px 8px; overscroll-behavior: contain; }
   .search-item { grid-template-columns: 42px minmax(0, 1fr) auto; gap: 10px; padding: 10px; }
   .search-icon { width: 38px; height: 38px; border-radius: 10px; }
   .search-action { min-width: 52px; padding: 7px 9px; }
   .search-meta span:nth-child(n+3) { display: none; }
-  .search-foot { padding: 10px 16px; }
+  .search-foot {
+    flex: 0 0 auto;
+    padding: 10px 16px calc(var(--safe-area-bottom, env(safe-area-inset-bottom, 0px)) + 10px);
+  }
   .search-foot > span:first-child { display: none; }
   .config-scope-grid { grid-template-columns: 1fr; gap: 12px; }
   .config-scope-field:only-child { grid-column: auto; }
@@ -3115,21 +3130,12 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
   .modal.modal-wide {
     width: 100vw !important; max-width: 100vw !important;
     height: 100dvh !important; max-height: 100dvh !important;
-    padding-top: max(var(--modal-pad), calc(env(safe-area-inset-top) + 8px));
-    padding-bottom: max(var(--modal-pad), env(safe-area-inset-bottom));
+    padding-top: max(var(--modal-pad), calc(var(--safe-area-top, env(safe-area-inset-top, 0px)) + 8px));
+    padding-bottom: max(var(--modal-pad), var(--safe-area-bottom, env(safe-area-inset-bottom, 0px)));
     border-radius: 0;
     overscroll-behavior: contain;
-    scroll-padding-top: calc(env(safe-area-inset-top) + 76px);
+    scroll-padding-top: calc(var(--safe-area-top, env(safe-area-inset-top, 0px)) + 76px);
     scroll-padding-bottom: 24px;
-  }
-  :global(html.keyboard-open) .config-modal-mask {
-    inset: var(--visual-viewport-offset-top, 0px) 0 auto;
-    height: var(--visual-viewport-height, 100dvh);
-    align-items: flex-start;
-  }
-  :global(html.keyboard-open) .config-modal-mask .modal.modal-wide {
-    height: var(--visual-viewport-height, 100dvh) !important;
-    max-height: var(--visual-viewport-height, 100dvh) !important;
   }
   .modal.modal-wide .modal-head .close {
     width: 44px;
@@ -3140,6 +3146,42 @@ button:focus-visible, .btn:focus-visible, .tab:focus-visible {
     margin: -6px -6px -6px 6px;
     border-radius: 12px;
     touch-action: manipulation;
+  }
+}
+
+/* 横屏触摸设备也会弹出键盘，只调整可见区域，不改变常规列表布局。 */
+@media (max-width: 768px), (pointer: coarse) and (hover: none) {
+  html.keyboard-open .search-mask {
+    inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+    height: var(--visual-viewport-height, 100dvh);
+    align-items: flex-start;
+  }
+  html.keyboard-open .search-mask .search-modal {
+    height: var(--visual-viewport-height, 100dvh);
+    max-height: var(--visual-viewport-height, 100dvh);
+  }
+  html.keyboard-open .search-mask :is(.search-head, .search-input-wrap, .search-foot) {
+    flex-shrink: 0;
+  }
+  html.keyboard-open .search-mask .search-list {
+    min-height: 0;
+    overscroll-behavior: contain;
+  }
+  html.keyboard-open .config-modal-mask {
+    inset: var(--visual-viewport-offset-top, 0px) 0 auto;
+    height: var(--visual-viewport-height, 100dvh);
+    align-items: flex-start;
+  }
+  html.keyboard-open .config-modal-mask .modal.modal-wide {
+    height: var(--visual-viewport-height, 100dvh) !important;
+    max-height: var(--visual-viewport-height, 100dvh) !important;
+    scroll-padding-top: calc(var(--safe-area-top, env(safe-area-inset-top, 0px)) + 76px);
+  }
+  html.keyboard-open .config-modal-mask .modal.modal-wide .modal-head {
+    position: sticky;
+    top: calc(var(--safe-area-top, env(safe-area-inset-top, 0px)) + 8px);
+    z-index: 2;
+    background: var(--bg-card);
   }
 }
 </style>

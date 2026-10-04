@@ -1,4 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { join } from 'node:path'
+
+// Assertion-only red/green runs do not consume visual inspection rounds.
+test.use({ screenshot: process.env.AWBOTNEST_ASSERTIONS_ONLY ? 'off' : 'only-on-failure' })
 
 const status = {
   version: '2.0.0.6', telegram_configured: false, clients: [], accounts: [],
@@ -150,6 +154,390 @@ async function expectInsideViewport(page) {
   expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1)
   expect(geometry.overflowing).toEqual([])
 }
+
+async function installVisualViewportFixture(page) {
+  await page.addInitScript(({ width, height }) => {
+    Object.defineProperty(window.navigator, 'standalone', { configurable: true, value: true })
+    const viewport = new EventTarget()
+    // Init scripts run before the viewport meta is parsed (innerWidth may still
+    // be the browser's 980px default). Seed from the actual test device instead.
+    Object.assign(viewport, { width, height, offsetTop: 0, offsetLeft: 0,
+      pageTop: 0, pageLeft: 0, scale: 1 })
+    Object.defineProperty(window, 'visualViewport', { configurable: true, value: viewport })
+    window.__setMobileTestViewport = values => {
+      Object.assign(viewport, values)
+      viewport.pageTop = viewport.offsetTop
+      viewport.dispatchEvent(new Event('resize'))
+      viewport.dispatchEvent(new Event('scroll'))
+    }
+  }, page.viewportSize())
+}
+
+async function setVisualViewport(page, values) {
+  await page.evaluate(values => window.__setMobileTestViewport(values), values)
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
+}
+
+async function visibleInputFonts(page) {
+  return page.evaluate(() => {
+    const excluded = new Set(['checkbox', 'radio', 'hidden', 'range', 'color', 'file', 'button', 'submit', 'reset', 'image'])
+    const fields = [...document.querySelectorAll('input, select, textarea, [contenteditable="true"]')]
+      .filter(field => !excluded.has(field.type) && field.getClientRects().length
+        && getComputedStyle(field).visibility !== 'hidden')
+    return {
+      count: fields.length,
+      offenders: fields.map(field => ({
+        field: field.getAttribute('aria-label') || field.getAttribute('placeholder') || field.className,
+        fontSize: Number.parseFloat(getComputedStyle(field).fontSize),
+      })).filter(field => field.fontSize < 16),
+    }
+  })
+}
+
+async function assertVisibleInputFonts(page, surface) {
+  const fonts = await visibleInputFonts(page)
+  expect(fonts.count, `${surface} 应实际展示输入控件`).toBeGreaterThan(0)
+  expect.soft(fonts.offenders, `${surface} 的移动输入控件不得低于 16px`).toEqual([])
+}
+
+async function searchGeometry(page) {
+  return page.evaluate(() => {
+    const dialog = document.querySelector('.search-modal')
+    const rect = selector => {
+      const box = dialog.querySelector(selector).getBoundingClientRect()
+      return { top: box.top, bottom: box.bottom, width: box.width, height: box.height }
+    }
+    const box = dialog.getBoundingClientRect()
+    return { top: box.top, bottom: box.bottom, height: box.height,
+      title: rect('.search-title'), close: rect('.search-close'), input: rect('input[type="search"]'),
+      footer: rect('.search-foot'), list: rect('.search-list'),
+      shellHeight: document.querySelector('#app > .layout').getBoundingClientRect().height,
+    }
+  })
+}
+
+async function waitForSearchLayout(page) {
+  const dialog = page.getByRole('dialog', { name: '搜索插件', exact: true })
+  await expect(dialog).toBeVisible()
+  await expect.poll(() => dialog.evaluate(element =>
+    element.getAnimations().some(animation => animation.playState === 'running'))).toBe(false)
+}
+
+async function assertKeyboardDialog(page, field, selectors) {
+  await field.focus()
+  await setVisualViewport(page, { width: 402, height: 470, offsetTop: 84, scale: 1 })
+  await expect(page.locator('html')).toHaveClass(/keyboard-open/)
+  await expect.poll(() => field.evaluate((field, selectors) => {
+    const dialog = document.querySelector(selectors.dialog)
+    const box = dialog.getBoundingClientRect()
+    const title = dialog.querySelector(selectors.title).getBoundingClientRect()
+    const close = dialog.querySelector(selectors.close).getBoundingClientRect()
+    const input = field.getBoundingClientRect()
+    return { dialogTopSafe: box.top >= 84 + 59 - 1, dialogBottomVisible: box.bottom <= 554 + 1,
+      titleSafe: title.top >= 84 + 59 - 1 && title.bottom <= 554,
+      closeSafe: close.top >= 84 + 59 - 1 && close.bottom <= 554,
+      inputVisible: input.top >= 84 && input.bottom <= 554 - 16 }
+  }, selectors)).toEqual({ dialogTopSafe: true, dialogBottomVisible: true,
+    titleSafe: true, closeSafe: true, inputVisible: true })
+  await assertVisibleInputFonts(page, selectors.dialog)
+}
+
+async function injectSafeAreas(page) {
+  await page.evaluate(() => {
+    document.documentElement.style.setProperty('--safe-area-top', '59px')
+    document.documentElement.style.setProperty('--safe-area-bottom', '34px')
+  })
+}
+
+test.describe('移动输入与可见视口回归', () => {
+  test('iPhone 17 搜索输入不触发自动放大并避开 PWA 顶部安全区', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.goto('/#/plugins')
+    await injectSafeAreas(page)
+    await page.getByRole('button', { name: '搜索插件', exact: true }).click()
+    const dialog = page.getByRole('dialog', { name: '搜索插件', exact: true })
+    await waitForSearchLayout(page)
+    await assertVisibleInputFonts(page, '插件搜索')
+    const geometry = await searchGeometry(page)
+    expect(geometry.close.top).toBeGreaterThanOrEqual(59)
+    expect(geometry.title.top).toBeGreaterThanOrEqual(59)
+    expect(geometry.close.width).toBeGreaterThanOrEqual(44)
+    expect(geometry.close.height).toBeGreaterThanOrEqual(44)
+    const viewportMeta = await page.locator('meta[name="viewport"]').getAttribute('content')
+    expect(viewportMeta).not.toMatch(/user-scalable\s*=\s*(?:no|0)|maximum-scale\s*=/i)
+    if (process.env.AWBOTNEST_MOBILE_PROOF_DIR) {
+      await page.screenshot({ path: join(process.env.AWBOTNEST_MOBILE_PROOF_DIR, 'mobile-search.png') })
+    }
+  })
+
+  test('iPhone 17 搜索键盘反复弹出和偏移后标题关闭输入与底部仍可见', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.goto('/#/plugins')
+    await page.getByRole('button', { name: '搜索插件', exact: true }).click()
+    await waitForSearchLayout(page)
+    const initial = await searchGeometry(page)
+    for (const viewport of [
+      { height: 500, offsetTop: 0, scale: 1 },
+      { height: 470, offsetTop: 84, scale: 1 },
+      { height: 510, offsetTop: 42, scale: 1 },
+      { height: 470, offsetTop: 84, scale: 1 },
+    ]) {
+      await setVisualViewport(page, viewport)
+      await expect(page.locator('html')).toHaveClass(/keyboard-open/)
+      await expect.poll(async () => {
+        const geometry = await searchGeometry(page)
+        const bottom = viewport.offsetTop + viewport.height
+        return { title: geometry.title.top >= viewport.offsetTop && geometry.title.bottom <= bottom,
+          close: geometry.close.top >= viewport.offsetTop && geometry.close.bottom <= bottom,
+          input: geometry.input.top >= viewport.offsetTop && geometry.input.bottom <= bottom,
+          footer: geometry.footer.top >= viewport.offsetTop && geometry.footer.bottom <= bottom + 1,
+          list: geometry.list.height > 0 && geometry.list.bottom <= geometry.footer.top + 1 }
+      }).toEqual({ title: true, close: true, input: true, footer: true, list: true })
+      const beforeRepeat = await searchGeometry(page)
+      await setVisualViewport(page, viewport)
+      const repeated = await searchGeometry(page)
+      expect(repeated.top).toBeCloseTo(beforeRepeat.top, 1)
+      expect(repeated.height).toBeCloseTo(beforeRepeat.height, 1)
+      expect(repeated.shellHeight).toBeCloseTo(initial.shellHeight, 1)
+    }
+    await setVisualViewport(page, { height: 874, offsetTop: 0, scale: 1 })
+    await expect(page.locator('html')).not.toHaveClass(/keyboard-open/)
+    const restored = await searchGeometry(page)
+    expect(restored.top).toBeCloseTo(initial.top, 1)
+    expect(restored.height).toBeCloseTo(initial.height, 1)
+    expect(restored.shellHeight).toBeCloseTo(initial.shellHeight, 1)
+    await page.getByRole('dialog', { name: '搜索插件', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+    await expect(page.getByRole('dialog', { name: '搜索插件', exact: true })).toBeHidden()
+  })
+
+  test('iPhone 17 用户手动缩放不被误判为键盘且恢复后搜索窗口不漂移', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.goto('/#/plugins')
+    await page.getByRole('button', { name: '搜索插件', exact: true }).click()
+    await waitForSearchLayout(page)
+    const initial = await searchGeometry(page)
+    for (let cycle = 0; cycle < 2; cycle += 1) {
+      await setVisualViewport(page, { width: 201, height: 437, offsetTop: 50, scale: 2 })
+      await expect(page.locator('html')).not.toHaveClass(/keyboard-open/)
+      await setVisualViewport(page, { width: 402, height: 874, offsetTop: 0, scale: 1 })
+      await expect(page.locator('html')).not.toHaveClass(/keyboard-open/)
+      const restored = await searchGeometry(page)
+      expect(restored.top).toBeCloseTo(initial.top, 1)
+      expect(restored.height).toBeCloseTo(initial.height, 1)
+    }
+  })
+
+  test('iPhone 17 登录与首次设置的输入字号不低于 16px', async ({ page }) => {
+    await page.route('**/api/auth/status', route => json(route, { needs_setup: true, must_change_password: false }))
+    await page.goto('/#/status')
+    await expect(page.locator('.lc-input')).toHaveCount(3)
+    await assertVisibleInputFonts(page, '管理员登录与首次设置')
+  })
+
+  test('iPhone 17 横屏登录输入仍保持 16px 字号', async ({ page }) => {
+    await page.setViewportSize({ width: 874, height: 402 })
+    await page.route('**/api/auth/status', route => json(route, { needs_setup: true, must_change_password: false }))
+    await page.goto('/#/status')
+    await expect(page.locator('.lc-input')).toHaveCount(3)
+    await assertVisibleInputFonts(page, '横屏管理员登录')
+  })
+
+  test('iPhone 17 横屏搜索和配置窗口仍跟随键盘可见区域', async ({ page }) => {
+    await page.setViewportSize({ width: 874, height: 402 })
+    await installVisualViewportFixture(page)
+    await page.goto('/#/plugins')
+    expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches)).toBe(true)
+    await page.getByRole('button', { name: '搜索插件', exact: true }).click()
+    await waitForSearchLayout(page)
+    const initialShell = await page.locator('#app > .layout').evaluate(element => element.getBoundingClientRect().height)
+    await page.locator('.search-input-wrap input').focus()
+    await setVisualViewport(page, { width: 874, height: 240, offsetTop: 24, scale: 1 })
+    await expect(page.locator('html')).toHaveClass(/keyboard-open/)
+    const search = await searchGeometry(page)
+    const searchMask = await page.locator('.search-mask').evaluate(element => {
+      const box = element.getBoundingClientRect()
+      return { top: box.top, bottom: box.bottom, height: box.height }
+    })
+    console.info('Landscape keyboard search geometry:', JSON.stringify({ ...search, mask: searchMask }))
+    expect.soft(searchMask.top).toBeCloseTo(24, 1)
+    expect.soft(searchMask.height).toBeCloseTo(240, 1)
+    expect.soft(search.top).toBeGreaterThanOrEqual(24)
+    expect.soft(search.bottom).toBeLessThanOrEqual(264 + 1)
+    for (const name of ['title', 'close', 'input', 'footer']) {
+      expect.soft(search[name].top, `横屏搜索 ${name} 顶部`).toBeGreaterThanOrEqual(24)
+      expect.soft(search[name].bottom, `横屏搜索 ${name} 底部`).toBeLessThanOrEqual(264 + 1)
+    }
+    expect.soft(search.list.height).toBeGreaterThan(0)
+    expect.soft(search.shellHeight).toBeCloseTo(initialShell, 1)
+    await page.getByRole('dialog', { name: '搜索插件', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+    await setVisualViewport(page, { width: 874, height: 402, offsetTop: 0, scale: 1 })
+    await expect(page.locator('html')).not.toHaveClass(/keyboard-open/)
+
+    await page.getByText('手机配置测试', { exact: true }).click()
+    const modal = page.locator('.modal.modal-wide')
+    const field = modal.locator('.secret-input input').first()
+    await expect(field).toBeVisible()
+    await field.focus()
+    await setVisualViewport(page, { width: 874, height: 240, offsetTop: 24, scale: 1 })
+    await expect(page.locator('html')).toHaveClass(/keyboard-open/)
+    await page.evaluate(() => new Promise(resolve => setTimeout(resolve, 250)))
+    const config = await modal.evaluate(element => {
+      const rect = node => {
+        const box = node.getBoundingClientRect()
+        return { top: box.top, bottom: box.bottom, height: box.height }
+      }
+      const input = element.querySelector('.secret-input input')
+      const inputBox = input.getBoundingClientRect()
+      const hit = document.elementFromPoint(inputBox.left + inputBox.width / 2,
+        inputBox.top + inputBox.height / 2)
+      return { modal: rect(element), mask: rect(element.closest('.config-modal-mask')),
+        title: rect(element.querySelector('.modal-head h2')),
+        close: rect(element.querySelector('.modal-head .close')),
+        input: rect(input), footer: rect(element.querySelector('.modal-foot')),
+        inputUnobscured: input === hit || input.contains(hit), hitClass: hit?.className,
+        shellHeight: document.querySelector('#app > .layout').getBoundingClientRect().height }
+    })
+    console.info('Landscape keyboard config geometry:', JSON.stringify(config))
+    expect.soft(config.mask.top).toBeCloseTo(24, 1)
+    expect.soft(config.mask.height).toBeCloseTo(240, 1)
+    expect.soft(config.modal.top).toBeGreaterThanOrEqual(24)
+    expect.soft(config.modal.bottom).toBeLessThanOrEqual(264 + 1)
+    for (const name of ['title', 'close', 'input']) {
+      expect.soft(config[name].top, `横屏配置 ${name} 顶部`).toBeGreaterThanOrEqual(24)
+      expect.soft(config[name].bottom, `横屏配置 ${name} 底部`).toBeLessThanOrEqual(264 + 1)
+    }
+    expect.soft(config.inputUnobscured, '横屏配置输入框不能被固定头部或底部挡住').toBe(true)
+    expect.soft(config.shellHeight).toBeCloseTo(initialShell, 1)
+    await assertVisibleInputFonts(page, '横屏插件配置')
+    await setVisualViewport(page, { width: 874, height: 402, offsetTop: 0, scale: 1 })
+    await expect(page.locator('html')).not.toHaveClass(/keyboard-open/)
+  })
+
+  test('iPhone 17 插件配置跟随非零键盘偏移而系统外壳高度不变', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.goto('/#/plugins')
+    await injectSafeAreas(page)
+    await page.getByText('手机配置测试', { exact: true }).click()
+    const modal = page.locator('.modal.modal-wide')
+    const field = modal.locator('.secret-input input').first()
+    await expect(field).toBeVisible()
+    const initialShell = await page.locator('#app > .layout').evaluate(element => element.getBoundingClientRect().height)
+    await field.focus()
+    for (const viewport of [{ height: 500, offsetTop: 70, scale: 1 }, { height: 470, offsetTop: 84, scale: 1 }]) {
+      await setVisualViewport(page, viewport)
+      await expect(page.locator('html')).toHaveClass(/keyboard-open/)
+      await expect.poll(() => modal.evaluate((element, viewport) => {
+        const box = element.getBoundingClientRect()
+        const close = element.querySelector('.modal-head .close').getBoundingClientRect()
+        const field = element.querySelector('.secret-input input').getBoundingClientRect()
+        return { top: Math.round(box.top), height: Math.round(box.height),
+          closeSafe: close.top >= viewport.offsetTop + 59,
+          fieldVisible: field.top >= viewport.offsetTop && field.bottom <= viewport.offsetTop + viewport.height - 16,
+          shellHeight: Math.round(document.querySelector('#app > .layout').getBoundingClientRect().height) }
+      }, viewport)).toEqual({ top: viewport.offsetTop, height: viewport.height,
+        closeSafe: true, fieldVisible: true, shellHeight: Math.round(initialShell) })
+    }
+    await setVisualViewport(page, { height: 874, offsetTop: 0, scale: 1 })
+    await expect(page.locator('html')).not.toHaveClass(/keyboard-open/)
+    await expect.poll(() => modal.evaluate(element => Math.round(element.getBoundingClientRect().top))).toBe(0)
+  })
+
+  test('iPhone 17 账号登录弹窗随键盘偏移且标题关闭和输入避开安全区', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.route('**/api/status', route => json(route, { ...status, telegram_configured: true }))
+    await page.goto('/#/accounts')
+    await injectSafeAreas(page)
+    await page.getByRole('button', { name: '+ 登录新账号', exact: true }).click()
+    await assertKeyboardDialog(page, page.getByPlaceholder('+8615012345678'), {
+      dialog: '[role="dialog"][aria-label="登录账号"]', title: '.modal-head h2', close: '.modal-head .close',
+    })
+  })
+
+  test('iPhone 17 通知渠道弹窗随键盘偏移且标题关闭和输入避开安全区', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.goto('/#/settings')
+    await injectSafeAreas(page)
+    await page.getByRole('button', { name: '通知渠道', exact: true }).click()
+    await page.locator('.btn-add-mp').click()
+    await page.getByRole('button', { name: 'Telegram', exact: true }).click()
+    await assertKeyboardDialog(page, page.getByPlaceholder('如：通知1、订单通知'), {
+      dialog: '.channel-modal', title: '.modal-header h3', close: '.modal-header .modal-close',
+    })
+  })
+
+  test('iPhone 17 body 悬浮主题和日志窗口随键盘偏移且保持可见', async ({ page }) => {
+    await installVisualViewportFixture(page)
+    await page.goto('/#/status')
+    await injectSafeAreas(page)
+    await page.getByTitle('管理员菜单').click()
+    await page.locator('.theme-trigger').click()
+    await page.getByRole('button', { name: /定制主题/ }).click()
+    await assertKeyboardDialog(page, page.getByPlaceholder('留空使用默认背景'), {
+      dialog: 'body > .control-modal-mask .control-modal', title: 'header strong', close: 'header button',
+    })
+    await page.getByRole('dialog', { name: '定制主题', exact: true }).getByRole('button', { name: '关闭', exact: true }).click()
+    await setVisualViewport(page, { height: 874, offsetTop: 0, scale: 1 })
+    await page.getByTitle('快捷入口').click()
+    await page.getByRole('button', { name: /运行日志/ }).click()
+    await assertKeyboardDialog(page, page.getByPlaceholder('搜索日志内容'), {
+      dialog: 'body > .control-modal-mask .control-modal', title: 'header strong', close: 'header button',
+    })
+  })
+
+  test('iPhone 17 系统设置 AI 服务账号和日志的输入字号不低于 16px', async ({ page }) => {
+    await page.route('**/api/status', route => json(route, { ...status, telegram_configured: true }))
+    await page.route('**/api/bots/routing', route => json(route, { bots: [], plugins: [configurablePlugin] }))
+    await page.route('**/api/accounts/login/send_code', route => json(route, { ok: true }))
+    await page.route('**/api/accounts/login/submit_code', route => json(route, { need: 'password' }))
+    await page.goto('/#/settings')
+    await expect(page.locator('.panel')).toBeVisible()
+    await assertVisibleInputFonts(page, '系统设置账号与凭据')
+    await page.getByRole('button', { name: '通知渠道', exact: true }).click()
+    await expect(page.getByPlaceholder('搜索插件名称 / id…')).toBeVisible()
+    await assertVisibleInputFonts(page, '系统设置插件搜索')
+    await page.getByRole('button', { name: 'AI 服务', exact: true }).click()
+    await expect(page.getByLabel('搜索模型库', { exact: true })).toBeVisible()
+    await assertVisibleInputFonts(page, 'AI 服务与模型搜索')
+    await page.getByRole('button', { name: '运行环境', exact: true }).click()
+    await assertVisibleInputFonts(page, '系统设置运行环境')
+    await page.goto('/#/accounts')
+    await page.getByRole('button', { name: '+ 登录新账号', exact: true }).click()
+    await assertVisibleInputFonts(page, '账号手机号表单')
+    await page.getByPlaceholder('例如 user_account').fill('test_account')
+    await page.getByPlaceholder('+8615012345678').fill('+8615012345678')
+    await page.getByRole('button', { name: '发送验证码', exact: true }).click()
+    await expect(page.getByPlaceholder('123456')).toBeVisible()
+    await assertVisibleInputFonts(page, '账号验证码表单')
+    await page.getByPlaceholder('123456').fill('123456')
+    await page.getByRole('button', { name: '确认', exact: true }).click()
+    await expect(page.locator('.modal input[type="password"]')).toBeVisible()
+    await assertVisibleInputFonts(page, '账号两步密码表单')
+    await page.goto('/#/logs')
+    await expect(page.getByPlaceholder('搜索插件名/内容…')).toBeVisible()
+    await assertVisibleInputFonts(page, '日志搜索')
+  })
+})
+
+test.describe('桌面输入样式回归', () => {
+  test.use({ viewport: { width: 1280, height: 900 }, isMobile: false, hasTouch: false,
+    deviceScaleFactor: 1 })
+  test('桌面插件搜索保留原字号与居中窗口并允许浏览器缩放', async ({ page }) => {
+    await page.goto('/#/plugins')
+    await page.getByRole('button', { name: '搜索插件', exact: true }).click()
+    await waitForSearchLayout(page)
+    const input = page.locator('.search-input-wrap input')
+    await expect(input).toBeVisible()
+    expect(await input.evaluate(field => Number.parseFloat(getComputedStyle(field).fontSize))).toBe(14)
+    const geometry = await searchGeometry(page)
+    expect(geometry.top).toBeGreaterThan(0)
+    expect(geometry.height).toBeLessThan(900)
+    expect(geometry.close.width).toBe(32)
+    await expectInsideViewport(page)
+    if (process.env.AWBOTNEST_MOBILE_PROOF_DIR) {
+      await page.screenshot({ path: join(process.env.AWBOTNEST_MOBILE_PROOF_DIR, 'desktop-search.png') })
+    }
+  })
+})
 
 test('iPhone 17 外壳保留悬浮导航且内容不被遮挡', async ({ page }) => {
   await page.goto('/#/status')

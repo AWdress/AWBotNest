@@ -4,6 +4,11 @@ function isEditable(element) {
   return element instanceof Element && element.matches(EDITABLE_SELECTOR)
 }
 
+function isMobileInput() {
+  return window.matchMedia?.('(max-width: 768px)').matches === true
+    || window.matchMedia?.('(pointer: coarse) and (hover: none)').matches === true
+}
+
 function findScrollContainer(element) {
   let current = element?.parentElement
   while (current && current !== document.body && current !== document.documentElement) {
@@ -17,13 +22,25 @@ function findScrollContainer(element) {
 }
 
 function keepFocusedFieldVisible() {
-  if (!window.matchMedia?.('(max-width: 768px)').matches) return
+  if (!isMobileInput()) return
   const field = document.activeElement
   if (!isEditable(field)) return
 
   const viewport = window.visualViewport
-  const visibleTop = viewport?.offsetTop || 0
-  const visibleBottom = visibleTop + (viewport?.height || window.innerHeight)
+  let visibleTop = viewport?.offsetTop || 0
+  let visibleBottom = visibleTop + (viewport?.height || window.innerHeight)
+  const dialog = field.closest('.modal, .modal-dialog, .control-modal, .search-modal')
+  // 配置窗口的固定标题和保存栏也会遮住输入，不能只按键盘上沿计算。
+  for (const bar of dialog?.querySelectorAll(':scope > .modal-head, :scope > .modal-header, :scope > .modal-foot, :scope > .modal-footer') || []) {
+    if (!['sticky', 'fixed'].includes(window.getComputedStyle(bar).position)) continue
+    const bounds = bar.getBoundingClientRect()
+    if (bounds.bottom <= visibleTop || bounds.top >= visibleBottom) continue
+    if (bar.matches('.modal-head, .modal-header')) {
+      visibleTop = Math.max(visibleTop, bounds.bottom)
+    } else {
+      visibleBottom = Math.min(visibleBottom, bounds.top)
+    }
+  }
   const topPadding = Math.max(16, Number.parseFloat(getComputedStyle(document.documentElement)
     .getPropertyValue('--keyboard-field-top-padding')) || 16)
   const bottomPadding = 20
@@ -43,7 +60,7 @@ function keepFocusedFieldVisible() {
 
 /**
  * 同步移动浏览器的可见视口。iOS 弹出键盘时只缩小 visualViewport，
- * 不应跟着压缩整个平台外壳；弹窗通过这里暴露的变量单独跟随键盘上沿。
+ * 不应跟着压缩整个系统外壳；弹窗通过这里暴露的变量单独跟随键盘上沿。
  */
 export function configureMobileViewport() {
   const root = document.documentElement
@@ -57,7 +74,7 @@ export function configureMobileViewport() {
   let frame = 0
   let focusTimer = 0
   let lastEditableFocus = 0
-  let baselineHeight = viewport?.height || window.innerHeight
+  let baselineHeight = (viewport?.height || window.innerHeight) * (viewport?.scale || 1)
   let pwaShellHeight = Math.max(window.innerHeight, baselineHeight)
 
   const screenHeight = () => {
@@ -70,18 +87,20 @@ export function configureMobileViewport() {
   const syncViewport = () => {
     frame = 0
     const visibleHeight = viewport?.height || window.innerHeight
+    // 手动缩放也会缩小 visualViewport，不能据此把缩放误判为输入法。
+    const unscaledHeight = visibleHeight * (viewport?.scale || 1)
     const offsetTop = viewport?.offsetTop || 0
-    const mobile = window.matchMedia?.('(max-width: 768px)').matches === true
+    const mobile = isMobileInput()
     const recentlyEditing = isEditable(document.activeElement) || Date.now() - lastEditableFocus < 900
-    const lostHeight = baselineHeight - visibleHeight
-    const deviceGap = screenHeight() - visibleHeight
+    const lostHeight = baselineHeight - unscaledHeight
+    const deviceGap = screenHeight() - unscaledHeight
     const keyboardOpen = mobile && recentlyEditing && (
       lostHeight > 100 || deviceGap > Math.max(180, screenHeight() * 0.22)
     )
 
-    if (!keyboardOpen && !recentlyEditing && visibleHeight > baselineHeight - 80) {
-      baselineHeight = visibleHeight
-      pwaShellHeight = Math.max(window.innerHeight, visibleHeight)
+    if (!keyboardOpen && !recentlyEditing && unscaledHeight > baselineHeight - 80) {
+      baselineHeight = unscaledHeight
+      pwaShellHeight = Math.max(window.innerHeight, unscaledHeight)
     }
 
     root.style.setProperty('--visual-viewport-height', `${Math.round(visibleHeight)}px`)
@@ -120,7 +139,7 @@ export function configureMobileViewport() {
   })
   window.addEventListener('resize', scheduleSync, { passive: true })
   window.addEventListener('orientationchange', () => {
-    baselineHeight = viewport?.height || window.innerHeight
+    baselineHeight = (viewport?.height || window.innerHeight) * (viewport?.scale || 1)
     pwaShellHeight = Math.max(window.innerHeight, baselineHeight)
     scheduleSync()
   }, { passive: true })

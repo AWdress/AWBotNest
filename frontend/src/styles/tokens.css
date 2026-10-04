@@ -3,6 +3,10 @@
    所有颜色统一走变量，禁止散落硬编码（见 SPEC.md §6）
    ============================================================= */
 :root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
   /* 背景层次（由深到浅） */
   --bg-base: #07101b;        /* 主背景 */
   --bg-sidebar: #080d15;     /* 侧边栏 */
@@ -327,6 +331,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 
 /* ───────── 手机端全局适配（≤768px）───────── */
+@media (max-width: 768px), (pointer: coarse) and (hover: none) {
+  /* 裸输入框和插件自定义控件也要达到 iOS 的聚焦字号下限，保留手动缩放。 */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]),
+  textarea,
+  select,
+  [contenteditable]:not([contenteditable="false"]) {
+    font-size: max(16px, 1em) !important;
+  }
+}
+
 @media (max-width: 768px) {
   html, body {
     min-height: 100%;
@@ -341,6 +355,55 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .modal, .modal.card { width: 94vw !important; max-width: 94vw !important; max-height: 88vh; }
   /* 双列网格在窄屏统一单列 */
   .grid2 { grid-template-columns: 1fr !important; }
+}
+
+@media (max-width: 768px), (pointer: coarse) and (hover: none) {
+  /* 普通弹窗只占可见区域；搜索与插件配置窗口各自处理全屏安全区。 */
+  #app .modal-mask:not(.search-mask):not(.config-modal-mask),
+  body > .control-modal-mask[class],
+  body > .release-note-mask[class],
+  #app > .mask {
+    --dialog-visible-height: 100dvh;
+    padding-top: max(12px, var(--safe-area-top));
+    padding-bottom: max(12px, var(--safe-area-bottom));
+    padding-left: max(12px, var(--safe-area-left));
+    padding-right: max(12px, var(--safe-area-right));
+  }
+  html.keyboard-open #app .modal-mask:not(.search-mask):not(.config-modal-mask),
+  html.keyboard-open body > .control-modal-mask[class],
+  html.keyboard-open body > .release-note-mask[class],
+  html.keyboard-open #app > .mask {
+    --dialog-visible-height: var(--visual-viewport-height, 100dvh);
+    top: var(--visual-viewport-offset-top, 0px);
+    bottom: auto;
+    height: var(--dialog-visible-height);
+  }
+  #app .modal-mask:not(.search-mask):not(.config-modal-mask) > :is(.modal, .modal-dialog),
+  body > .control-modal-mask > .control-modal,
+  body > .release-note-mask > .release-note,
+  #app > .mask > .dialog {
+    max-height: calc(var(--dialog-visible-height) - max(12px, var(--safe-area-top)) - max(12px, var(--safe-area-bottom))) !important;
+    max-width: 100% !important;
+    min-height: 0;
+  }
+  #app > .mask > .dialog { overflow-y: auto; }
+  #app .modal-dialog > :is(.modal-header, .modal-footer),
+  body > .control-modal-mask > .control-modal > header { flex-shrink: 0; }
+  #app .modal-dialog > .modal-body,
+  body > .control-modal-mask > .control-modal > .modal-body { min-height: 0; }
+
+  html.keyboard-open .login-bg {
+    position: fixed;
+    top: var(--visual-viewport-offset-top, 0px);
+    left: 0;
+    right: 0;
+    min-height: 0;
+    height: var(--visual-viewport-height, 100dvh);
+    overflow-y: auto;
+    align-items: flex-start;
+    padding-top: max(24px, var(--safe-area-top));
+    padding-bottom: max(24px, var(--safe-area-bottom));
+  }
 }
 
 .card {

@@ -238,6 +238,22 @@ def _docs_html(version: str) -> str:
       .swagger-ui .opblock .opblock-summary-path { max-width:calc(100vw - 122px); overflow-wrap:anywhere; }
       .swagger-ui .opblock .opblock-summary-description { width:100%; padding:2px 0 4px 82px; }
     }
+    @media (max-width:760px), (hover:none) and (pointer:coarse) {
+      .swagger-ui input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=button]):not([type=submit]):not([type=reset]):not([type=image]):not([type=hidden]),
+      .swagger-ui textarea, .swagger-ui select, .swagger-ui [contenteditable]:not([contenteditable=false]) { font-size:16px !important; }
+      .swagger-ui .dialog-ux {
+        top:var(--docs-visual-top, 0px); bottom:auto; height:var(--docs-visual-height, 100dvh);
+        display:grid; place-items:center;
+        padding:max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+      }
+      .swagger-ui .dialog-ux .modal-ux {
+        position:relative; top:auto; left:auto; transform:none; min-width:0; max-height:100%;
+        display:flex; flex-direction:column; overflow:hidden;
+      }
+      .swagger-ui .dialog-ux .modal-ux-header { flex-shrink:0; }
+      .swagger-ui .dialog-ux .modal-ux-header .close-modal { min-width:44px; min-height:44px; }
+      .swagger-ui .dialog-ux .modal-ux-content { min-height:0; max-height:none; overflow-y:auto; overscroll-behavior:contain; }
+    }
   </style>
 </head>
 <body>
@@ -277,6 +293,16 @@ curl -H "X-API-Key: YOUR_API_KEY" \
   </main>
   <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
   <script>
+    const docsViewport = window.visualViewport;
+    function syncDocsViewport() {
+      const root = document.documentElement;
+      root.style.setProperty('--docs-visual-height', `${Math.round(docsViewport?.height || window.innerHeight)}px`);
+      root.style.setProperty('--docs-visual-top', `${Math.round(docsViewport?.offsetTop || 0)}px`);
+    }
+    docsViewport?.addEventListener('resize', syncDocsViewport, { passive:true });
+    docsViewport?.addEventListener('scroll', syncDocsViewport, { passive:true });
+    window.addEventListener('resize', syncDocsViewport, { passive:true });
+    syncDocsViewport();
     document.querySelector('[data-origin]').textContent = location.origin;
     document.querySelector('[data-copy]').addEventListener('click', async (event) => {
       const command = `curl -H "X-API-Key: YOUR_API_KEY" ${location.origin}/api/v1/status`;
