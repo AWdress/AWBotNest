@@ -226,24 +226,13 @@ AWBOTNEST_INTERACTIVE_PROFILE_SLOW_MS=100
 
 启用后，interactive wrapper 自动测量 dispatch 和 callback 总时长；通过 `ctx.sessions` 获取的
 Session lock 会记录等待及持锁时间，`ctx.delivery.send/edit` 会记录每次 Telethon RPC await。
-超过阈值时平台只输出脱敏摘要，最近 200 条内存记录可由 `ctx.interactive_profile.recent()`
+超过阈值时系统只输出脱敏摘要，最近 200 条内存记录可由 `ctx.interactive_profile.recent()`
 在本地诊断中读取，不写入磁盘。直接调用 `event.answer/reply/edit` 或原生 client 方法不会被
-自动拦截；平台不 monkey patch Telethon，可使用 `benchmarks/telegram_interactive_latency.py`
-进行真实网络探测。
+自动拦截；系统不 monkey patch Telethon。
 
-真实探针默认使用 50 个正式样本、3 次 warm-up 和 0.5 秒请求间隔，输出 Mean、Median、
-P90、P95、P99、Min、Max、StdDev、Samples 与 FloodWait 次数：
-
-```text
-python benchmarks/telegram_interactive_latency.py --chat me --mode edit --proxy current
-python benchmarks/telegram_interactive_latency.py --chat me --mode send --iterations 100
-python benchmarks/telegram_interactive_latency.py --chat <chat> --mode callback --account bot:<id>
-python benchmarks/telegram_interactive_latency.py --chat <chat> --mode reply --account user:<session>
-```
-
-`--proxy current` 使用平台当前代理，`--proxy none` 临时直连，`--proxy <url>` 临时使用另一个
-节点；这些覆盖只作用于探针进程，不保存 Settings。建议在条件允许时比较当前代理、直连、
-另一代理以及更接近 Telegram DC 的节点。代理凭据和账号标识会脱敏。
+真实网络调用应在本地单独测量，记录耗时分布和 FloodWait 次数；测试脚本、账号数据和
+结果不提交。可比较当前代理、直连和其他节点，测试时不要更改已保存的系统设置，输出
+中的代理凭据和账号标识必须脱敏。
 
 ### Interactive / 实时插件性能规范
 

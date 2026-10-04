@@ -64,9 +64,9 @@ Linux：`./.venv/bin/python -m awbotnest.main`
 
 插件通过静态元数据扫描，通过 `PluginContext` 获取能力。平台停用插件时必须撤销事件、路由、调度、后台任务、capability、Session、Delivery、Storage 和 cleanup callback。账号实例的 storage、session、scheduler、delivery、任务和数据目录必须保持隔离。
 
-延迟敏感的短 Telegram 回调可使用 handler 的 `interactive=True` 快路径。它绕过普通 Governor、plugin-wide semaphore、通用超时和 circuit，但必须保留异常隔离、取消传播及生命周期清理；业务一致性由插件使用 `ctx.sessions` 加锁。延迟回归使用 `python benchmarks/interactive_latency.py` 分别检查 handler wrapper、Session lock 和 Telegram API 调用起点。
+延迟敏感的短 Telegram 回调可使用 handler 的 `interactive=True` 快路径。它绕过普通 Governor、plugin-wide semaphore、通用超时和 circuit，但必须保留异常隔离、取消传播及生命周期清理；业务一致性由插件使用 `ctx.sessions` 加锁。延迟回归在本地分别检查 handler wrapper、Session lock 和 Telegram API 调用起点，检查脚本不提交。
 
-交互 profiling 由 `AWBOTNEST_INTERACTIVE_PROFILE=1` 显式启用，默认不得产生 trace。慢事件阈值由 `AWBOTNEST_INTERACTIVE_PROFILE_SLOW_MS` 控制；记录只保存在有界内存中且 chat 必须脱敏。真实 Telegram RPC 使用 `benchmarks/telegram_interactive_latency.py` 手动测试，不在 CI 中连接 Telegram。
+交互 profiling 由 `AWBOTNEST_INTERACTIVE_PROFILE=1` 显式启用，默认不得产生 trace。慢事件阈值由 `AWBOTNEST_INTERACTIVE_PROFILE_SLOW_MS` 控制；记录只保存在有界内存中且 chat 必须脱敏。真实 Telegram RPC 仅在本地手动测试，不在 CI 中连接 Telegram。
 
 `/api/v1` 是第三方稳定接口，文档中的每条路径必须有实际实现和 API Key 测试。`/api/*` 主要服务控制台，不在开放 API 文档中承诺稳定。危险操作不进入开放 API；远程源码写入固定禁用。
 
@@ -74,11 +74,11 @@ Linux：`./.venv/bin/python -m awbotnest.main`
 
 ## 提交前检查
 
-1. 使用项目 `.venv` 完整执行 `python -X dev -W default -m unittest discover -s tests -p "test_*.py"`，不得只运行新增测试。
-2. 执行 `python -m compileall -q awbotnest tests` 和 `git diff --check`。
+1. 使用项目 `.venv` 完整执行本地回归测试，不得只运行新增测试；测试文件不随仓库发布。
+2. 执行 `python -m compileall -q awbotnest` 和 `git diff --check`。
 3. 前端修改执行 `npm run build` 及现有前端测试。
 4. 验证 `/api/health`、`/api/status` 和受影响接口；开放 API 改动必须使用 API Key 验证真实请求与响应。
 5. 检查输出中不存在 `coroutine was never awaited`、pending task、未关闭 client/transport 等资源警告。
 6. 验证 Windows 路径与 Linux/Docker 默认路径。
-7. 确认未提交配置密钥、Session、Cookie、头像和运行数据。
+7. 确认未提交配置密钥、Session、Cookie、头像、运行数据、测试文件、测试配置、检查脚本、截图和检查报告。测试只保留在本地，不得用 `git add -f` 提交忽略的文件。
 8. 文档路径、默认端口、API contract 和实际实现保持一致。

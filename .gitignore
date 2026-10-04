@@ -16,12 +16,34 @@ plugins/*
 .env.*
 config.json
 *.token
+*.key
+*.pem
+*.p12
+*.pfx
+*.p8
+*.log
+/.venv313/
 
 # Python 缓存与虚拟环境
 __pycache__/
 *.py[cod]
 *$py.class
 /tests/
+/quality_tests/
+/frontend/tests/
+/frontend/playwright.config.js
+**/__tests__/
+*.test.*
+*.spec.*
+test_*.py
+/benchmarks/
+/scripts/smoke_*.py
+/design-qa.md
+/docs/design-qa/
+/docs/audits/
+**/test-results/
+**/playwright-report/
+**/coverage/
 .venv/
 env/
 venv/
