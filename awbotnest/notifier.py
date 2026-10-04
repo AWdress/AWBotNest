@@ -5,6 +5,8 @@ import time
 import logging
 from typing import Any
 
+import httpx
+
 from .config import Settings
 from .services import HttpService
 from .telegram import TelegramAccounts
@@ -66,6 +68,34 @@ class NotificationService:
         self.history_path.unlink(missing_ok=True)
         self.mark_read()
 
+    async def _wecom_post(self, url: str, **kwargs):
+        try:
+            return await self.http.post(url, **kwargs)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout,
+                httpx.ProxyError, httpx.UnsupportedProtocol, httpx.LocalProtocolError,
+                httpx.InvalidURL):
+            raise RuntimeError("企业微信通知连接失败") from None
+        except httpx.HTTPError:
+            raise DeliveryUncertain("企业微信通知结果未确认，请检查接收端；未重复发送") from None
+
+    @staticmethod
+    def _wecom_delivery_data(response) -> dict:
+        # Missing acknowledgement does not prove rejection: do not retry via another channel.
+        if not response.is_success:
+            raise DeliveryUncertain("企业微信通知结果未确认，请检查接收端；未重复发送")
+        try:
+            data = response.json()
+        except ValueError:
+            raise DeliveryUncertain("企业微信未返回有效的投递结果；未重复发送") from None
+        if not isinstance(data, dict) or type(data.get("errcode")) is not int:
+            raise DeliveryUncertain("企业微信未返回有效的投递结果；未重复发送")
+        if data["errcode"] != 0:
+            # Upstream error messages can contain credentials or request details.
+            raise RuntimeError(f"企业微信通知失败（错误码 {data['errcode']}）")
+        if any(data.get(key) for key in ("invaliduser", "invalidparty", "invalidtag", "unlicenseduser")):
+            raise DeliveryUncertain("企业微信通知未送达全部收件人，请检查接收范围；未重复发送")
+        return data
+
     async def _wecom_application_request(self, config: dict, text: str, user_id: str, *, before_send=None):
         corpid = str(config.get("corpid") or "")
         secret = str(config.get("secret") or "")
@@ -73,17 +103,22 @@ class NotificationService:
         base = str(config.get("proxy") or "https://qyapi.weixin.qq.com").rstrip("/")
         if not corpid or not secret or not agentid:
             raise RuntimeError("企业微信通知配置不完整")
-        token_response = await self.http.get(
-            f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
-        )
-        token_response.raise_for_status()
-        token_data = token_response.json()
-        token = str(token_data.get("access_token") or "") if isinstance(token_data, dict) else ""
-        if not token:
-            raise RuntimeError("企业微信获取令牌失败")
+        try:
+            token_response = await self.http.get(
+                f"{base}/cgi-bin/gettoken", params={"corpid": corpid, "corpsecret": secret},
+            )
+            token_response.raise_for_status()
+            token_data = token_response.json()
+            token = token_data.get("access_token") if isinstance(token_data, dict) else None
+            if (not isinstance(token, str) or not token
+                    or type(token_data.get("errcode")) is not int or token_data["errcode"] != 0):
+                raise ValueError("Invalid token response")
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError):
+            # HTTPStatusError includes the query URL, which contains the application Secret.
+            raise RuntimeError("企业微信获取令牌失败") from None
         if before_send is not None:
             before_send()
-        return await self.http.post(
+        return await self._wecom_post(
             f"{base}/cgi-bin/message/send", params={"access_token": token},
             json={"touser": user_id, "msgtype": "text", "agentid": int(agentid),
                   "text": {"content": text}, "safe": 0},
@@ -91,14 +126,14 @@ class NotificationService:
 
     async def send_wecom_text(self, channel_id: str, user_id: str, text: str, *, permission_check=None) -> dict:
         """Reply only to the authorized sender, never broadcast or fall back."""
-        from .wecom_config import callback_members, channel_config, validate_callback_config
+        from .wecom_config import callback_member_allowed, channel_config, validate_callback_config
 
         config = channel_config(self.settings, channel_id)
         if (config is None or config.get("enabled", True) is not True
                 or config.get("callback_enabled") is not True):
             raise RuntimeError("企业微信消息回调已停用")
         validate_callback_config(config)
-        if user_id not in callback_members(config):
+        if not callback_member_allowed(config, user_id):
             raise PermissionError("此成员无权接收指令结果")
         if not isinstance(text, str) or not text or len(text.encode("utf-8")) > 2000:
             raise ValueError("企业微信指令结果长度不正确")
@@ -109,7 +144,7 @@ class NotificationService:
                     or current.get("callback_enabled") is not True):
                 raise PermissionError("企业微信消息回调已停用")
             validate_callback_config(current)
-            if user_id not in callback_members(current) or any(
+            if not callback_member_allowed(current, user_id) or any(
                     str(current.get(key) or "") != str(config.get(key) or "")
                     for key in ("corpid", "agentid", "secret", "proxy")):
                 raise PermissionError("企业微信接收权限或应用配置已变更")
@@ -117,11 +152,7 @@ class NotificationService:
                 permission_check()
 
         response = await self._wecom_application_request(config, text, user_id, before_send=before_send)
-        response.raise_for_status()
-        data = response.json()
-        if not isinstance(data, dict) or data.get("errcode") != 0 or data.get("invaliduser"):
-            raise RuntimeError("企业微信指令结果投递失败")
-        return data
+        return self._wecom_delivery_data(response)
 
     async def send(self, text: str, *, channel: str = "", entity: object = None,
                    bot_id: str = "", plugin_id: str = "", plugin_name: str = "",
@@ -228,9 +259,10 @@ class NotificationService:
         elif kind in {"wecom", "wechat"}:
             url = str(config.get("url") or config.get("webhook") or "")
             if url:
-                response = await self.http.post(url, json={"msgtype": "text", "text": {"content": plain_text}})
+                response = await self._wecom_post(url, json={"msgtype": "text", "text": {"content": plain_text}})
             else:
                 response = await self._wecom_application_request(config, plain_text, str(config.get("touser") or "@all"))
+            return self._wecom_delivery_data(response)
         elif kind == "webhook":
             url = str(config.get("url") or "")
             if not url:
@@ -245,6 +277,4 @@ class NotificationService:
             return {"ok": True, "response": response.text[:1000]}
         if kind == "bark" and isinstance(data, dict) and data.get("code") not in (None, 200):
             raise RuntimeError(f"Bark 通知失败：{data.get('message') or data}")
-        if kind in {"wecom", "wechat"} and isinstance(data, dict) and data.get("errcode") not in (None, 0):
-            raise RuntimeError(f"企业微信通知失败：{data.get('errmsg') or data}")
         return data

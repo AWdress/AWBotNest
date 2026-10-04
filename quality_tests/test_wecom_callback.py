@@ -651,7 +651,7 @@ class WeComCommandTests(unittest.IsolatedAsyncioTestCase):
         async def token_request(*args, **kwargs):
             entered.set()
             await release.wait()
-            return httpx.Response(200, json={"access_token": "fixture-access-token"},
+            return httpx.Response(200, json={"errcode": 0, "access_token": "fixture-access-token"},
                                   request=httpx.Request("GET", "https://qyapi.weixin.qq.com"))
         http = SimpleNamespace(get=AsyncMock(side_effect=token_request), post=AsyncMock())
         self.runtime.notifier = NotificationService(self.settings, SimpleNamespace(), http)
@@ -672,7 +672,7 @@ class WeComDirectDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.settings = Settings(notification_channels=[channel(touser="@all"),
                                  {"id": "backup", "type": "webhook", "url": "https://example.test/hook"}])
         self.http = SimpleNamespace(
-            get=AsyncMock(return_value=httpx.Response(200, json={"access_token": "fixture-access-token"},
+            get=AsyncMock(return_value=httpx.Response(200, json={"errcode": 0, "access_token": "fixture-access-token"},
                                                      request=httpx.Request("GET", "https://qyapi.weixin.qq.com"))),
             post=AsyncMock(return_value=httpx.Response(200, json={"errcode": 0},
                                                       request=httpx.Request("POST", "https://qyapi.weixin.qq.com"))))
@@ -726,7 +726,7 @@ class WeComDirectDeliveryTests(unittest.IsolatedAsyncioTestCase):
                 async def token_request(*args, **kwargs):
                     entered.set()
                     await release.wait()
-                    return httpx.Response(200, json={"access_token": "fixture-access-token"},
+                    return httpx.Response(200, json={"errcode": 0, "access_token": "fixture-access-token"},
                                           request=httpx.Request("GET", "https://qyapi.weixin.qq.com"))
                 self.http.get.side_effect = token_request
                 task = asyncio.create_task(self.notifier.send_wecom_text(CHANNEL_ID, MEMBER, "完成"))

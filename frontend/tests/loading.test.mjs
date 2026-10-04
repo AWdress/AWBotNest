@@ -150,7 +150,7 @@ function configPage(apiOverrides = {}, extra = {}) {
   }, 'openConfig, closeConfig, configOpen, configTarget, configValues, configSaving, saveConfig, '
     + 'acctSelected, acctAllMode, acctSaving, saveAccounts, toggleAcct, '
     + 'configBotChoice, configBotConfirmed, configBotSaving, saveConfigBot, '
-    + 'webhookPath, webhookSecret', extra)
+    + 'webhookPath, webhookSecret, configAvailableBots', extra)
 }
 
 for (const outcome of ['success', 'failure']) {
@@ -486,7 +486,7 @@ test('WeCom enabled callbacks require real new secrets and named members before 
   config.callback_aes_key = '********'
   await p.saveChannel()
   assert.match(errors.at(-1), /EncodingAESKey/)
-  config.callback_aes_key = 'a'.repeat(43)
+  config.callback_aes_key = 'A'.repeat(43)
   config.callback_users = ' | | '
   await p.saveChannel()
   assert.match(errors.at(-1), /允许操作的成员/)
@@ -616,4 +616,221 @@ test('WeCom callback secrets load on demand and stale or edited responses do not
     { kind: 'channel', field: 'callback_token', id: 'first' },
     { kind: 'channel', field: 'callback_aes_key', id: 'second' },
   ])
+})
+
+test('Bot and dual-account plugins can select Telegram, WeCom and Bark notification routes', async () => {
+  const channels = ['telegram', 'wechat', 'bark'].map(type => ({ id: type, type, enabled: true }))
+  const plugins = ['bot', 'both', 'standalone'].map(scope => ({ id: scope, scope }))
+  const p = settingsPage({}, 's, routing, getAvailableChannels, getAvailablePluginsForChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: [...channels, { id: 'disabled', enabled: false }] }
+  p.routing.value.plugins = plugins
+  for (const plugin of plugins) {
+    assert.deepEqual([...p.getAvailableChannels(plugin)].map(channel => channel.id), ['telegram', 'wechat', 'bark'])
+  }
+  for (const type of ['telegram', 'wechat', 'bark']) {
+    assert.deepEqual([...p.getAvailablePluginsForChannel(type)].map(plugin => plugin.id), ['bot', 'both', 'standalone'])
+  }
+  const writes = []
+  for (const scope of ['bot', 'both']) {
+    const config = configPage({
+      getBotsRouting: async () => ({ bots: channels, plugins: [{ id: scope, bot: 'telegram,wechat,bark' }] }),
+      setBotRouting: async (id, selected) => { writes.push([id, selected]); return { bot: selected } },
+    })
+    await config.openConfig({ id: scope, scope })
+    await flush()
+    assert.deepEqual([...config.configBotChoice.value], ['telegram', 'wechat', 'bark'])
+    assert.deepEqual([...config.configAvailableBots()].map(channel => channel.id), ['telegram', 'wechat', 'bark'])
+    config.configBotChoice.value = ['telegram', 'wechat']
+    await config.saveConfigBot()
+  }
+  assert.deepEqual(writes, [['bot', 'telegram,wechat'], ['both', 'telegram,wechat']])
+})
+
+test('failed channel saves restore only their channel data and never reopen a newer dialog', async () => {
+  const pending = deferred()
+  const p = settingsPage({
+    getBotsRouting: async () => ({ bots: [], plugins: [] }),
+    saveNotificationChannels: () => pending.promise,
+  }, 's, channelForm, channelModalOpen, openEditChannel, saveChannel')
+  p.s.value = { WEB_UI_PORT: 18001, NOTIFICATION_CHANNELS: ['first', 'second'].map(id => ({
+    id, name: id, type: 'wechat', enabled: true, config: {},
+  })) }
+  await p.openEditChannel(0)
+  p.channelForm.value.name = 'changed-first'
+  const saving = p.saveChannel()
+  await p.openEditChannel(1)
+  p.channelForm.value.name = 'draft-second'
+  p.s.value.WEB_UI_PORT = 19001
+  p.channelModalOpen.value = false
+  pending.reject(new Error('save failed'))
+  await saving
+  assert.equal(p.s.value.WEB_UI_PORT, 19001)
+  assert.equal(p.s.value.NOTIFICATION_CHANNELS[0].name, 'first')
+  assert.equal(p.channelForm.value.name, 'draft-second')
+  assert.equal(p.channelModalOpen.value, false)
+})
+
+test('a successful channel save is not rolled back when the settings refresh fails', async () => {
+  const writes = []
+  const p = settingsPage({
+    getBotsRouting: async () => ({ bots: [], plugins: [] }),
+    saveNotificationChannels: async channels => { writes.push(JSON.parse(JSON.stringify(channels))); return {} },
+    getSettings: async () => { throw new Error('refresh unavailable') },
+  }, 's, channelForm, channelModalOpen, openEditChannel, saveChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: [{ id: 'first', name: 'first', type: 'wechat', enabled: true, config: {} }] }
+  await p.openEditChannel(0)
+  p.channelForm.value.name = 'saved-name'
+  await p.saveChannel()
+  assert.equal(writes.length, 1)
+  assert.equal(p.s.value.NOTIFICATION_CHANNELS[0].name, 'saved-name')
+  assert.equal(p.channelModalOpen.value, false)
+})
+
+test('channel writes are single-flight and routing ignores older responses', async () => {
+  const pending = deferred(), writes = []
+  const p = settingsPage({
+    getBotsRouting: async () => ({ bots: [], plugins: [] }),
+    saveNotificationChannels: async channels => { writes.push(JSON.parse(JSON.stringify(channels))); return pending.promise },
+    getSettings: async () => ({ settings: { NOTIFICATION_CHANNELS: writes[0] } }),
+  }, 's, channelForm, openEditChannel, saveChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: [{ id: 'first', name: 'first', type: 'wechat', enabled: true, config: {} }] }
+  await p.openEditChannel(0)
+  const first = p.saveChannel(), second = p.saveChannel()
+  pending.resolve({})
+  await Promise.all([first, second])
+  assert.equal(writes.length, 1)
+  const old = deferred(), current = deferred()
+  let calls = 0
+  const routing = settingsPage({ getBotsRouting: () => (++calls === 1 ? old.promise : current.promise) }, 'loadRouting, routing')
+  const loadingOld = routing.loadRouting(), loadingCurrent = routing.loadRouting()
+  current.resolve({ bots: [], plugins: [{ id: 'new' }] })
+  await loadingCurrent
+  old.resolve({ bots: [], plugins: [{ id: 'old' }] })
+  await loadingOld
+  assert.equal(routing.routing.value.plugins[0].id, 'new')
+})
+
+test('channel dialog opening order cannot be reversed by slower routing responses', async () => {
+  const old = deferred(), current = deferred()
+  let calls = 0
+  const p = settingsPage({ getBotsRouting: () => (++calls === 1 ? old.promise : current.promise) },
+    's, channelForm, openEditChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: ['first', 'second'].map(id => ({ id, name: id, type: 'wechat', config: {} })) }
+  const first = p.openEditChannel(0), second = p.openEditChannel(1)
+  current.resolve({ bots: [], plugins: [] })
+  await second
+  old.resolve({ bots: [], plugins: [] })
+  await first
+  assert.equal(p.channelForm.value.id, 'second')
+})
+
+test('channel deletion resolves the confirmed ID after synchronized channels reorder or disappear', async () => {
+  for (const removeTarget of [false, true]) {
+    const decision = deferred(), writes = []
+    const p = settingsPage(channelSettingsApi(writes), 's, deleteChannel', { confirm: () => decision.promise })
+    p.s.value = { NOTIFICATION_CHANNELS: ['first', 'second'].map(id => ({ id, name: id, type: 'wechat', config: {} })) }
+    const deleting = p.deleteChannel(1)
+    p.s.value.NOTIFICATION_CHANNELS = removeTarget
+      ? p.s.value.NOTIFICATION_CHANNELS.slice(0, 1)
+      : [...p.s.value.NOTIFICATION_CHANNELS].reverse()
+    decision.resolve(true)
+    await deleting
+    assert.deepEqual(p.s.value.NOTIFICATION_CHANNELS.map(channel => channel.id), ['first'])
+    assert.equal(writes.length, removeTarget ? 0 : 1)
+  }
+})
+
+test('an edited channel is saved by ID and never overwrites another synchronized channel', async () => {
+  for (const removeTarget of [false, true]) {
+    const writes = [], errors = []
+    const p = settingsPage(channelSettingsApi(writes), 's, channelForm, openEditChannel, saveChannel', {
+      toast: { success() {}, error: message => errors.push(message) },
+    })
+    p.s.value = { NOTIFICATION_CHANNELS: ['first', 'second'].map(id => ({ id, name: id, type: 'wechat', config: {} })) }
+    await p.openEditChannel(1)
+    p.channelForm.value.name = 'updated-second'
+    p.s.value.NOTIFICATION_CHANNELS = removeTarget
+      ? p.s.value.NOTIFICATION_CHANNELS.slice(0, 1)
+      : [...p.s.value.NOTIFICATION_CHANNELS].reverse()
+    await p.saveChannel()
+    assert.equal(p.s.value.NOTIFICATION_CHANNELS.find(channel => channel.id === 'first').name, 'first')
+    assert.equal(writes.length, removeTarget ? 0 : 1)
+    if (removeTarget) assert.match(errors.at(-1), /渠道已被删除/)
+    else assert.equal(p.s.value.NOTIFICATION_CHANNELS.find(channel => channel.id === 'second').name, 'updated-second')
+  }
+})
+
+test('an old failed channel save does not interrupt a newer dialog still loading its routes', async () => {
+  const saving = deferred(), opening = deferred()
+  let reads = 0
+  const p = settingsPage({
+    getBotsRouting: () => ++reads === 1 ? Promise.resolve({ bots: [], plugins: [] }) : opening.promise,
+    saveNotificationChannels: () => saving.promise,
+  }, 's, channelForm, channelModalOpen, openEditChannel, saveChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: ['first', 'second'].map(id => ({ id, name: id, type: 'wechat', config: {} })) }
+  await p.openEditChannel(0)
+  const oldSave = p.saveChannel(), newOpening = p.openEditChannel(1)
+  saving.reject(new Error('failed write'))
+  await oldSave
+  assert.equal(p.channelModalOpen.value, false)
+  opening.resolve({ bots: [], plugins: [] })
+  await newOpening
+  assert.equal(p.channelModalOpen.value, true)
+  assert.equal(p.channelForm.value.id, 'second')
+})
+
+test('failed channel saves preserve freshly synchronized channel data and retry the original form', async () => {
+  const pending = deferred()
+  const p = settingsPage({
+    getBotsRouting: async () => ({ bots: [], plugins: [] }),
+    saveNotificationChannels: () => pending.promise,
+  }, 's, channelForm, channelModalOpen, openEditChannel, saveChannel')
+  p.s.value = { NOTIFICATION_CHANNELS: [{ id: 'first', name: 'first', type: 'wechat', config: {} }] }
+  await p.openEditChannel(0)
+  p.channelForm.value.name = 'retry-this-name'
+  const saving = p.saveChannel()
+  p.s.value.NOTIFICATION_CHANNELS = [{ id: 'first', name: 'fresh-server-name', type: 'wechat', config: {} }]
+  pending.reject(new Error('failed write'))
+  await saving
+  assert.equal(p.s.value.NOTIFICATION_CHANNELS[0].name, 'fresh-server-name')
+  assert.equal(p.channelModalOpen.value, true)
+  assert.equal(p.channelForm.value.name, 'retry-this-name')
+})
+
+test('WeCom callback validation accepts the official random Key and requires visible ASCII credentials', async () => {
+  const writes = [], errors = []
+  const p = settingsPage(channelSettingsApi(writes), 's, selectChannelType, channelForm, saveChannel', {
+    toast: { success() {}, error: message => errors.push(message) },
+  })
+  p.s.value = { NOTIFICATION_CHANNELS: [] }
+  await p.selectChannelType('wechat')
+  p.channelForm.value.name = '企业指令'
+  const valid = { callback_enabled: true, corpid: 'corp', agentid: '1', secret: 'app-secret',
+    callback_token: 'callback-token', callback_aes_key: 'A'.repeat(43), callback_users: 'alice' }
+  for (const [change, error] of [
+    [{ corpid: 'corp space' }, /企业 ID/],
+    [{ corpid: '企业' }, /企业 ID/],
+    [{ agentid: true }, /正整数/],
+    [{ callback_token: 'token中文' }, /ASCII/],
+    [{ callback_token: '\u0080token' }, /ASCII/],
+    [{ callback_aes_key: ' ' + 'A'.repeat(43) }, /EncodingAESKey/],
+    [{ callback_aes_key: 'A'.repeat(43) + ' ' }, /EncodingAESKey/],
+  ]) {
+    p.channelForm.value.config = { ...valid, ...change }
+    await p.saveChannel()
+    assert.match(errors.at(-1) || '', error)
+  }
+  assert.equal(writes.length, 0)
+  p.channelForm.value.id = 'invalid/channel'
+  p.channelForm.value.config = { ...valid }
+  await p.saveChannel()
+  assert.match(errors.at(-1), /渠道 ID/)
+  assert.equal(writes.length, 0)
+  p.channelForm.value.id = 'wecom-official-key'
+  p.channelForm.value.config = { ...valid, callback_aes_key: 'jWmYm7qr5nMoAUwZRjGtBxmz3KA1tkAj3ykkR6q2B2C' }
+  p.channelForm.value.config.callback_users = Array.from({ length: 65 }, (_, index) => index % 2 ? 'ALICE' : 'Alice').join('|')
+  await p.saveChannel()
+  assert.equal(writes.length, 1)
+  assert.equal(writes[0][0].config.callback_aes_key, 'jWmYm7qr5nMoAUwZRjGtBxmz3KA1tkAj3ykkR6q2B2C')
+  assert.equal(writes[0][0].config.callback_users, 'Alice')
 })

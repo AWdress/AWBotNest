@@ -16,10 +16,11 @@ from fastapi import HTTPException
 from . import __version__
 from .config import DATA_DIR
 from .logs import redact_secrets
-from .wecom_config import callback_members, channel_config, validate_callback_config
+from .wecom_config import callback_member_allowed, channel_config, validate_callback_config
 
 
 logger = logging.getLogger("awbotnest.wecom")
+WECOM_SHUTDOWN_SECONDS = 3.0
 HELP = ("/状态：查看系统状态\n/插件：查看关联插件及动作\n"
         "/动作 插件ID：查看可用动作\n/运行 插件ID 动作名：执行动作\n"
         "需要参数时，在动作名后附 JSON 对象。")
@@ -42,6 +43,7 @@ class WeComCommandService:
         self._queue: asyncio.Queue[CommandJob] = asyncio.Queue(maxsize=16)
         self._lock = asyncio.Lock()
         self._worker: asyncio.Task | None = None
+        self._admissions: set[asyncio.Task] = set()
         self._closed = False
 
     def _authorize(self, channel_id: str, user_id: str) -> dict:
@@ -53,7 +55,7 @@ class WeComCommandService:
             validate_callback_config(config)
         except ValueError as exc:
             raise HTTPException(403, "消息回调配置不完整") from exc
-        if user_id not in callback_members(config):
+        if not callback_member_allowed(config, user_id):
             raise HTTPException(403, "此成员无权执行指令")
         return config
 
@@ -97,6 +99,35 @@ class WeComCommandService:
                 raise RuntimeError("回调去重记录已满")
             connection.execute("INSERT INTO received VALUES (?, ?)", (key, time.time()))
         return True
+
+    def _received(self, channel_id: str, message_id: str) -> bool:
+        # A full queue must acknowledge accepted retries without claiming a new
+        # message that it cannot enqueue. Read persisted records across restarts.
+        if not self.store_path.exists():
+            return False
+        key = hashlib.sha256(f"{channel_id}\0{message_id}".encode()).hexdigest()
+        with closing(sqlite3.connect(self.store_path, timeout=0.2)) as connection:
+            if not connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'received'").fetchone():
+                return False
+            return connection.execute("SELECT 1 FROM received WHERE id = ? AND time >= ?",
+                                      (key, time.time() - 86400)).fetchone() is not None
+
+    def _release_claim(self, channel_id: str, message_id: str) -> None:
+        # Only the admission that inserted a fresh record may undo it, and only
+        # before enqueueing. Rejected retries must keep the original record.
+        key = hashlib.sha256(f"{channel_id}\0{message_id}".encode()).hexdigest()
+        with closing(sqlite3.connect(self.store_path, timeout=0.2)) as connection, connection:
+            connection.execute("DELETE FROM received WHERE id = ?", (key,))
+
+    @staticmethod
+    def _consume_task(task: asyncio.Task) -> None:
+        if not task.cancelled():
+            task.exception()
+
+    def _admission_finished(self, task: asyncio.Task) -> None:
+        self._admissions.discard(task)
+        self._consume_task(task)
 
     async def handle(self, channel_id: str, message: dict[str, str]) -> str:
         user_id = message.get("FromUserName", "")
@@ -145,12 +176,20 @@ class WeComCommandService:
         admission = asyncio.create_task(self._submit(
             CommandJob(channel_id, user_id, plugin_id, action, payload,
                        (config["corpid"], str(config["agentid"]))), message_id))
+        self._admissions.add(admission)
+        admission.add_done_callback(self._admission_finished)
         try:
             fresh = await asyncio.shield(admission)
         except asyncio.CancelledError:
             # A disconnect cannot strand a committed MsgId without its job.
-            # Shutdown waits for admission under the same lock, then cancels jobs.
-            await asyncio.gather(admission, return_exceptions=True)
+            # Repeated cancellation must not propagate to the admission either.
+            while not admission.done() and not self._closed:
+                try:
+                    await asyncio.shield(admission)
+                except asyncio.CancelledError:
+                    continue
+                except Exception:
+                    break
             raise
         if not fresh:
             return "此消息已接收，请勿重复提交。"
@@ -158,14 +197,27 @@ class WeComCommandService:
 
     async def _submit(self, job: CommandJob, message_id: str) -> bool:
         async with self._lock:
-            if self._closed or self._queue.full():
-                raise HTTPException(503, "系统忙，请稍后重试")
             self._check_job(job)
             try:
+                if self._queue.full():
+                    if await asyncio.to_thread(self._received, job.channel_id, message_id):
+                        self._check_job(job)
+                        return False
+                    raise HTTPException(503, "系统忙，请稍后重试")
                 fresh = await asyncio.to_thread(self._claim, job.channel_id, message_id)
             except (OSError, sqlite3.Error, RuntimeError) as exc:
                 logger.warning("企业微信指令未提交：去重存储不可用（%s）", type(exc).__name__)
                 raise HTTPException(503, "指令暂时无法提交，请稍后重试") from exc
+            # Shutdown and permission edits do not wait for storage I/O.
+            try:
+                self._check_job(job)
+            except HTTPException:
+                if fresh:
+                    try:
+                        await asyncio.to_thread(self._release_claim, job.channel_id, message_id)
+                    except (OSError, sqlite3.Error) as exc:
+                        logger.warning("未提交指令的去重记录清理失败（%s）", type(exc).__name__)
+                raise
             if not fresh:
                 return False
             self._queue.put_nowait(job)
@@ -180,13 +232,26 @@ class WeComCommandService:
                 self._check_job(job)
                 name = self._name(job.plugin_id)
                 try:
-                    result = await self.routes.dispatch_action(job.plugin_id, job.action, job.payload)
+                    # Isolate current_task().cancel() in a plugin callback from
+                    # the queue worker. Awaiting directly would run synchronous
+                    # callbacks in the worker task; system cancellation still
+                    # propagates normally to this child dispatch.
+                    dispatch = asyncio.create_task(self.routes.dispatch_action(
+                        job.plugin_id, job.action, job.payload), name="wecom-action")
+                    result = await dispatch
                     failed = result is False or isinstance(result, dict) and result.get("ok") is False
                     detail = result if isinstance(result, str) else (
                         result.get("message", "") if isinstance(result, dict) else "")
                     text = f"{name} / {job.action}：{'执行失败' if failed else '已完成'}"
                     if isinstance(detail, str) and detail:
                         text += "\n" + redact_secrets(detail)
+                except asyncio.CancelledError:
+                    if self._closed or asyncio.current_task().cancelling():
+                        raise
+                    # A plugin may cancel its own action; that must not stop the
+                    # worker and abandon other commands already acknowledged.
+                    logger.warning("企业微信插件动作已取消：插件=%s 动作=%s", name, job.action)
+                    text = f"{name} / {job.action}：已取消"
                 except Exception as exc:
                     logger.warning("企业微信插件动作失败：插件=%s 动作=%s 错误=%s", name, job.action, type(exc).__name__)
                     text = f"{name} / {job.action}：执行失败（{type(exc).__name__}）"
@@ -196,7 +261,9 @@ class WeComCommandService:
                     job.channel_id, job.user_id, self._limited(text),
                     permission_check=lambda: self._check_job(job)), timeout=30)
             except asyncio.CancelledError:
-                raise
+                if self._closed or asyncio.current_task().cancelling():
+                    raise
+                logger.warning("企业微信指令结果发送已取消")
             except HTTPException:
                 pass  # Permission revoked while the command was queued/running.
             except Exception as exc:
@@ -205,13 +272,24 @@ class WeComCommandService:
                 self._queue.task_done()
 
     async def close(self) -> None:
-        async with self._lock:
-            self._closed = True
-            worker = self._worker
-            if worker is not None:
-                worker.cancel()
-            while not self._queue.empty():
-                self._queue.get_nowait()
-                self._queue.task_done()
+        first_close = not self._closed
+        self._closed = True
+        worker = self._worker
         if worker is not None:
-            await asyncio.gather(worker, return_exceptions=True)
+            worker.cancel()
+        while not self._queue.empty():
+            self._queue.get_nowait()
+            self._queue.task_done()
+        tasks = set(self._admissions)
+        if worker is not None:
+            tasks.add(worker)
+        if tasks:
+            # wait_for/gather may wait forever for a plugin that suppresses
+            # cancellation. Closed state blocks queued work and late replies.
+            done, pending = await asyncio.wait(tasks, timeout=WECOM_SHUTDOWN_SECONDS)
+            for task in done:
+                self._consume_task(task)
+            for task in pending:
+                task.add_done_callback(self._consume_task)
+            if pending and first_close:
+                logger.warning("企业微信指令清理超时：%s 个任务未退出", len(pending))

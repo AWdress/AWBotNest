@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, Response
 
-from ..wecom_config import callback_members, channel_config, validate_callback_config
+from ..wecom_config import callback_member_allowed, channel_config, validate_callback_config
 from ..wecom_crypto import MAX_CALLBACK_BYTES, WeComCrypto, WeComCryptoError, message_signature, parse_xml_fields
 
 
@@ -77,9 +77,10 @@ async def _body(request: Request) -> bytes:
     return bytes(body)
 
 
-def _matches_application(fields: dict[str, str], config: dict, *, required: bool) -> None:
+def _matches_application(fields: dict[str, str], config: dict, *, required: bool,
+                         require_agent: bool = True) -> None:
     recipient, agent = fields.get("ToUserName"), fields.get("AgentID")
-    if ((required and (recipient is None or agent is None))
+    if ((required and (recipient is None or (require_agent and agent is None)))
             or (recipient is not None and recipient != config["corpid"])
             or (agent is not None and agent != config["agentid"])):
         raise HTTPException(status_code=403, detail="回调应用身份不匹配")
@@ -128,10 +129,13 @@ def create_router(deps) -> APIRouter:
         crypto = WeComCrypto(config["callback_token"], config["callback_aes_key"], config["corpid"])
         try:
             crypto.verify_signature(signature, timestamp, nonce, ciphertext)
-            message = parse_xml_fields(crypto.decrypt(ciphertext))
+            message = parse_xml_fields(crypto.decrypt(ciphertext), allow_event_details=True)
         except WeComCryptoError:
             raise HTTPException(status_code=403, detail="回调验证失败") from None
-        _matches_application(message, config, required=True)
+        # Some official non-text events omit AgentID. They can only be ignored,
+        # never dispatched; text commands always require the application ID.
+        _matches_application(message, config, required=True,
+                             require_agent=message.get("MsgType") == "text")
         sender = message.get("FromUserName", "")
         if not _MEMBER_ID.fullmatch(sender):
             raise HTTPException(status_code=400, detail="回调发送成员格式不正确")
@@ -139,7 +143,7 @@ def create_router(deps) -> APIRouter:
             raise HTTPException(status_code=400, detail="回调消息字段不完整")
         if message.get("MsgType") != "text":
             return PlainTextResponse("success", headers={"Cache-Control": "no-store"})
-        if sender not in callback_members(config):
+        if not callback_member_allowed(config, sender):
             raise HTTPException(status_code=403, detail="回调成员未获授权")
         if ("Content" not in message or not re.fullmatch(r"[0-9]{1,20}", message.get("MsgId", ""))
                 or not re.fullmatch(r"[0-9]{1,12}", message.get("CreateTime", ""))):

@@ -704,7 +704,7 @@ test('企业微信回调默认关闭，按需读取密钥且关闭后保留配�
   await expect(modal.getByText(/支持 \/帮助、\/状态、\/插件、\/运行 插件ID 动作名/)).toBeVisible()
   await expect(modal.getByLabel('签到插件', { exact: true })).not.toBeChecked()
   await expect(modal.getByLabel('其他插件', { exact: true })).not.toBeChecked()
-  await expect(modal.getByLabel('仅 Telegram 事件插件', { exact: true })).toHaveCount(0)
+  await expect(modal.getByLabel('仅 Telegram 事件插件', { exact: true })).not.toBeChecked()
   await modal.getByRole('button', { name: '确认', exact: true }).click()
   await expect(page.getByText('请填写允许操作的成员', { exact: true })).toBeVisible()
   expect(saves).toHaveLength(1)
@@ -742,6 +742,93 @@ test('企业微信回调默认关闭，按需读取密钥且关闭后保留配�
   await expect(modal.getByLabel('允许操作的成员', { exact: true })).toHaveValue('alice|bob')
   await expect(page.locator('.toast-enter-active, .toast-leave-active')).toHaveCount(0)
   await expectInsideViewport(page)
+})
+
+test('Bot 与双账号插件可双向选择所有通知渠道且保存不丢关联', async ({ page }) => {
+  const channels = [
+    { id: 'tg', name: 'Telegram 通知', type: 'telegram', enabled: true, is_default: true, config: {} },
+    { id: 'wc', name: '企业通知', type: 'wechat', enabled: true, is_default: false, config: { callback_enabled: false } },
+    { id: 'bark', name: '手机推送', type: 'bark', enabled: true, is_default: false, config: {} },
+  ]
+  const routingPlugins = [
+    { ...configurablePlugin, id: 'bot_notify', name: 'Bot 通知测试', scope: 'bot', bot: 'tg,wc' },
+    { ...configurablePlugin, id: 'both_notify', name: '双账号通知测试', scope: 'both', bot: 'tg,wc' },
+  ]
+  const routeSaves = []
+  const currentSettings = { ...settings, NOTIFICATION_CHANNELS: channels }
+  await page.route('**/api/settings', route => json(route, { settings: currentSettings }))
+  await page.route('**/api/settings/notification-channels', route => {
+    currentSettings.NOTIFICATION_CHANNELS = route.request().postDataJSON().channels
+    return json(route, { ok: true, restart_required: false })
+  })
+  await page.route('**/api/bots/routing', route => {
+    if (route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON()
+      routeSaves.push(body)
+      routingPlugins.find(plugin => plugin.id === body.plugin_id).bot = body.bot_id
+      return json(route, { ok: true, bot: body.bot_id })
+    }
+    return json(route, {
+      bots: currentSettings.NOTIFICATION_CHANNELS.map(channel => ({ ...channel, online: true })),
+      plugins: routingPlugins,
+    })
+  })
+  await page.route('**/api/plugins', route => json(route, { plugins: routingPlugins }))
+  await page.route('**/api/plugins/*/config', route => json(route, {
+    schema: { enabled: { type: 'boolean', label: '启用测试功能' } },
+    values: { enabled: true }, render_mode: 'schema', has_frontend: false,
+  }))
+
+  await page.goto('/#/settings')
+  await page.getByRole('button', { name: '通知渠道', exact: true }).click()
+  for (const plugin of routingPlugins) {
+    const row = page.locator('.route-row-multi').filter({ hasText: plugin.name })
+    await expect(row.getByLabel(/Telegram 通知/)).toBeChecked()
+    await expect(row.getByLabel(/企业通知/)).toBeChecked()
+    await row.getByLabel(/手机推送/).check()
+    await expect.poll(() => plugin.bot).toBe('tg,wc,bark')
+    await expect(row.getByLabel(/手机推送/)).toBeEnabled()
+  }
+
+  await page.locator('.channel-card-mp').filter({ hasText: '企业通知' }).locator('.channel-bottom-row').click()
+  const channelModal = page.locator('.channel-modal')
+  await expect(channelModal.getByLabel('Bot 通知测试', { exact: true })).toBeChecked()
+  await expect(channelModal.getByLabel('双账号通知测试', { exact: true })).toBeChecked()
+  await channelModal.getByLabel('双账号通知测试', { exact: true }).uncheck()
+  await channelModal.getByRole('button', { name: '确认', exact: true }).click()
+  await expect(channelModal).toBeHidden()
+  await expect.poll(() => routingPlugins[1].bot).toBe('tg,bark')
+  expect(routingPlugins[0].bot).toBe('tg,wc,bark')
+  await expect(page.locator('.route-row-multi')).toHaveCount(2)
+  await expect(page.locator('.toast-enter-active, .toast-leave-active')).toHaveCount(0)
+  await expectInsideViewport(page)
+
+  await page.goto('/#/plugins')
+  for (const plugin of routingPlugins) {
+    await page.getByText(plugin.name, { exact: true }).click()
+    const configModal = page.locator('.modal.modal-wide')
+    await expect(configModal.locator('.config-scope-select').first()).toBeEnabled()
+    await configModal.locator('.config-scope-select').first().click()
+    const menu = page.locator('.config-scope-menu')
+    await expect(menu.getByLabel(/^Telegram 通知/)).toBeChecked()
+    await expect(menu.getByLabel(/手机推送/)).toBeChecked()
+    if (plugin.scope === 'both') {
+      await menu.getByLabel(/企业通知/).check()
+      await expect.poll(() => plugin.bot).toBe('tg,bark,wc')
+      await expect(menu.getByLabel(/企业通知/)).toBeEnabled()
+    } else {
+      await expect(menu.getByLabel(/企业通知/)).toBeChecked()
+    }
+    await menu.getByLabel(/手机推送/).uncheck()
+    await expect.poll(() => plugin.bot.split(',').sort()).toEqual(['tg', 'wc'])
+    await expect(menu.getByLabel(/^Telegram 通知/)).toBeChecked()
+    await expect(menu.getByLabel(/企业通知/)).toBeChecked()
+    await expect(menu.getByLabel(/手机推送/)).not.toBeChecked()
+    await expect(page.locator('.toast-enter-active, .toast-leave-active')).toHaveCount(0)
+    await expectInsideViewport(page)
+    await configModal.getByRole('button', { name: '关闭', exact: true }).click()
+  }
+  expect(routeSaves).toHaveLength(6)
 })
 
 test('iPhone 17 仓库地址不会被删除按钮挤压', async ({ page }) => {

@@ -398,10 +398,7 @@ async function loadConfigBot(pluginId) {
     const selectedStr = (data.plugins || []).find((item) => item.id === pluginId)?.bot || ''
     configBots.value = data.bots || []
 
-    const requiresTelegram = configTarget.value?.scope === 'bot' || configTarget.value?.scope === 'both'
-    const allowedIds = new Set(configBots.value
-      .filter(bot => !requiresTelegram || bot.type === 'telegram')
-      .map(bot => bot.id))
+    const allowedIds = new Set(configBots.value.map(bot => bot.id))
     const selected = selectedStr
       ? selectedStr.split(',').map(s => s.trim()).filter(id => id && allowedIds.has(id))
       : []
@@ -447,8 +444,7 @@ function configDefaultBotName() {
 }
 
 function configAvailableBots() {
-  const requiresTelegram = configTarget.value?.scope === 'bot' || configTarget.value?.scope === 'both'
-  return requiresTelegram ? configBots.value.filter(bot => bot.type === 'telegram') : configBots.value
+  return configBots.value
 }
 
 const configBotSummary = computed(() => {

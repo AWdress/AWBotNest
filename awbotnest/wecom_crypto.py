@@ -20,6 +20,7 @@ MAX_CALLBACK_BYTES = 64 * 1024
 MAX_CIPHERTEXT_CHARS = 4 * ((MAX_CALLBACK_BYTES + 512 + 52 + 2) // 3)
 _XML_DECLARATION = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _XML_FIELD = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
+_XML_SCALAR_FIELDS = {"ToUserName", "FromUserName", "CreateTime", "MsgType", "AgentID", "MsgId", "Content", "Event"}
 
 
 class WeComCryptoError(ValueError):
@@ -32,8 +33,23 @@ def message_signature(token: str, timestamp: str, nonce: str, ciphertext: str) -
     return hashlib.sha1("".join(sorted((token, timestamp, nonce, ciphertext))).encode("utf-8")).hexdigest()
 
 
-def parse_xml_fields(content: bytes | str) -> dict[str, str]:
-    """Accept only one flat XML message, with unique, attribute-free fields."""
+def _validate_event_details(node: ET.Element) -> None:
+    """Validate ignored event trees; repeated list items are part of the protocol."""
+    pending = [(node, 1)]
+    count = 0
+    while pending:
+        current, depth = pending.pop()
+        count += 1
+        if (depth > 32 or count > 4096 or not isinstance(current.tag, str)
+                or not _XML_FIELD.fullmatch(current.tag) or current.attrib
+                or (current.tail and current.tail.strip())
+                or (len(current) and current.text and current.text.strip())):
+            raise WeComCryptoError("企业微信回调事件字段格式不正确")
+        pending.extend((child, depth + 1) for child in current)
+
+
+def parse_xml_fields(content: bytes | str, *, allow_event_details: bool = False) -> dict[str, str]:
+    """Keep command/envelope fields flat, optionally ignoring valid event trees."""
     try:
         if isinstance(content, bytes):
             if len(content) > MAX_CALLBACK_BYTES:
@@ -50,13 +66,20 @@ def parse_xml_fields(content: bytes | str) -> dict[str, str]:
         root = ET.fromstring(text)
         if root.tag != "xml" or root.attrib or (root.text and root.text.strip()):
             raise WeComCryptoError("企业微信回调 XML 格式不正确")
+        event_details = allow_event_details and root.findtext("MsgType") == "event"
         fields: dict[str, str] = {}
         for node in root:
             if (not isinstance(node.tag, str) or not _XML_FIELD.fullmatch(node.tag)
-                    or node.tag in fields or node.attrib or len(node)
+                    or node.tag in fields or node.attrib
                     or (node.tail and node.tail.strip())):
                 raise WeComCryptoError("企业微信回调包含重复或不合法字段")
-            fields[node.tag] = node.text or ""
+            if len(node):
+                if not event_details or node.tag in _XML_SCALAR_FIELDS:
+                    raise WeComCryptoError("企业微信回调包含不合法嵌套字段")
+                _validate_event_details(node)
+                fields[node.tag] = ""
+            else:
+                fields[node.tag] = node.text or ""
         if not fields:
             raise WeComCryptoError("企业微信回调缺少消息字段")
         return fields
@@ -77,7 +100,10 @@ class WeComCrypto:
             key = base64.b64decode(encoding_aes_key + "=", validate=True)
         except (ValueError, binascii.Error) as exc:
             raise WeComCryptoError("企业微信回调 AESKey 格式不正确") from exc
-        if len(key) != 32 or base64.b64encode(key).decode("ascii").rstrip("=") != encoding_aes_key:
+        # Officially generated 43-character keys may have nonzero Base64 pad
+        # bits (including the published protocol example). Match the official
+        # SDK's decode behavior rather than requiring a canonical re-encoding.
+        if len(key) != 32:
             raise WeComCryptoError("企业微信回调 AESKey 格式不正确")
         self.token = token
         self._key = key

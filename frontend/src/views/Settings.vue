@@ -1285,6 +1285,7 @@ async function copyApiKey() {
 const channelModalOpen = ref(false)
 const channelModalMode = ref('add')  // 'add' | 'edit'
 const channelEditIndex = ref(-1)
+let channelDialogRequestId = 0
 const channelForm = ref({
   id: '',
   name: '',
@@ -1329,8 +1330,10 @@ function toggleAddMenu() {
 }
 
 async function selectChannelType(type) {
+  const requestId = ++channelDialogRequestId
   addMenuOpen.value = false
   await loadRouting()
+  if (requestId !== channelDialogRequestId) return
   channelModalMode.value = 'add'
   channelEditIndex.value = -1
   channelForm.value = {
@@ -1346,19 +1349,7 @@ async function selectChannelType(type) {
 }
 
 async function openAddChannel() {
-  await loadRouting()
-  channelModalMode.value = 'add'
-  channelEditIndex.value = -1
-  channelForm.value = {
-    id: `ch_${Date.now()}`,
-    name: '',
-    type: 'telegram',
-    enabled: true,
-    is_default: false,
-    config: defaultChannelConfig('telegram'),
-    plugins: []  // 新增：选择的插件列表
-  }
-  channelModalOpen.value = true
+  return selectChannelType('telegram')
 }
 
 function routedPluginsForChannel(channelId) {
@@ -1368,10 +1359,16 @@ function routedPluginsForChannel(channelId) {
 }
 
 async function openEditChannel(index) {
+  const channelId = s.value.NOTIFICATION_CHANNELS[index]?.id
+  if (!channelId) return
+  const requestId = ++channelDialogRequestId
   await loadRouting()
+  if (requestId !== channelDialogRequestId) return
+  const currentIndex = s.value.NOTIFICATION_CHANNELS.findIndex(channel => channel.id === channelId)
+  if (currentIndex < 0) return
   channelModalMode.value = 'edit'
-  channelEditIndex.value = index
-  const ch = s.value.NOTIFICATION_CHANNELS[index]
+  channelEditIndex.value = currentIndex
+  const ch = s.value.NOTIFICATION_CHANNELS[currentIndex]
   channelForm.value = JSON.parse(JSON.stringify(ch))
   channelForm.value.config = defaultChannelConfig(ch.type, channelForm.value.config)
   // 确保字段存在
@@ -1384,6 +1381,9 @@ async function openEditChannel(index) {
 }
 
 async function saveChannel() {
+  if (saving.value) return
+  const form = channelForm.value
+  const dialogRequestId = channelDialogRequestId
   if (!channelForm.value.name.trim()) {
     toast.error('请输入名称')
     return
@@ -1391,12 +1391,16 @@ async function saveChannel() {
 
   const config = channelForm.value.config
   if (channelForm.value.type === 'wechat' && config.callback_enabled) {
+    if (typeof channelForm.value.id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(channelForm.value.id)) {
+      toast.error('回调渠道 ID 格式不正确，请重新创建此渠道')
+      return
+    }
     if (config.url || config.webhook) {
       toast.error('消息回调需要企业微信自建应用，不能使用群机器人 Webhook')
       return
     }
-    if (typeof config.corpid !== 'string' || !config.corpid.trim()) {
-      toast.error('请填写企业 ID')
+    if (typeof config.corpid !== 'string' || !/^[A-Za-z0-9_-]{1,256}$/.test(config.corpid)) {
+      toast.error('企业 ID 限 1–256 位字母、数字、下划线或连字符')
       return
     }
     const agentId = Number(config.agentid)
@@ -1415,17 +1419,24 @@ async function saveChannel() {
         return
       }
     }
-    if (config.callback_token !== '********' && !/^[^\s\x00-\x20\x7f]{1,128}$/.test(config.callback_token)) {
-      toast.error('回调 Token 最多 128 个字符，不能包含空白或控制字符')
+    if (config.callback_token !== '********' && !/^[\x21-\x7e]{1,128}$/.test(config.callback_token)) {
+      toast.error('回调 Token 限 1–128 个可见 ASCII 字符，不能包含空白或控制字符')
       return
     }
     if (config.callback_aes_key !== '********' && !/^[A-Za-z0-9+/]{43}$/.test(config.callback_aes_key)) {
       toast.error('EncodingAESKey 必须是 43 位 Base64 字符')
       return
     }
-    const users = typeof config.callback_users === 'string'
+    const rawUsers = typeof config.callback_users === 'string'
       ? config.callback_users.split('|').map(user => user.trim()).filter(Boolean)
       : []
+    const seenUsers = new Set()
+    const users = rawUsers.filter(user => {
+      const key = user.toLowerCase()
+      if (seenUsers.has(key)) return false
+      seenUsers.add(key)
+      return true
+    })
     if (!users.length) {
       toast.error('请填写允许操作的成员')
       return
@@ -1441,7 +1452,15 @@ async function saveChannel() {
     config.callback_users = users.join('|')
   }
 
-  const originalSettings = JSON.parse(JSON.stringify(s.value))
+  if (channelModalMode.value === 'edit') {
+    const currentIndex = s.value.NOTIFICATION_CHANNELS.findIndex(channel => channel.id === form.id)
+    if (currentIndex < 0) {
+      toast.error('此通知渠道已被删除，请关闭弹窗后重新选择')
+      return
+    }
+    channelEditIndex.value = currentIndex
+  }
+  const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
 
   // 如果设为默认，取消其他渠道的默认状态
   if (channelForm.value.is_default) {
@@ -1461,15 +1480,16 @@ async function saveChannel() {
   } else {
     s.value.NOTIFICATION_CHANNELS[channelEditIndex.value] = channel
   }
+  const stagedChannels = JSON.stringify(s.value.NOTIFICATION_CHANNELS)
 
   // 先关闭弹窗，让用户不用等待 Bot 连接和路由同步；失败时恢复并重新打开。
   channelModalOpen.value = false
-  if (!await saveNotificationChannels()) {
-    s.value = originalSettings
-    channelModalOpen.value = true
-    return
-  }
   try {
+    if (!await saveNotificationChannels(true)) {
+      if (JSON.stringify(s.value.NOTIFICATION_CHANNELS) === stagedChannels) s.value.NOTIFICATION_CHANNELS = originalChannels
+      if (channelForm.value === form && channelDialogRequestId === dialogRequestId) channelModalOpen.value = true
+      return
+    }
     if (channel.enabled) {
       await syncChannelToRouting({ ...channel, plugins: routeSelection })
     }
@@ -1478,21 +1498,29 @@ async function saveChannel() {
   } catch (e) {
     await loadRouting()
     toast.error('渠道已保存，但插件路由更新失败：' + e.message)
+  } finally {
+    saving.value = false
   }
 }
 
 async function deleteChannel(index) {
-  const channelName = s.value.NOTIFICATION_CHANNELS[index].name
+  if (saving.value) return
+  const channel = s.value.NOTIFICATION_CHANNELS[index]
+  if (!channel) return
+  const channelId = channel.id
+  const channelName = channel.name
   const ok = await confirm({
     title: '删除通知渠道',
     message: `确定删除通知渠道「${channelName}」？`,
     confirmText: '删除',
     danger: true,
   })
-  if (!ok) return
+  if (!ok || saving.value) return
+  const currentIndex = s.value.NOTIFICATION_CHANNELS.findIndex(channel => channel.id === channelId)
+  if (currentIndex < 0) return
 
   const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
-  s.value.NOTIFICATION_CHANNELS.splice(index, 1)
+  s.value.NOTIFICATION_CHANNELS.splice(currentIndex, 1)
   if (await saveNotificationChannels()) {
     publishNotificationSync({ source: notificationSyncSource, type: 'channels' })
     toast.success('已删除，相关插件路由已同步更新')
@@ -1502,6 +1530,7 @@ async function deleteChannel(index) {
 }
 
 async function toggleChannel(index) {
+  if (saving.value) return
   const originalChannels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
   s.value.NOTIFICATION_CHANNELS[index].enabled = !s.value.NOTIFICATION_CHANNELS[index].enabled
   const ch = s.value.NOTIFICATION_CHANNELS[index]
@@ -1515,25 +1544,34 @@ async function toggleChannel(index) {
   } else s.value.NOTIFICATION_CHANNELS = originalChannels
 }
 
-async function saveNotificationChannels() {
+async function saveNotificationChannels(keepSaving = false) {
+  if (saving.value) return false
   saving.value = true
   try {
-    const result = await api.saveNotificationChannels(s.value.NOTIFICATION_CHANNELS)
-    const data = await api.getSettings()
-    const latest = data.settings || {}
+    const channels = JSON.parse(JSON.stringify(s.value.NOTIFICATION_CHANNELS))
+    const result = await api.saveNotificationChannels(channels)
     const baseline = savedSnap.value ? JSON.parse(savedSnap.value) : {}
-    for (const key of notificationSettingKeys) {
-      s.value[key] = latest[key]
-      baseline[key] = latest[key]
+    let refreshError = null
+    try {
+      const data = await api.getSettings()
+      const latest = data.settings || {}
+      for (const key of notificationSettingKeys) {
+        s.value[key] = latest[key]
+        baseline[key] = latest[key]
+      }
+    } catch (error) {
+      refreshError = error
+      baseline.NOTIFICATION_CHANNELS = channels
     }
     savedSnap.value = JSON.stringify(baseline)
     restartHint.value = !!result.restart_required
     await loadRouting()
 
     const failedBots = result.bot_sync?.failed || []
+    if (refreshError) toast.error('渠道已保存，但刷新设置失败：' + refreshError.message)
     if (failedBots.length) {
       toast.error(`渠道已保存，但这些 Bot 连接失败：${failedBots.map(bot => bot.name).join('、')}`)
-    } else {
+    } else if (!refreshError) {
       toast.success(result.restart_required ? '渠道已保存，重启后完全生效。' : '通知渠道已保存。')
     }
     return true
@@ -1541,7 +1579,7 @@ async function saveNotificationChannels() {
     toast.error('保存通知渠道失败：' + error.message)
     return false
   } finally {
-    saving.value = false
+    if (!keepSaving) saving.value = false
   }
 }
 
@@ -1554,20 +1592,9 @@ function getChannelTypeName(type) {
   return found ? found.label : type
 }
 
-// 根据插件标签获取可用渠道（机器人/双账号插件只能选Telegram）
-function getAvailableChannels(plugin) {
-  const allChannels = (s.value.NOTIFICATION_CHANNELS || []).filter(ch => ch.enabled)
-
-  // 检查插件是否有特殊标签
-  const requiresTelegramBot = plugin.scope === 'bot' || plugin.scope === 'both'
-
-  // 如果插件需要Bot功能，只返回Telegram渠道
-  if (requiresTelegramBot) {
-    return allChannels.filter(ch => ch.type === 'telegram')
-  }
-
-  // 其他插件可以使用所有渠道
-  return allChannels
+// 通知目的地与插件运行所需的账号类型无关。
+function getAvailableChannels() {
+  return (s.value.NOTIFICATION_CHANNELS || []).filter(ch => ch.enabled)
 }
 
 // 获取默认渠道名称
@@ -1576,17 +1603,8 @@ function getDefaultChannelName() {
   return defaultCh ? defaultCh.name : '未设置'
 }
 
-// 获取渠道可用的插件列表（根据渠道类型过滤）
-function getAvailablePluginsForChannel(channelType) {
-  const allPlugins = routing.value.plugins || []
-
-  // 如果是企业微信或Bark，排除需要Bot功能的插件
-  if (channelType === 'wechat' || channelType === 'bark') {
-    return allPlugins.filter(p => p.scope !== 'bot' && p.scope !== 'both')
-  }
-
-  // Telegram支持所有插件
-  return allPlugins
+function getAvailablePluginsForChannel() {
+  return routing.value.plugins || []
 }
 
 // 检查是否选择了"全部"（所有可用插件都被选中）
@@ -1654,14 +1672,17 @@ async function syncChannelToRouting(channel) {
 const routing = ref({ bots: [], plugins: [] })
 const routingLoading = ref(false)
 const routeSaving = ref({})
+let routingRequestId = 0
 
 async function loadRouting() {
+  const requestId = ++routingRequestId
   routingLoading.value = true
   try {
-    routing.value = await api.getBotsRouting()
+    const data = await api.getBotsRouting()
+    if (requestId === routingRequestId) routing.value = data
   }
-  catch (e) { toast.error('加载推送路由失败：' + e.message) }
-  finally { routingLoading.value = false }
+  catch (e) { if (requestId === routingRequestId) toast.error('加载推送路由失败：' + e.message) }
+  finally { if (requestId === routingRequestId) routingLoading.value = false }
 }
 
 // 检查插件是否选中了某个渠道
@@ -1785,6 +1806,9 @@ onMounted(() => {
   stopNotificationSync = subscribeNotificationSync(refreshNotificationSync)
 })
 onUnmounted(() => {
+  channelDialogRequestId += 1
+  routingRequestId += 1
+  channelModalOpen.value = false
   stopNotificationSync?.()
   stopAiStatusPolling()
   if (browserStatusTimer) { clearInterval(browserStatusTimer); browserStatusTimer = null }

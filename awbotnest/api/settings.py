@@ -38,7 +38,7 @@ from ..services.http import HttpService
 from ..logs import memory_logs
 from ..market import normalize_repo
 from ..routing import WebhookRequest
-from ..wecom_config import validate_callback_config
+from ..wecom_config import validate_callback_channels, validate_callback_config
 from .models import *
 from .masking import masked_channels as mask_channels, masked_proxy as mask_proxy
 from ..services.ai_protocol import API_FORMATS, normalize_api_format
@@ -588,6 +588,10 @@ def create_router(deps) -> APIRouter:
             raise HTTPException(status_code=400, detail="通知渠道 ID 不能为空且必须唯一")
         if any(str(item.get("type") or "") not in allowed_channels for item in channels):
             raise HTTPException(status_code=400, detail="通知渠道类型不受支持")
+        try:
+            validate_callback_channels(channels)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         proxy_url = body.proxy_url.strip()
         if "********" in proxy_url:
             proxy_url = settings.proxy_url
@@ -718,6 +722,10 @@ def create_router(deps) -> APIRouter:
                     default_id = channel_id
                 item["bot_id"] = channel_id
             normalized.append(item)
+        try:
+            validate_callback_channels(normalized)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         settings.notification_channels = normalized
         settings.bot_token = default_token
         settings.bot_name = default_name
