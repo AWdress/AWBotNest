@@ -52,8 +52,16 @@ class PluginScanner:
                 continue
         return tuple(signature)
 
-    def _cached_metas(self) -> list[PluginMeta]:
-        metas = copy.deepcopy(self._scan_cache)
+    def _cached_metas(self, *, summary: bool = False) -> list[PluginMeta]:
+        if summary:
+            # Status polling only needs identity, visibility and errors. Avoid
+            # copying every schema/option list and changelog on each heartbeat.
+            metas = [PluginMeta(
+                id=meta.id, name=meta.name, version=meta.version, scope=meta.scope,
+                bot=meta.bot, error=meta.error,
+            ) for meta in self._scan_cache]
+        else:
+            metas = copy.deepcopy(self._scan_cache)
         for meta in metas:
             meta.enabled = meta.id in self.settings.enabled_plugins
             meta.loaded = meta.id in self.loaded
@@ -215,11 +223,11 @@ class PluginScanner:
                 channels.update(self.source_cloakbrowser_channels(source))
         return tuple(channel for channel in ("stable", "preview") if channel in channels)
 
-    def scan(self) -> list[PluginMeta]:
+    def scan(self, *, summary: bool = False) -> list[PluginMeta]:
         with self._lock:
             signature = self._entry_signature()
             if signature == self._scan_cache_signature:
-                return self._cached_metas()
+                return self._cached_metas(summary=summary)
 
             result: list[PluginMeta] = []
             for entry in self.entries():
@@ -236,4 +244,4 @@ class PluginScanner:
                     ))
             self._scan_cache = sorted(result, key=lambda item: item.id)
             self._scan_cache_signature = signature
-            return self._cached_metas()
+            return self._cached_metas(summary=summary)

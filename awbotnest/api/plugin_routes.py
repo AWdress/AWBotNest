@@ -24,12 +24,20 @@ from ..activity import activity
 from ..auth import token_matches
 from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
+from ..governance import PluginBusyError, PluginQueueTimeout
 from ..logs import memory_logs
 from ..market import normalize_repo
 from ..routing import WebhookRequest
 from .models import *
 
 logger = logging.getLogger("awbotnest.api")
+
+
+def _plugin_admission_error(exc: PluginBusyError | PluginQueueTimeout) -> HTTPException:
+    detail = ("插件任务排队超时，请稍后重试" if isinstance(exc, PluginQueueTimeout)
+              else "插件暂时繁忙，请稍后重试")
+    return HTTPException(status_code=503, detail=detail, headers={"Retry-After": "5"})
+
 
 def create_router(deps) -> APIRouter:
     router = APIRouter()
@@ -85,6 +93,8 @@ def create_router(deps) -> APIRouter:
             raise
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PluginBusyError, PluginQueueTimeout) as exc:
+            raise _plugin_admission_error(exc) from exc
         except Exception as exc:
             logger.exception("插件 Webhook 执行失败：%s/%s", runtime.display_name(plugin_id), path)
             raise HTTPException(status_code=502, detail="插件 Webhook 执行失败") from exc
@@ -116,6 +126,8 @@ def create_router(deps) -> APIRouter:
             raise
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PluginBusyError, PluginQueueTimeout) as exc:
+            raise _plugin_admission_error(exc) from exc
         except Exception as exc:
             logger.exception("插件接口执行失败：%s/%s", runtime.display_name(plugin_id), path)
             raise HTTPException(status_code=502, detail="插件接口执行失败，请查看运行日志") from exc
@@ -130,6 +142,8 @@ def create_router(deps) -> APIRouter:
             result = await routes.dispatch_action(plugin_id, action, {})
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PluginBusyError, PluginQueueTimeout) as exc:
+            raise _plugin_admission_error(exc) from exc
         return {"ok": True, "result": result}
 
     @router.api_route("/api/v1/webhook", methods=["GET", "POST"], include_in_schema=False)
@@ -197,6 +211,8 @@ def create_router(deps) -> APIRouter:
             result = await routes.dispatch_webhook(plugin_id, path, wrapped)
         except LookupError as exc:
             raise HTTPException(status_code=503, detail="插件未启用或未注册 Webhook") from exc
+        except (PluginBusyError, PluginQueueTimeout) as exc:
+            raise _plugin_admission_error(exc) from exc
         except Exception as exc:
             logger.exception("公开插件 Webhook 执行失败：%s", runtime.display_name(plugin_id))
             raise HTTPException(status_code=502, detail="插件 Webhook 执行失败") from exc
@@ -210,6 +226,8 @@ def create_router(deps) -> APIRouter:
             result = await routes.dispatch_action(plugin_id, name, body.payload)
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PluginBusyError, PluginQueueTimeout) as exc:
+            raise _plugin_admission_error(exc) from exc
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"插件动作执行失败：{exc}") from exc
         return {"ok": True, "result": result}

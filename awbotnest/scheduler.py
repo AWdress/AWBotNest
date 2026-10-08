@@ -15,6 +15,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 _current_state = contextvars.ContextVar("scheduler_state", default=None)
+TASK_DRAIN_TIMEOUT_SECONDS = 10.0
+logger = logging.getLogger("awbotnest.scheduler")
 
 
 class PluginScheduler:
@@ -25,7 +27,9 @@ class PluginScheduler:
         self._states = {}
         self._manual = {}
         self._running = {}
+        self._draining: set[asyncio.Task] = set()
         self._stopping = False
+        self._shutdown_scheduled = False
 
     def _tracked(self, job_id, callback):
         async def execute():
@@ -34,7 +38,8 @@ class PluginScheduler:
                 return
             state = {"status": "running", "step": "执行中", "started": time.monotonic()}
             self._states[job_id] = state
-            self._running[job_id] = asyncio.current_task()
+            task = asyncio.current_task()
+            self._running[job_id] = task
             token = _current_state.set(state)
             try:
                 result = callback()
@@ -49,10 +54,11 @@ class PluginScheduler:
                 raise
             except Exception:
                 state.update(status="failed", step="执行失败，请查看运行日志")
-                logging.getLogger("awbotnest.scheduler").exception("定时任务执行失败：%s", job_id.split("::", 1)[-1])
+                logger.exception("定时任务执行失败：%s", job_id.split("::", 1)[-1])
             finally:
                 _current_state.reset(token)
-                self._running.pop(job_id, None)
+                if self._running.get(job_id) is task:
+                    self._running.pop(job_id, None)
                 state["duration_seconds"] = int(time.monotonic() - state["started"])
         return execute
 
@@ -87,9 +93,15 @@ class PluginScheduler:
     def start(self) -> None:
         if not self.scheduler.running:
             self._stopping = False
+            self._shutdown_scheduled = False
             self.scheduler.start()
 
+    def _ensure_open(self) -> None:
+        if self._stopping:
+            raise RuntimeError("系统正在停止，无法注册定时任务")
+
     def _check_limit(self, plugin_id: str) -> None:
+        self._ensure_open()
         prefix = f"{plugin_id}::"
         if sum(job.id.startswith(prefix) for job in self.scheduler.get_jobs()) >= 64:
             raise RuntimeError("单个插件最多注册 64 个定时任务")
@@ -118,6 +130,7 @@ class PluginScheduler:
 
     def add_interval(self, plugin_id: str, name: str, callback: Callable[..., Any],
                      *, seconds: int, replace_existing: bool = True) -> str:
+        self._ensure_open()
         job_id = f"{plugin_id}::{name}"
         if not replace_existing or self.scheduler.get_job(job_id) is None:
             self._check_limit(plugin_id)
@@ -134,6 +147,7 @@ class PluginScheduler:
 
     def add_cron(self, plugin_id: str, name: str, callback: Callable[..., Any],
                  *, replace_existing: bool = True, **fields: Any) -> str:
+        self._ensure_open()
         if not any(fields.get(key) is not None for key in
                    ("year", "month", "day", "week", "day_of_week", "hour", "minute", "second")):
             raise ValueError("Cron 必须提供至少一个有效时间字段")
@@ -151,14 +165,33 @@ class PluginScheduler:
         )
         return job_id
 
-    def remove_plugin(self, plugin_id: str) -> None:
+    def _retain_draining(self, task: asyncio.Task) -> None:
+        if task.done() or task in self._draining:
+            return
+        self._draining.add(task)
+        task.add_done_callback(self._draining.discard)
+        task.add_done_callback(self._finish_stop)
+
+    def _finish_stop(self, _task=None) -> None:
+        tasks = {*self._manual.values(), *self._running.values(), *self._draining}
+        if (self._stopping and self.scheduler.running and not self._shutdown_scheduled
+                and not any(not task.done() for task in tasks)):
+            self._shutdown_scheduled = True
+            self.scheduler.shutdown(wait=False)
+
+    def remove_plugin(self, plugin_id: str, *, exclude: set[asyncio.Task] | None = None) -> None:
         prefix = f"{plugin_id}::"
         for job in self.scheduler.get_jobs():
             if job.id.startswith(prefix):
                 self.scheduler.remove_job(job.id)
+        excluded = (exclude or set()) | {asyncio.current_task()}
         for job_id, task in [*self._manual.items(), *self._running.items()]:
-            if job_id.startswith(prefix) and task is not asyncio.current_task():
-                task.cancel()
+            if job_id.startswith(prefix):
+                self._retain_draining(task)
+                if task not in excluded and not task.cancelling():
+                    task.cancel()
+        for job_id in [key for key in self._states if key.startswith(prefix)]:
+            self._states.pop(job_id, None)
 
     def jobs(self) -> list[dict[str, object]]:
         return [
@@ -172,14 +205,30 @@ class PluginScheduler:
         ]
 
     def stop(self) -> None:
-        for task in {*self._manual.values(), *self._running.values()}:
-            task.cancel()
-        if self.scheduler.running and not self._stopping:
-            self._stopping = True
-            self.scheduler.shutdown(wait=False)
+        already_stopping = self._stopping
+        self._stopping = True
+        if not already_stopping:
+            if self.scheduler.running:
+                self.scheduler.pause()
+            self.scheduler.remove_all_jobs()
+            self._states.clear()
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        for task in {*self._manual.values(), *self._running.values(), *self._draining}:
+            self._retain_draining(task)
+            if not already_stopping and task is not current and not task.cancelling():
+                task.cancel()
+        # APScheduler's executor cancels every unfinished future on shutdown.
+        # Delay that second cancellation until our tasks really finish, so an
+        # in-flight storage transaction can retain its lock while draining.
+        self._finish_stop()
 
     async def close(self):
-        tasks = {*self._manual.values(), *self._running.values()} - {asyncio.current_task()}
+        tasks = {*self._manual.values(), *self._running.values(), *self._draining} - {asyncio.current_task()}
         self.stop()
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _, pending = await asyncio.wait(tasks, timeout=TASK_DRAIN_TIMEOUT_SECONDS)
+            if pending:
+                logger.warning("仍有 %d 个定时任务未退出，继续清理其他资源", len(pending))

@@ -259,12 +259,12 @@ class TelegramDelivery:
                 if self._pending_edits.get(key) is pending:
                     self._pending_edits.pop(key, None)
 
-    async def close(self) -> None:
+    async def close(self, *, exclude: set[asyncio.Task[Any]] | None = None) -> None:
         """Cancel this plugin instance's pending delivery operations."""
         if self._close_task is None:
             self._closed = True
             self._close_task = asyncio.create_task(
-                self._drain(), name=f"delivery-close:{self.instance_id}",
+                self._drain(exclude or set()), name=f"delivery-close:{self.instance_id}",
             )
         try:
             await asyncio.shield(self._close_task)
@@ -272,11 +272,12 @@ class TelegramDelivery:
             await asyncio.gather(self._close_task, return_exceptions=True)
             raise
 
-    async def _drain(self) -> None:
+    async def _drain(self, excluded: set[asyncio.Task[Any]]) -> None:
         current = asyncio.current_task()
-        tasks = (self._workers | self._active) - {current}
+        tasks = (self._workers | self._active) - excluded - {current}
         for task in tasks:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         async with self._registry_lock:
@@ -285,7 +286,7 @@ class TelegramDelivery:
         for item in pending:
             if not item.future.done():
                 item.future.cancel()
-        self._workers.clear()
-        self._active.clear()
+        self._workers.difference_update(task for task in list(self._workers) if task.done())
+        self._active.difference_update(task for task in list(self._active) if task.done())
         self._chat_locks.clear()
         self._last_edits.clear()

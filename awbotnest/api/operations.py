@@ -122,13 +122,15 @@ def create_router(deps, list_plugins) -> APIRouter:
             await websocket.close(code=4401)
             return
         await websocket.accept(subprotocol="awbotnest")
-        try:
-            initial = [_compat_log(item) for item in memory_logs.recent(1000)]
-            await websocket.send_json({"type": "history", "logs": initial})
+
+        async def send_logs():
+            initial = memory_logs.recent(1000)
             seen = {
                 (item.get("timestamp"), item.get("level"), item.get("source"), item.get("message"))
-                for item in memory_logs.recent(1000)
+                for item in initial
             }
+            await websocket.send_json({"type": "history", "logs": [_compat_log(item) for item in initial]})
+            del initial
             while True:
                 await asyncio.sleep(0.5)
                 current = memory_logs.recent(1000)
@@ -145,8 +147,23 @@ def create_router(deps, list_plugins) -> APIRouter:
                         (item.get("timestamp"), item.get("level"), item.get("source"), item.get("message"))
                         for item in current
                     }
+
+        async def receive_disconnect():
+            while True:
+                if (await websocket.receive())["type"] == "websocket.disconnect":
+                    return
+
+        tasks = [asyncio.create_task(send_logs()), asyncio.create_task(receive_disconnect())]
+        try:
+            done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                task.result()
         except (WebSocketDisconnect, RuntimeError):
-            return
+            pass
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     @router.post("/api/notifications/test", dependencies=[Depends(require_admin)])
     async def test_notification(body: NotificationTestBody):

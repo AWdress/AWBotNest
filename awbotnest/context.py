@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import inspect
 from collections.abc import Awaitable, Callable
@@ -20,8 +21,11 @@ from .routing import PluginRoutes, _normalize_wecom_filters
 from .notifier import NotificationService
 from .activity import set_current, reset_current, track_call
 from .interactive_profile import InteractiveProfiler
+from .governance import PluginBusyError, PluginQueueTimeout
 
 EventCallback = Callable[[Any], Awaitable[Any]]
+TASK_DRAIN_TIMEOUT_SECONDS = 10.0
+_execution_owners = contextvars.ContextVar("plugin_execution_owners", default=())
 
 
 class PluginLogger(logging.LoggerAdapter):
@@ -89,9 +93,12 @@ class PluginContext:
         self._close_task: asyncio.Task[None] | None = None
         self._closed = False
 
-    def add_cleanup(self, callback: Callable[..., Any]) -> None:
+    def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("插件已停用")
+
+    def add_cleanup(self, callback: Callable[..., Any]) -> None:
+        self._ensure_open()
         if not callable(callback):
             raise TypeError("清理回调必须可调用")
         self._cleanups.append(callback)
@@ -99,10 +106,19 @@ class PluginContext:
     def report_progress(self, percent=None, step=None) -> bool:
         return self.scheduler.report_progress(percent=percent, step=step)
 
+    def _enter_execution(self):
+        task = asyncio.current_task()
+        owners = tuple((owner, current) for owner, current in _execution_owners.get()
+                       if current is not None and not current.done()
+                       and not (owner is self and current is task))
+        return _execution_owners.set((*owners, (self, task)))
+
     async def execute(self, operation, callback, *, timeout=None, fallback=None, event_data=None):
         if self._closed:
             raise RuntimeError("插件已停用")
         async def invoke():
+            if self._closed:
+                raise RuntimeError("插件已停用")
             token = set_current(self.plugin_id)
             try:
                 if str(operation).startswith(("schedule:", "job:", "action:")):
@@ -111,10 +127,15 @@ class PluginContext:
                 return await value if inspect.isawaitable(value) else value
             finally:
                 reset_current(token)
-        return await self.governor.execute(self.plugin_id, f"{self.instance_id}:{operation}", invoke,
-            timeout=timeout, fallback=fallback, event_data=event_data)
+        owner_token = self._enter_execution()
+        try:
+            return await self.governor.execute(self.plugin_id, f"{self.instance_id}:{operation}", invoke,
+                timeout=timeout, fallback=fallback, event_data=event_data)
+        finally:
+            _execution_owners.reset(owner_token)
 
     def provide_capability(self, name, provider, *, priority=100):
+        self._ensure_open()
         self.add_cleanup(self.governor.capabilities.register(self.plugin_id, name, provider, priority))
 
     async def call_capability(self, name, *args, method=None, **kwargs):
@@ -127,7 +148,9 @@ class PluginContext:
             payload=payload or {}, replay_type=replay_type, instance_id=self.instance_id)
 
     def on_replay(self, event_type):
+        self._ensure_open()
         def register(callback):
+            self._ensure_open()
             self.add_cleanup(self.governor.register_replayer(
                 self.instance_id, event_type, self._managed(callback, governed=False)))
             return callback
@@ -139,6 +162,7 @@ class PluginContext:
                 raise RuntimeError("插件已停用")
             task = asyncio.current_task()
             self._active.add(task)
+            owner_token = self._enter_execution()
             try:
                 if not governed:
                     result = callback(*args, **kwargs)
@@ -147,6 +171,7 @@ class PluginContext:
                                           lambda: callback(*args, **kwargs))
             finally:
                 self._active.discard(task)
+                _execution_owners.reset(owner_token)
         return invoke
 
     @property
@@ -208,6 +233,7 @@ class PluginContext:
         return dict(current)
 
     def _register(self, builder: object, callback: EventCallback, *, interactive: bool = False) -> EventCallback:
+        self._ensure_open()
         clients = self.accounts.clients_for_scope(self.scope, self.bot_id)
         if self.settings.plugin_accounts.get(self.plugin_id) or self.account_name:
             user_clients = list(self.accounts.users.values())
@@ -226,6 +252,7 @@ class PluginContext:
                 return
             task = asyncio.current_task()
             self._active.add(task)
+            owner_token = self._enter_execution()
             event = args[0] if args else None
             raw_id = getattr(event, "id", "") or getattr(getattr(event, "message", None), "id", "")
             chat_id = getattr(event, "chat_id", "") or getattr(getattr(event, "message", None), "chat_id", "")
@@ -248,6 +275,8 @@ class PluginContext:
                 return result
             except events.StopPropagation:
                 raise
+            except (PluginBusyError, PluginQueueTimeout):
+                self.log.debug("插件事件等待超时或排队已满")
             except Exception:
                 failures += 1
                 self.log.exception("事件处理失败（连续 %s 次）", failures)
@@ -259,6 +288,7 @@ class PluginContext:
                     profiler.finish(profile_token)
                 self._active.discard(task)
                 reset_current(token)
+                _execution_owners.reset(owner_token)
         for client in clients:
             client.add_event_handler(guarded, builder)
             self._handlers.append((client, guarded, builder))
@@ -266,6 +296,7 @@ class PluginContext:
 
     def on_message(self, *, pattern: str | None = None, chats: object = None,
                    incoming: bool = True, outgoing: bool = False, interactive: bool = False):
+        self._ensure_open()
         builder = events.NewMessage(
             pattern=pattern, chats=chats, incoming=incoming, outgoing=outgoing,
         )
@@ -273,10 +304,12 @@ class PluginContext:
 
     def on_edited_message(self, *, pattern: str | None = None, chats: object = None,
                           interactive: bool = False):
+        self._ensure_open()
         builder = events.MessageEdited(pattern=pattern, chats=chats)
         return lambda callback: self._register(builder, callback, interactive=interactive)
 
     def on_callback(self, *, pattern: str | bytes | None = None, interactive: bool = False):
+        self._ensure_open()
         builder = events.CallbackQuery(pattern=pattern)
         return lambda callback: self._register(builder, callback, interactive=interactive)
 
@@ -321,6 +354,7 @@ class PluginContext:
             raise
 
     def on_webhook(self, path, callback=None):
+        self._ensure_open()
         if callable(path) and callback is None:
             callback, path = path, "receive"
         if callback is None:
@@ -332,13 +366,11 @@ class PluginContext:
     def on_wecom_message(self, callback=None, *, message_types=("text", "image", "file", "event"),
                          events=None):
         """注册企业微信消息处理器；仅主实例接收已授权渠道分发的消息。"""
-        if self._closed:
-            raise RuntimeError("插件已停用")
+        self._ensure_open()
         types, event_names = _normalize_wecom_filters(message_types, events)
 
         def register(handler):
-            if self._closed:
-                raise RuntimeError("插件已停用")
+            self._ensure_open()
             if not callable(handler):
                 raise TypeError("企业微信消息回调必须可调用")
             if self.is_primary_instance:
@@ -352,13 +384,16 @@ class PluginContext:
 
     def on_api(self, path: str, callback: Callable[..., Any] | None = None, *, methods=None):
         """注册管理员接口；支持直接调用及装饰器，回调接收 WebhookRequest。"""
+        self._ensure_open()
         def register(handler):
+            self._ensure_open()
             if self.is_primary_instance:
                 self.routes.api(self.plugin_id, path, self._managed(handler), methods=methods)
             return handler
         return register(callback) if callback is not None else register
 
     def action(self, name: str, callback: Callable[..., Any] | None = None):
+        self._ensure_open()
         if callback is None:
             return lambda handler: self.action(name, handler)
         if self.is_primary_instance:
@@ -372,6 +407,7 @@ class PluginContext:
         return callback
 
     def schedule(self, callback, trigger="interval", **fields):
+        self._ensure_open()
         name = str(fields.pop("id", None) or getattr(callback, "__name__", "task"))
         async def invoke(*args, **kwargs):
             if inspect.iscoroutinefunction(callback):
@@ -382,6 +418,7 @@ class PluginContext:
             self._managed(invoke, operation=f"schedule:{name}"), trigger, **fields)
 
     def schedule_interval(self, name: str, callback: Callable[..., Any], *, seconds: int) -> str:
+        self._ensure_open()
         async def invoke() -> Any:
             if inspect.iscoroutinefunction(callback):
                 return await callback()
@@ -392,6 +429,7 @@ class PluginContext:
         )
 
     def schedule_cron(self, name: str, callback: Callable[..., Any], **fields: Any) -> str:
+        self._ensure_open()
         async def invoke() -> Any:
             if inspect.iscoroutinefunction(callback):
                 return await callback()
@@ -404,8 +442,12 @@ class PluginContext:
         if self._close_task is None:
             self._closed = True
             caller = asyncio.current_task()
+            excluded = {task for owner, task in _execution_owners.get()
+                        if owner is self and task is not None and not task.done()}
+            if caller is not None:
+                excluded.add(caller)
             self._close_task = asyncio.create_task(
-                self._drain(caller), name=f"context-close:{self.instance_id}",
+                self._drain(excluded), name=f"context-close:{self.instance_id}",
             )
         try:
             await asyncio.shield(self._close_task)
@@ -413,7 +455,27 @@ class PluginContext:
             await asyncio.gather(self._close_task, return_exceptions=True)
             raise
 
-    async def _drain(self, caller: asyncio.Task[Any] | None) -> None:
+    async def _await_cleanup(self, awaitable: Awaitable[Any], name: str, *, cancel_on_timeout: bool) -> None:
+        async def invoke() -> Any:
+            return await awaitable
+
+        task = asyncio.create_task(invoke(), name=f"plugin-cleanup:{self.instance_id}:{name}")
+        try:
+            _, pending = await asyncio.wait({task}, timeout=TASK_DRAIN_TIMEOUT_SECONDS)
+        except asyncio.CancelledError:
+            if cancel_on_timeout and not task.cancelling():
+                task.cancel()
+            self.governor.track_draining_task(self.instance_id, task)
+            raise
+        if pending:
+            if cancel_on_timeout and not task.cancelling():
+                task.cancel()
+            self.governor.track_draining_task(self.instance_id, task)
+            self.log.warning("%s 清理尚未完成，继续清理其他资源", name)
+        else:
+            task.result()
+
+    async def _drain(self, excluded: set[asyncio.Task[Any]]) -> None:
         self._closed = True
         if self.is_primary_instance:
             try:
@@ -421,7 +483,7 @@ class PluginContext:
             except Exception:
                 self.log.exception("清理插件路由失败")
         try:
-            self.scheduler.remove_plugin(self.instance_id)
+            self.scheduler.remove_plugin(self.instance_id, exclude=excluded)
         except Exception:
             self.log.exception("清理插件定时任务失败")
         for client, callback, builder in reversed(self._handlers):
@@ -432,24 +494,29 @@ class PluginContext:
         self._handlers.clear()
         try:
             await self.governor.cancel_all(
-                self.instance_id, exclude={caller} if caller is not None else None,
+                self.instance_id, exclude=excluded,
             )
         except asyncio.CancelledError:
             self.log.error("后台任务清理异常取消，继续清理其他资源")
         except Exception:
             self.log.exception("后台任务清理失败")
-        pending = self._active - {asyncio.current_task(), caller}
+        pending = {task for task in self._active - excluded - {asyncio.current_task()} if not task.done()}
         for task in pending:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        self._active.clear()
+            _, pending = await asyncio.wait(pending, timeout=TASK_DRAIN_TIMEOUT_SECONDS)
+            for task in pending:
+                self.governor.track_draining_task(self.instance_id, task)
+            if pending:
+                self.log.warning("仍有 %d 个插件回调未退出，继续清理其他资源", len(pending))
+        self._active.difference_update(task for task in list(self._active) if task.done())
         while self._cleanups:
             callback = self._cleanups.pop()
             try:
                 value = callback()
                 if isinstance(value, Awaitable):
-                    await asyncio.wait_for(value, timeout=10)
+                    await self._await_cleanup(value, "插件清理回调", cancel_on_timeout=True)
             except asyncio.CancelledError:
                 self.log.error("插件清理回调异常取消，继续清理其他资源")
             except Exception:
@@ -460,7 +527,8 @@ class PluginContext:
             ("Storage", self.storage),
         ):
             try:
-                await resource.close()
+                value = resource.close(exclude=excluded) if isinstance(resource, TelegramDelivery) else resource.close()
+                await self._await_cleanup(value, name, cancel_on_timeout=False)
             except asyncio.CancelledError:
                 self.log.error("%s 清理异常取消，继续清理其他资源", name)
             except Exception:

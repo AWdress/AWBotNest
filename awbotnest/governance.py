@@ -10,7 +10,8 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from itertools import islice
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
@@ -23,6 +24,9 @@ logger = logging.getLogger("awbotnest.governance")
 EVENT_FILE = DATA_DIR / "plugin_events.jsonl"
 MAX_EVENT_FILE_BYTES = 8 * 1024 * 1024
 MAX_MEMORY_EVENTS = 1000
+# A UI restart rebuilds the services in the same process. Keep unfinished
+# shutdown work visible to the replacement runtime, not only its old governor.
+_DRAINING_TASKS: dict[str, set[asyncio.Task]] = {}
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,7 @@ class ResourcePolicy:
     max_background_tasks: int = 32
     failure_threshold: int = 5
     recovery_seconds: float = 60.0
+    max_pending_tasks: int = 64
 
     @classmethod
     def from_mapping(cls, value: Any) -> "ResourcePolicy":
@@ -52,6 +57,7 @@ class ResourcePolicy:
             max_background_tasks=int(number("max_background_tasks", 32, 1, 500)),
             failure_threshold=int(number("failure_threshold", 5, 1, 100)),
             recovery_seconds=number("recovery_seconds", 60, 1, 3600),
+            max_pending_tasks=int(number("max_pending_tasks", 64, 1, 1000)),
         )
 
 
@@ -64,6 +70,14 @@ class CircuitState:
     @property
     def open(self) -> bool:
         return self.opened_until > time.monotonic()
+
+
+class PluginBusyError(RuntimeError):
+    """Admission was rejected; this is not a failure of the plugin callback."""
+
+
+class PluginQueueTimeout(TimeoutError):
+    """The callback never started before its deadline."""
 
 
 def _safe_text(value: str) -> str:
@@ -87,7 +101,7 @@ def _safe_value(value: Any, depth: int = 0) -> Any:
         return _safe_text(value)
     if isinstance(value, dict):
         result = {}
-        for key, item in list(value.items())[:50]:
+        for key, item in islice(value.items(), 50):
             name = str(key)[:80]
             if any(word in name.lower() for word in (
                 "token", "secret", "password", "passwd", "cookie", "apikey", "api_key",
@@ -98,7 +112,7 @@ def _safe_value(value: Any, depth: int = 0) -> Any:
                 result[name] = _safe_value(item, depth + 1)
         return result
     if isinstance(value, (list, tuple, set)):
-        return [_safe_value(item, depth + 1) for item in list(value)[:50]]
+        return [_safe_value(item, depth + 1) for item in islice(value, 50)]
     return f"<{value.__class__.__name__}>"
 
 
@@ -114,7 +128,8 @@ class EventJournal:
         if not self.path.exists():
             return
         try:
-            lines = self.path.read_text(encoding="utf-8", errors="replace").splitlines()[-MAX_MEMORY_EVENTS:]
+            with self.path.open("r", encoding="utf-8", errors="replace") as stream:
+                lines = deque(stream, maxlen=MAX_MEMORY_EVENTS)
             for line in lines:
                 try:
                     event = json.loads(line)
@@ -197,11 +212,24 @@ class PluginGovernor:
         self._tasks: dict[str, set[asyncio.Task]] = defaultdict(set)
         self._replayers: dict[tuple[str, str], Callable[[dict[str, Any]], Any]] = {}
         self._release_tasks: dict[str, asyncio.Task[None]] = {}
+        self._pending: dict[str, int] = {}
+        self._executions: dict[str, int] = {}
+        self._draining_tasks = _DRAINING_TASKS
 
     def configure(self, plugin_id: str, resources: Any) -> ResourcePolicy:
         policy = ResourcePolicy.from_mapping(resources)
+        previous = self._policies.get(plugin_id)
+        if previous is not None and previous.max_concurrency != policy.max_concurrency:
+            if self._executions.get(plugin_id, 0):
+                # Live instances keep their shared budget until unload. Other
+                # limits can change without replacing a semaphore in use.
+                policy = replace(policy, max_concurrency=previous.max_concurrency)
+            else:
+                self._semaphores[plugin_id] = asyncio.Semaphore(policy.max_concurrency)
         self._policies[plugin_id] = policy
-        self._semaphores[plugin_id] = asyncio.Semaphore(policy.max_concurrency)
+        # Account instances share one budget. Replacing a live semaphore would
+        # allow each newly configured instance to start another full batch.
+        self._semaphores.setdefault(plugin_id, asyncio.Semaphore(policy.max_concurrency))
         return policy
 
     def policy(self, plugin_id: str) -> ResourcePolicy:
@@ -218,6 +246,10 @@ class PluginGovernor:
         event_data: dict[str, Any] | None = None,
     ) -> Any:
         policy = self.policy(plugin_id)
+        semaphore = self._semaphores[plugin_id]
+        queued = semaphore.locked()
+        if queued and self._pending.get(plugin_id, 0) >= policy.max_pending_tasks:
+            raise PluginBusyError("插件任务队列已满，请稍后重试")
         key = (plugin_id, operation)
         circuit = self._circuits[key]
         if circuit.open:
@@ -231,17 +263,29 @@ class PluginGovernor:
             plugin_id, "execution_started", persist=False,
             operation=operation, data=event_data or {},
         )
+        effective_timeout = policy.timeout_seconds if timeout is None else timeout
+        acquired = False
+        released = False
+        if queued:
+            self._pending[plugin_id] = self._pending.get(plugin_id, 0) + 1
+        self._executions[plugin_id] = self._executions.get(plugin_id, 0) + 1
         try:
-            async with self._semaphores[plugin_id]:
-                effective_timeout = policy.timeout_seconds if timeout is None else timeout
-                if effective_timeout > 0:
-                    result = await asyncio.wait_for(
-                        self._invoke(func), timeout=effective_timeout,
-                    )
-                else:
-                    # Long-lived background workers are governed by the plugin lifecycle
-                    # (reload/disable/shutdown), not by the timeout for request-like work.
+            # Include admission wait in the deadline and run in the caller's
+            # task, so a plugin can close its own context without cancelling a
+            # separate wait_for parent. Explicit timeout<=0 retains workers.
+            async with asyncio.timeout(effective_timeout if effective_timeout > 0 else None):
+                await semaphore.acquire()
+                acquired = True
+                if queued:
+                    self._remove_pending(plugin_id)
+                    queued = False
+                try:
+                    if self._semaphores.get(plugin_id) is not semaphore or plugin_id in self._release_tasks:
+                        raise PluginBusyError("插件已停用或正在重新加载")
                     result = await self._invoke(func)
+                finally:
+                    semaphore.release()
+                    released = True
             circuit.failures = 0
             circuit.opened_until = 0
             circuit.last_error = ""
@@ -253,6 +297,25 @@ class PluginGovernor:
         except asyncio.CancelledError:
             self.events.append(plugin_id, "execution_cancelled", operation=operation)
             raise
+        except (PluginBusyError, PluginQueueTimeout):
+            # Nested capability calls may also be waiting on a saturated
+            # provider. Overload must not open the caller's circuit either.
+            raise
+        except TimeoutError as exc:
+            if not acquired:
+                self.events.append(
+                    plugin_id, "queue_timeout", persist=False, operation=operation,
+                )
+                raise PluginQueueTimeout("等待插件任务执行超时") from None
+            circuit.failures += 1
+            circuit.last_error = (
+                _safe_text(f"{exc.__class__.__name__}: {exc}")[:500]
+                if str(exc) else "TimeoutError: 插件任务执行超时"
+            )
+            self._record_failure(plugin_id, operation, circuit, policy)
+            if fallback is not None:
+                return await self._invoke(fallback)
+            raise
         except Exception as exc:
             if isinstance(exc, StopPropagation):
                 # Telegram propagation control is successful handling, not a plugin failure.
@@ -262,14 +325,67 @@ class PluginGovernor:
                 raise
             circuit.failures += 1
             circuit.last_error = _safe_text(f"{exc.__class__.__name__}: {exc}")[:500]
-            if circuit.failures >= policy.failure_threshold:
-                circuit.opened_until = time.monotonic() + policy.recovery_seconds
-                self.events.append(plugin_id, "circuit_opened", operation=operation, error=circuit.last_error)
-            else:
-                self.events.append(plugin_id, "execution_failed", operation=operation, error=circuit.last_error)
+            self._record_failure(plugin_id, operation, circuit, policy)
             if fallback is not None:
                 return await self._invoke(fallback)
             raise
+        finally:
+            if queued:
+                self._remove_pending(plugin_id)
+            if acquired and not released:
+                semaphore.release()
+            count = self._executions.get(plugin_id, 0) - 1
+            if count > 0:
+                self._executions[plugin_id] = count
+            else:
+                self._executions.pop(plugin_id, None)
+
+    def _remove_pending(self, plugin_id: str) -> None:
+        count = self._pending.get(plugin_id, 0) - 1
+        if count > 0:
+            self._pending[plugin_id] = count
+        else:
+            self._pending.pop(plugin_id, None)
+
+    def _record_failure(self, plugin_id: str, operation: str,
+                        circuit: CircuitState, policy: ResourcePolicy) -> None:
+        if circuit.failures >= policy.failure_threshold:
+            circuit.opened_until = time.monotonic() + policy.recovery_seconds
+            self.events.append(plugin_id, "circuit_opened", operation=operation, error=circuit.last_error)
+        else:
+            self.events.append(plugin_id, "execution_failed", operation=operation, error=circuit.last_error)
+
+    def track_draining_task(self, owner_id: str, task: asyncio.Task) -> None:
+        """Keep timed-out shutdown work visible until it really finishes.
+
+        Do not force-cancel these tasks: they may be closing SQLite transactions
+        or waiting for a native worker to release a browser safely.
+        """
+        if task.done():
+            if not task.cancelled():
+                task.exception()
+            return
+        tasks = self._draining_tasks.setdefault(owner_id, set())
+        if task in tasks:
+            return
+        tasks.add(task)
+
+        def completed(done_task: asyncio.Task) -> None:
+            tasks.discard(done_task)
+            if not tasks and self._draining_tasks.get(owner_id) is tasks:
+                self._draining_tasks.pop(owner_id, None)
+            if not done_task.cancelled():
+                done_task.exception()
+
+        task.add_done_callback(completed)
+
+    def pending_shutdown_tasks(self, plugin_id: str) -> int:
+        return sum(
+            not task.done()
+            for owner_id, tasks in self._draining_tasks.items()
+            if self._belongs_to(owner_id, plugin_id)
+            for task in tasks
+        )
 
     @staticmethod
     async def _invoke(func: Callable[[], Any]) -> Any:
@@ -328,10 +444,12 @@ class PluginGovernor:
         excluded = exclude or set()
         tasks = [task for task in tasks if task is not current and task not in excluded]
         for task in tasks:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         if tasks:
             done, pending = await asyncio.wait(tasks, timeout=timeout)
             for task in pending:
+                self.track_draining_task(owner_id, task)
                 logger.warning("插件后台任务未能及时退出 [%s]: %s", owner_id, task.get_name())
         else:
             done, pending = set(), set()
@@ -347,6 +465,7 @@ class PluginGovernor:
         if not providers:
             raise LookupError(f"没有可用能力：{name}")
         errors = []
+        admission_errors = []
         for index, (_, owner, provider) in enumerate(providers):
             try:
                 target = getattr(provider, method) if method else provider
@@ -354,7 +473,13 @@ class PluginGovernor:
                 return await self.execute(owner, operation, lambda: target(*args, **kwargs))
             except Exception as exc:  # noqa: BLE001 - 失败后继续备用链
                 errors.append(f"{owner}: {exc}")
+                if isinstance(exc, (PluginBusyError, PluginQueueTimeout)):
+                    admission_errors.append(exc)
         self.events.append(caller, "capability_exhausted", capability=name, errors=errors)
+        if len(admission_errors) == len(providers):
+            # No provider actually failed: retain admission classification for
+            # the caller's circuit and the API's retryable overload response.
+            raise admission_errors[-1]
         raise RuntimeError(f"能力 {name} 的所有提供者都不可用：{'；'.join(errors)}")
 
     def register_replayer(self, plugin_id: str, event_type: str, handler: Callable) -> Callable[[], None]:
@@ -397,6 +522,8 @@ class PluginGovernor:
         return {
             "policy": asdict(policy),
             "background_tasks": self.background_tasks(plugin_id),
+            "pending_tasks": self._pending.get(plugin_id, 0),
+            "pending_shutdown_tasks": self.pending_shutdown_tasks(plugin_id),
             "circuits": circuits,
         }
 
@@ -404,7 +531,7 @@ class PluginGovernor:
         task = self._release_tasks.get(plugin_id)
         if task is None or task.done():
             task = asyncio.create_task(
-                self._release(plugin_id), name=f"governor-release:{plugin_id}",
+                self._release(plugin_id, caller=asyncio.current_task()), name=f"governor-release:{plugin_id}",
             )
             self._release_tasks[plugin_id] = task
         try:
@@ -413,11 +540,11 @@ class PluginGovernor:
             await asyncio.gather(task, return_exceptions=True)
             raise
 
-    async def _release(self, plugin_id: str) -> None:
+    async def _release(self, plugin_id: str, *, caller: asyncio.Task | None = None) -> None:
         try:
             owners = [owner_id for owner_id in self._tasks if self._belongs_to(owner_id, plugin_id)]
             for owner_id in owners:
-                await self.cancel_all(owner_id)
+                await self.cancel_all(owner_id, exclude={caller} if caller is not None else None)
             self._policies.pop(plugin_id, None)
             self._semaphores.pop(plugin_id, None)
             for key in [key for key in self._circuits if key[0] == plugin_id]:

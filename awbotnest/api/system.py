@@ -60,10 +60,14 @@ def create_router(deps) -> APIRouter:
     def masked_channels() -> list[dict[str, object]]:
         return mask_channels(settings)
 
+    def plugin_summary():
+        # Keep compatibility with embedders that provide only scan().
+        return getattr(runtime, "scan_summary", runtime.scan)()
+
     @router.get("/api/status", dependencies=[Depends(require_admin)])
     async def status():
         states = [asdict(item) for item in await accounts.states()]
-        metas = runtime.scan()
+        metas = plugin_summary()
         activity_24h = activity.timeline(24)
         activity_7d = activity.timeline(168)
         for timeline in (activity_24h, activity_7d):
@@ -241,7 +245,7 @@ def create_router(deps) -> APIRouter:
     async def ui_notifications():
         values = runtime.notifier.history()
         read_at = runtime.notifier.read_at()
-        plugin_names = {item.id: item.name for item in runtime.scan()}
+        plugin_names = {item.id: item.name for item in plugin_summary()}
         for item in values:
             item["plugin_name"] = plugin_names.get(str(item.get("plugin_id") or "")) or item.get("plugin_name") or "系统"
             item["plugin_icon"] = ""
@@ -301,7 +305,7 @@ def create_router(deps) -> APIRouter:
             {"id": "telegram", "name": "Telegram", "ok": (not settings.telegram_configured) or any(item["connected"] for item in states),
              "detail": "独立模式" if not settings.telegram_configured else
              f"用户账号 {user_online}/{len(user_states)} 在线，Bot {'在线' if bot_online else '离线'}"},
-            {"id": "plugins", "name": "插件运行时", "ok": not any(meta.error for meta in runtime.scan()),
+            {"id": "plugins", "name": "插件运行时", "ok": not any(meta.error for meta in plugin_summary()),
              "detail": f"已加载 {len(runtime.loaded)} 个插件"},
         ]}
 

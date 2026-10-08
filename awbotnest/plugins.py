@@ -124,6 +124,9 @@ class PluginRuntime:
     def scan(self) -> list[PluginMeta]:
         return self.scanner.scan()
 
+    def scan_summary(self) -> list[PluginMeta]:
+        return self.scanner.scan(summary=True)
+
     def invalidate_scan_cache(self) -> None:
         self.scanner.invalidate_scan_cache()
 
@@ -144,6 +147,8 @@ class PluginRuntime:
     async def _enable(self, plugin_id: str) -> PluginMeta:
         if plugin_id in self.loaded:
             return self.loaded[plugin_id].meta
+        if self.services.governor.pending_shutdown_tasks(plugin_id):
+            raise RuntimeError("插件仍在释放上次运行的资源，请稍后再启用")
         entry = self.entry_file(plugin_id)
         if entry is None:
             raise FileNotFoundError(f"插件不存在：{plugin_id}")
