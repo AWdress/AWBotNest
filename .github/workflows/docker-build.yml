@@ -7,6 +7,7 @@ on:
       - "Dockerfile"
       - "requirements.txt"
       - "pyproject.toml"
+      - "install.sh"
       - "**/*.py"
       - "frontend/**"
       - ".github/workflows/docker-build.yml"
@@ -37,6 +38,8 @@ jobs:
         run: pip install -r requirements.txt
       - name: 校验 Python 源码语法
         run: python -m compileall -q awbotnest plugins/_TEMPLATE.py scripts/export_openapi.py
+      - name: 校验一键安装脚本语法
+        run: bash -n install.sh
       - name: 安装前端依赖
         working-directory: frontend
         run: npm ci
@@ -51,7 +54,17 @@ jobs:
 
   build:
     needs: quality
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -61,7 +74,15 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          platforms: ${{ matrix.platform }}
           push: false
+          load: true
           tags: awbotnest_v2:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=awbotnest-${{ matrix.arch }}
+          cache-to: type=gha,scope=awbotnest-${{ matrix.arch }},mode=max
+      - name: 校验镜像架构
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: |
+          ACTUAL_PLATFORM=$(docker image inspect awbotnest_v2:ci --format '{{.Os}}/{{.Architecture}}')
+          test "$ACTUAL_PLATFORM" = "$EXPECTED_PLATFORM"

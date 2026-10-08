@@ -9,15 +9,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
-      contents: write
+      contents: read
+    env:
+      IMAGE: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest_v2
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
       - name: 设置 Docker Buildx
         uses: docker/setup-buildx-action@v3
       - name: 登录 Docker Hub
@@ -25,19 +37,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKER_HUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
-      - name: 生成镜像标签与元数据
+      - name: 生成镜像元数据
         id: meta
         env:
-          IMAGE: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest_v2
           VER: ${{ github.ref_name }}
         run: |
           CREATED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           {
-            echo "tags<<__EOF__"
-            echo "${IMAGE}:${VER}"
-            # 每个 V2 构建都同步 latest，保证一键安装始终可用。
-            echo "${IMAGE}:latest"
-            echo "__EOF__"
             echo "labels<<__EOF__"
             echo "org.opencontainers.image.title=awbotnest_v2"
             echo "org.opencontainers.image.version=${VER}"
@@ -46,15 +52,80 @@ jobs:
             echo "org.opencontainers.image.created=${CREATED}"
             echo "__EOF__"
           } >> "$GITHUB_OUTPUT"
-      - name: 构建并推送版本镜像
+      - name: 构建并推送架构镜像（仅推送摘要）
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=awbotnest-${{ matrix.arch }}
+          cache-to: type=gha,scope=awbotnest-${{ matrix.arch }},mode=max
+      - name: 保存架构镜像摘要
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          mkdir -p "${RUNNER_TEMP}/image-digests"
+          touch "${RUNNER_TEMP}/image-digests/${DIGEST#sha256:}"
+      - name: 上传架构镜像摘要
+        uses: actions/upload-artifact@v4
+        with:
+          name: image-digests-${{ matrix.arch }}
+          path: ${{ runner.temp }}/image-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      IMAGE: docker.io/${{ secrets.DOCKER_HUB_USERNAME }}/awbotnest_v2
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 下载架构镜像摘要
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/image-digests
+          pattern: image-digests-*
+          merge-multiple: true
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: 登录 Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+      - name: 合并多架构版本与 latest 标签
+        working-directory: ${{ runner.temp }}/image-digests
+        env:
+          VER: ${{ github.ref_name }}
+        run: |
+          SOURCES=()
+          for DIGEST in *; do
+            [[ "$DIGEST" =~ ^[0-9a-f]{64}$ ]]
+            SOURCES+=("${IMAGE}@sha256:${DIGEST}")
+          done
+          test "${#SOURCES[@]}" -eq 2
+          # 每个 V2 构建都同步 latest；两种架构完成后才写入公开标签。
+          docker buildx imagetools create \
+            --tag "${IMAGE}:${VER}" \
+            --tag "${IMAGE}:latest" \
+            "${SOURCES[@]}"
+      - name: 校验多架构镜像索引
+        env:
+          VER: ${{ github.ref_name }}
+        run: |
+          for TAG in "$VER" latest; do
+            docker buildx imagetools inspect "${IMAGE}:${TAG}" --raw | \
+              python -c 'import json, sys; data=json.load(sys.stdin); platforms={(item.get("platform", {}).get("os"), item.get("platform", {}).get("architecture")) for item in data.get("manifests", [])}; assert {("linux", "amd64"), ("linux", "arm64")} <= platforms, platforms; print("AMD64 / ARM64 index OK")'
+          done
       - name: 从 CHANGELOG 提取本版本更新日志
         run: |
           VER="${{ github.ref_name }}"

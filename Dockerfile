@@ -1,4 +1,4 @@
-FROM node:22-slim AS frontend
+FROM --platform=$BUILDPLATFORM node:22-slim AS frontend
 
 WORKDIR /app
 COPY VERSION ./VERSION
@@ -36,8 +36,9 @@ RUN pip install --no-cache-dir --no-deps . \
     && mkdir -p data sessions plugins
 
 # Keep xvfb-run away from PID 1: its X-server readiness handshake uses signals.
-# Bound the check so a broken handshake fails the build instead of hanging it.
-RUN ["timeout", "--kill-after=5s", "30s", "/usr/bin/tini", "-s", "-g", "--", "xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-c", "import os, socket; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('/tmp/.X11-unix/X' + os.environ['DISPLAY'].split(':')[-1].split('.')[0]); s.close(); print('Xvfb startup OK')"]
+# Native AMD64/ARM64 builds both check Xvfb and the target Chromium runtime.
+# Bound the check so a broken display or browser fails the build instead of hanging it.
+RUN ["timeout", "--kill-after=5s", "60s", "/usr/bin/tini", "-s", "-g", "--", "xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-c", "import os, socket; from playwright.sync_api import sync_playwright; s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('/tmp/.X11-unix/X' + os.environ['DISPLAY'].split(':')[-1].split('.')[0]); s.close(); p = sync_playwright().start(); browser = p.chromium.launch(headless=False, args=['--no-sandbox'], timeout=30000); page = browser.new_page(); page.set_content('<title>AWBotNest image check</title>'); assert page.title() == 'AWBotNest image check'; browser.close(); p.stop(); print('Xvfb and Chromium startup OK')"]
 
 EXPOSE 18001
 VOLUME ["/app/data", "/app/sessions", "/app/plugins"]
