@@ -2,16 +2,19 @@
 // 鉴权：密码登录后拿到令牌，存 localStorage，请求带 Authorization: Bearer。
 
 const TOKEN_KEY = 'awbotnest_token'
+let authRevision = 0
 export function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
+export function getAuthRevision() { return authRevision }
 export function setToken(t) {
-  if (t !== getToken()) clearStatusCache()
+  // A new login can return the same token; it still starts a new session.
+  authRevision += 1
+  clearStatusCache()
   t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY)
 }
 
-function authHeaders() {
+function authHeaders(token = getToken()) {
   const headers = { 'Content-Type': 'application/json' }
-  const t = getToken()
-  if (t) headers['Authorization'] = `Bearer ${t}`
+  if (token) headers['Authorization'] = `Bearer ${token}`
   return headers
 }
 
@@ -19,15 +22,26 @@ function authHeaders() {
 let onUnauthorized = null
 export function setUnauthorizedHandler(fn) { onUnauthorized = fn }
 
-async function request(method, url, body) {
-  const opts = { method, headers: authHeaders() }
-  if (body !== undefined) opts.body = JSON.stringify(body)
-  const res = await fetch(url, opts)
-  if (res.status === 401) {
+function captureAuth() {
+  return { revision: authRevision, token: getToken() }
+}
+
+function requireAuthorized(response, auth) {
+  if (response.status !== 401) return
+  // Expiry of a request from an older session must not sign out a fresh login.
+  if (auth.revision === authRevision && auth.token === getToken()) {
     setToken('')
     if (onUnauthorized) onUnauthorized()
-    throw new Error('未登录或登录已过期')
   }
+  throw new Error('未登录或登录已过期')
+}
+
+async function request(method, url, body) {
+  const auth = captureAuth()
+  const opts = { method, headers: authHeaders(auth.token) }
+  if (body !== undefined) opts.body = JSON.stringify(body)
+  const res = await fetch(url, opts)
+  requireAuthorized(res, auth)
   if (!res.ok) {
     let detail = res.statusText
     try { detail = (await res.json()).detail || detail } catch {}
@@ -37,12 +51,9 @@ async function request(method, url, body) {
 }
 
 async function requestBlob(url, signal) {
-  const res = await fetch(url, { headers: authHeaders(), signal })
-  if (res.status === 401) {
-    setToken('')
-    if (onUnauthorized) onUnauthorized()
-    throw new Error('未登录或登录已过期')
-  }
+  const auth = captureAuth()
+  const res = await fetch(url, { headers: authHeaders(auth.token), signal })
+  requireAuthorized(res, auth)
   if (!res.ok) throw new Error(res.statusText)
   return res.blob()
 }
@@ -144,14 +155,11 @@ export const api = {
   uploadPlugin: async (file) => {
     const form = new FormData()
     form.append('file', file)
-    const headers = authHeaders()
+    const auth = captureAuth()
+    const headers = authHeaders(auth.token)
     delete headers['Content-Type'] // 让浏览器自动设置 multipart 边界
     const res = await fetch('/api/plugins/upload', { method: 'POST', headers, body: form })
-    if (res.status === 401) {
-      setToken('')
-      if (onUnauthorized) onUnauthorized()
-      throw new Error('未登录或登录已过期')
-    }
+    requireAuthorized(res, auth)
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}
@@ -176,14 +184,11 @@ export const api = {
   uploadAvatar: async (file) => {
     const form = new FormData()
     form.append('file', file)
-    const headers = authHeaders()
+    const auth = captureAuth()
+    const headers = authHeaders(auth.token)
     delete headers['Content-Type']
     const res = await fetch('/api/ui/avatar', { method: 'POST', headers, body: form })
-    if (res.status === 401) {
-      setToken('')
-      if (onUnauthorized) onUnauthorized()
-      throw new Error('未登录或登录已过期')
-    }
+    requireAuthorized(res, auth)
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}
@@ -236,12 +241,9 @@ export const api = {
   clearCookieData: () => request('DELETE', '/api/cookies/data'),
   restartPlatform: () => request('POST', '/api/system/restart'),
   downloadBackup: async () => {
-    const res = await fetch('/api/system/backup', { method: 'POST', headers: authHeaders() })
-    if (res.status === 401) {
-      setToken('')
-      if (onUnauthorized) onUnauthorized()
-      throw new Error('未登录或登录已过期')
-    }
+    const auth = captureAuth()
+    const res = await fetch('/api/system/backup', { method: 'POST', headers: authHeaders(auth.token) })
+    requireAuthorized(res, auth)
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}
@@ -252,12 +254,9 @@ export const api = {
     return { blob: await res.blob(), filename: m?.[1] || 'awbotnest-config.zip' }
   },
   downloadStoredBackup: async (filename) => {
-    const res = await fetch(`/api/system/backups/${encodeURIComponent(filename)}`, { headers: authHeaders() })
-    if (res.status === 401) {
-      setToken('')
-      if (onUnauthorized) onUnauthorized()
-      throw new Error('未登录或登录已过期')
-    }
+    const auth = captureAuth()
+    const res = await fetch(`/api/system/backups/${encodeURIComponent(filename)}`, { headers: authHeaders(auth.token) })
+    requireAuthorized(res, auth)
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}
@@ -268,14 +267,11 @@ export const api = {
   previewBackup: async (file) => {
     const form = new FormData()
     form.append('file', file)
-    const headers = authHeaders()
+    const auth = captureAuth()
+    const headers = authHeaders(auth.token)
     delete headers['Content-Type']
     const res = await fetch('/api/system/restore/preview', { method: 'POST', headers, body: form })
-    if (res.status === 401) {
-      setToken('')
-      if (onUnauthorized) onUnauthorized()
-      throw new Error('未登录或登录已过期')
-    }
+    requireAuthorized(res, auth)
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}
@@ -288,14 +284,11 @@ export const api = {
     form.append('file', file)
     form.append('preview_digest', preview?.digest || '')
     form.append('current_digest', preview?.current_digest || '')
-    const headers = authHeaders()
+    const auth = captureAuth()
+    const headers = authHeaders(auth.token)
     delete headers['Content-Type']
     const res = await fetch('/api/system/restore', { method: 'POST', headers, body: form })
-    if (res.status === 401) {
-      setToken('')
-      if (onUnauthorized) onUnauthorized()
-      throw new Error('未登录或登录已过期')
-    }
+    requireAuthorized(res, auth)
     if (!res.ok) {
       let detail = res.statusText
       try { detail = (await res.json()).detail || detail } catch {}

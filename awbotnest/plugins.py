@@ -12,7 +12,7 @@ from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .services import PlatformServices
 from .deps import DependencyManager
-from .cloak_proxy import configure_cloakbrowser, requirements_use_cloakbrowser
+from .cloak_proxy import configure_cloakbrowser, requirements_use_cloakbrowser, with_cloakbrowser_geoip
 from .routing import PluginRoutes
 from .notifier import NotificationService
 from .plugin_runtime import LoadedPlugin, PluginLoader, PluginMeta, PluginResolver, PluginScanner
@@ -167,7 +167,7 @@ class PluginRuntime:
         if meta.error:
             return meta
         try:
-            await self.deps.ensure(meta.requirements or [], plugin_name=meta.name)
+            await self.deps.ensure(with_cloakbrowser_geoip(meta.requirements or []), plugin_name=meta.name)
             if requirements_use_cloakbrowser(meta.requirements or []):
                 configure_cloakbrowser(self.settings)
             module = self._import(entry, plugin_id)

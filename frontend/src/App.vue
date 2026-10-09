@@ -1,7 +1,7 @@
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
 import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
-import { api, getToken, setToken, setUnauthorizedHandler } from './api'
+import { api, getAuthRevision, getToken, setToken, setUnauthorizedHandler } from './api'
 import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import Toast from './components/Toast.vue'
@@ -39,8 +39,31 @@ const authed = ref(false)
 const restoringSession = ref(!!getToken())
 let restartTimer = null
 let appearanceRotationTimer = null
+let disposed = false
+let sessionSequence = 0
+let updateSequence = 0
+let lastOpenUpdateCheck = null
+
+function isCurrentSession(sequence, revision, token) {
+  return !disposed && sequence === sessionSequence
+    && revision === getAuthRevision() && token === getToken()
+}
+
+function clearUpdateState() {
+  updateSequence += 1
+  lastOpenUpdateCheck = null
+  hasUpdate.value = false
+  latestVersion.value = ''
+  latestNote.value = ''
+  latestReleaseUrl.value = 'https://github.com/AWdress/AWBotNest/releases'
+}
 
 async function onAuthed() {
+  if (disposed) return
+  const sequence = ++sessionSequence
+  const revision = getAuthRevision(), token = getToken()
+  const current = () => isCurrentSession(sequence, revision, token)
+  clearUpdateState()
   restoringSession.value = true
   api.ensureResourceToken().catch(() => {})
   try {
@@ -49,6 +72,7 @@ async function onAuthed() {
       loadUiProfile(true),
       refreshPlatformStatus(true),
     ])
+    if (!current()) return
     if (st.needs_setup || st.must_change_password) {
       logout()
       return
@@ -58,22 +82,36 @@ async function onAuthed() {
       preloadAllRoutes(),
       preloadAccountAvatars(status?.accounts || []),
     ])
+    if (!current()) return
     authed.value = true
-    startPlatformStatusPolling().then(() => checkUpdate()).catch(() => {})
+    startPlatformStatusPolling().catch(() => {})
+    // Opening the console checks the release source without delaying the UI.
+    lastOpenUpdateCheck = Date.now()
+    checkUpdate(false, true)
   } catch (error) {
+    if (!current()) return
     authed.value = false
     if (getToken()) toast.error(`读取管理员资料失败：${error.message}`)
   } finally {
-    restoringSession.value = false
+    if (current()) restoringSession.value = false
   }
 }
-function logout() {
+
+function clearSessionState() {
+  sessionSequence += 1
+  clearUpdateState()
   stopPlatformStatusPolling()
-  setToken('')
   clearUiProfile()
   clearAccountAvatarCache()
   authed.value = false
   restoringSession.value = false
+  online.value = false
+  version.value = ''
+}
+
+function logout() {
+  setToken('')
+  clearSessionState()
 }
 
 const restarting = ref(false)
@@ -112,13 +150,7 @@ async function restart() {
     restarting.value = false
   }
 }
-setUnauthorizedHandler(() => {
-  stopPlatformStatusPolling()
-  clearUiProfile()
-  clearAccountAvatarCache()
-  authed.value = false
-  restoringSession.value = false
-})
+setUnauthorizedHandler(clearSessionState)
 
 watch(platformStatus, (status) => {
   if (!status) return
@@ -145,21 +177,40 @@ function isNewer(remote, local) {
   return /(?:_dev|[-.]dev)/i.test(String(local)) && !/(?:_dev|[-.]dev)/i.test(String(remote))
 }
 
-// 更新信息由系统统一检查；日常读取缓存，查看版本记录时刷新。
-async function checkUpdate(includeHistory = false) {
+// 日常读取缓存；打开网页和查看版本记录时立即刷新。
+async function checkUpdate(includeHistory = false, refresh = false) {
+  if (!authed.value || disposed) return []
+  const sequence = ++updateSequence
+  const session = sessionSequence, revision = getAuthRevision(), token = getToken()
+  const sameSession = () => authed.value && isCurrentSession(session, revision, token)
+  const current = () => sameSession() && sequence === updateSequence
   if (!version.value) {
     // 还没拿到本地版本就先取一次，避免 onMounted 时序导致跳过
-    try { const s = await refreshPlatformStatus(true); version.value = s.version || '' } catch { return }
-    if (!version.value) return
+    try {
+      const status = await refreshPlatformStatus(true)
+      if (!current()) return []
+      version.value = status.version || ''
+    } catch { return [] }
+    if (!version.value) return []
   }
   try {
-    const data = await api.checkSystemUpdates(includeHistory, includeHistory)
+    const data = await api.checkSystemUpdates(includeHistory, includeHistory || refresh)
+    if (!sameSession()) return []
     const releases = Array.isArray(data.releases) ? data.releases : []
-    if (releases[0]) syncVersionCheck(releases[0])
+    if (current() && releases[0]) syncVersionCheck(releases[0])
     return releases
   } catch {
     return []
   }
+}
+
+function refreshUpdatesOnOpen() {
+  if (!authed.value || disposed || document.hidden) return
+  const now = Date.now()
+  // Focus and visibility can fire together; avoid duplicate release requests.
+  if (lastOpenUpdateCheck !== null && now - lastOpenUpdateCheck < 60 * 1000) return
+  lastOpenUpdateCheck = now
+  checkUpdate(false, true)
 }
 
 function syncVersionCheck(result = {}) {
@@ -212,6 +263,8 @@ let updateTimer = null
 
 onMounted(async () => {
   window.addEventListener('awbotnest-appearance', applyAppearance)
+  document.addEventListener('visibilitychange', refreshUpdatesOnOpen)
+  window.addEventListener('focus', refreshUpdatesOnOpen)
   appearanceRotationTimer = window.setInterval(() => {
     const theme = localStorage.getItem('awbotnest-theme') || 'dark'
     if (theme === 'transparent' && !localStorage.getItem('awbotnest-bg-image')) applyAppearance({ rotate: true })
@@ -220,14 +273,21 @@ onMounted(async () => {
   if (getToken()) {
     await onAuthed()
   }
+  if (disposed) return
   if (authed.value) startPlatformStatusPolling().catch(() => {})
   // 每半小时读取一次系统缓存，不由浏览器直接访问发布源。
   updateTimer = setInterval(() => { if (authed.value) checkUpdate() }, 30 * 60 * 1000)
 })
 
 onUnmounted(() => {
+  disposed = true
+  sessionSequence += 1
+  clearUpdateState()
+  setUnauthorizedHandler(null)
   disposeAppearance()
   window.removeEventListener('awbotnest-appearance', applyAppearance)
+  document.removeEventListener('visibilitychange', refreshUpdatesOnOpen)
+  window.removeEventListener('focus', refreshUpdatesOnOpen)
   if (appearanceRotationTimer) window.clearInterval(appearanceRotationTimer)
   stopPlatformStatusPolling()
   clearInterval(updateTimer)
@@ -340,6 +400,7 @@ onUnmounted(() => {
           :connection-label="connectionLabel"
           :version="version"
           :latest-version="latestVersion"
+          :has-update="hasUpdate"
           :check-releases="checkUpdate"
           :restarting="restarting"
           @restart="restart"

@@ -1,9 +1,14 @@
-"""Read-only checks for CloakBrowser component and browser-kernel updates."""
+"""CloakBrowser update checks and conservative post-update cache cleanup."""
 
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 import platform
+import re
+import shutil
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from collections.abc import Iterable
@@ -11,8 +16,9 @@ from typing import Any
 
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
+import psutil
 
-from .config import DATA_DIR, Settings
+from .config import APP_ROOT, DATA_DIR, Settings
 from .deps import DependencyManager
 from .services.http import HttpService
 
@@ -21,6 +27,9 @@ CLOAKBROWSER_REQUIREMENT = SpecifierSet(">=0.5.10,<0.6")
 CLOAKBROWSER_PYPI_URL = "https://pypi.org/pypi/cloakbrowser/json"
 CLOAKBROWSER_KERNEL_URL = "https://cloakbrowser.dev/api/download/version"
 KERNEL_CHANNELS = ("stable", "preview")
+logger = logging.getLogger("awbotnest.cloak_updates")
+_KERNEL_VERSION_RE = re.compile(r"[0-9]+(?:\.[0-9]+){3,4}")
+_PRO_KERNEL_DIR_RE = re.compile(r"chromium-([0-9]+(?:\.[0-9]+){3,4})-pro")
 
 _PLATFORM_TAGS = {
     ("Linux", "x86_64"): "linux-x64",
@@ -71,16 +80,32 @@ def kernel_binary_path(version: str, *, pro: bool = True) -> Path:
 
 
 def kernel_binary_installed(version: str, *, pro: bool = True) -> bool:
-    return bool(version and kernel_binary_path(version, pro=pro).is_file())
+    if not version:
+        return False
+    binary = kernel_binary_path(version, pro=pro)
+    return binary.is_file() and os.access(binary, os.X_OK)
+
+
+def kernel_channel_active(channel: str, version: str) -> bool:
+    """A cached binary is active only when its channel marker selects it."""
+    if channel not in KERNEL_CHANNELS or not _KERNEL_VERSION_RE.fullmatch(version):
+        return False
+    try:
+        prefix = "latest_pro_version_preview" if channel == "preview" else "latest_pro_version"
+        marker = DATA_DIR / "cloakbrowser" / f"{prefix}_{_platform_tag()}"
+        if not marker.is_file() or marker.stat().st_size > 128:
+            return False
+        return marker.read_text(encoding="utf-8").strip() == version and kernel_binary_installed(version)
+    except (OSError, RuntimeError, UnicodeError):
+        return False
 
 
 def current_kernel_versions(*, key_active: bool) -> list[dict[str, str]]:
     """Return browser kernels that CloakBrowser can currently launch.
 
     Pro launches are channel-specific, so their marker files are the source of
-    truth.  Legacy free launches have no reliable active marker on a fresh
-    install; in that mode the newest complete non-Pro binary is the effective
-    local choice.
+    truth. Free launches use the SDK's marker/default selection, not the highest
+    cached version; an unused cached build must not be reported as active.
     """
     cache_dir = DATA_DIR / "cloakbrowser"
     if key_active:
@@ -100,20 +125,23 @@ def current_kernel_versions(*, key_active: bool) -> list[dict[str, str]]:
                 kernels.append({"channel": channel, "version": version})
         return kernels
 
-    versions: list[Version] = []
-    for root in cache_dir.glob("chromium-*"):
-        if not root.is_dir() or root.name.endswith("-pro"):
-            continue
-        raw_version = root.name.removeprefix("chromium-")
-        try:
-            version = Version(raw_version)
-        except InvalidVersion:
-            continue
-        if kernel_binary_installed(raw_version, pro=False):
-            versions.append(version)
-    if not versions:
-        return []
-    return [{"channel": "legacy_free", "version": str(max(versions))}]
+    try:
+        from cloakbrowser.config import (
+            get_chromium_version, get_effective_version, get_local_binary_override,
+            normalize_requested_version,
+        )
+        if get_local_binary_override():
+            return []  # An arbitrary external binary has no verifiable version.
+        pin = normalize_requested_version()
+        version = pin or get_effective_version(pro=False)
+        if (not pin and not kernel_binary_installed(str(version or ""), pro=False)):
+            version = get_chromium_version()
+        if (isinstance(version, str) and _KERNEL_VERSION_RE.fullmatch(version)
+                and kernel_binary_installed(version, pro=False)):
+            return [{"channel": "legacy_free", "version": version}]
+    except (ImportError, OSError, RuntimeError, ValueError):
+        pass
+    return []
 
 
 def required_kernel_channels() -> tuple[str, ...]:
@@ -157,6 +185,176 @@ def update_cloakbrowser_kernel(license_key: str, channel: str) -> str | None:
     for prefix in (".last_pro_version_check_", ".last_pro_version_resolution_"):
         (cache_dir / f"{prefix}{suffix}").unlink(missing_ok=True)
     return check_for_pro_update(license_key, channel)
+
+
+def _cache_path_is_link(path: Path) -> bool:
+    """Reject links and Windows directory junctions, including dangling ones."""
+    if path.is_symlink() or bool(getattr(path, "is_junction", lambda: False)()):
+        return True
+    attributes = getattr(path.lstat(), "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+
+
+def _running_executable_paths() -> set[Path] | None:
+    """Read executable paths only; an inaccessible process makes cleanup unsafe."""
+    paths: set[Path] = set()
+    try:
+        for process in psutil.process_iter():
+            try:
+                executable = process.exe()
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                continue
+            except (psutil.AccessDenied, OSError):
+                return None
+            if executable:
+                paths.add(Path(executable.removesuffix(" (deleted)")).resolve())
+    except (psutil.Error, OSError, ValueError):
+        return None
+    return paths
+
+
+def _kernel_tree_size(path: Path) -> int | None:
+    """Inspect a plain cache tree without following links or special files."""
+    size = 0
+
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    try:
+        root = path.resolve(strict=True)
+        for directory, directories, files in os.walk(path, followlinks=False, onerror=raise_walk_error):
+            folder = Path(directory)
+            if _cache_path_is_link(folder) or not folder.resolve(strict=True).is_relative_to(root):
+                return None
+            for name in directories:
+                child = folder / name
+                if _cache_path_is_link(child) or not child.resolve(strict=True).is_relative_to(root):
+                    return None
+            for name in files:
+                child = folder / name
+                if _cache_path_is_link(child):
+                    return None
+                details = child.stat(follow_symlinks=False)
+                if not stat.S_ISREG(details.st_mode) or details.st_nlink > 1:
+                    return None
+                # Sparse files occupy fewer blocks than their logical length.
+                blocks = getattr(details, "st_blocks", None)
+                size += blocks * 512 if blocks is not None else details.st_size
+    except (OSError, ValueError):
+        return None
+    return size
+
+
+def cleanup_cloakbrowser_kernels(protected_versions: Iterable[str]) -> dict[str, int]:
+    """Remove only unreferenced Pro kernels after a verified explicit update.
+
+    Callers must hold the browser maintenance gate and pass the successfully
+    updated versions. Legacy no-key binaries, metadata, GeoIP data, pins, both
+    channels and running processes remain untouched. Any uncertainty skips
+    cleanup rather than making an otherwise successful update fail.
+    """
+    result = {"removed": 0, "freed_bytes": 0, "skipped": 0}
+    try:
+        protected = set(protected_versions)
+        if not protected or any(
+            not isinstance(version, str) or not _KERNEL_VERSION_RE.fullmatch(version)
+            for version in protected
+        ):
+            return result
+
+        from cloakbrowser.config import (
+            get_binary_path, get_cache_dir, get_local_binary_override,
+            normalize_requested_version,
+        )
+
+        cache = Path(get_cache_dir()).absolute()
+        if any(_cache_path_is_link(path) for path in (cache, *cache.parents)):
+            return result
+        cache = cache.resolve(strict=True)
+        broad_roots = {Path(cache.anchor), Path.home().resolve(), APP_ROOT.resolve(), DATA_DIR.resolve(),
+                       Path.cwd().resolve()}
+        if not cache.is_dir() or cache in broad_roots:
+            return result
+
+        candidates = [path for path in cache.iterdir() if _PRO_KERNEL_DIR_RE.fullmatch(path.name)]
+        candidates.sort(key=lambda path: path.name)
+        result["skipped"] = len(candidates)
+        # A new marker alone is not enough: the caller's verified binaries must
+        # still be complete executable files in their expected Pro directories.
+        for version in protected:
+            binary = Path(get_binary_path(version, pro=True))
+            if (not binary.is_file() or not os.access(binary, os.X_OK)
+                    or not binary.resolve(strict=True).is_relative_to(cache / f"chromium-{version}-pro")
+                    or any(_cache_path_is_link(path) for path in (binary, *binary.parents))):
+                return result
+
+        marker_names = {
+            f"{prefix}_{tag}"
+            for prefix in ("latest_pro_version", "latest_pro_version_preview")
+            for tag in set(_PLATFORM_TAGS.values())
+        }
+        for marker in cache.iterdir():
+            if not marker.name.startswith("latest_pro_version_"):
+                continue
+            if (marker.name not in marker_names or _cache_path_is_link(marker)
+                    or not marker.is_file() or marker.stat().st_size > 128):
+                return result
+            version = marker.read_text(encoding="utf-8").strip()
+            if not _KERNEL_VERSION_RE.fullmatch(version):
+                return result
+            protected.add(version)
+
+        pin = normalize_requested_version()
+        if pin:
+            if not _KERNEL_VERSION_RE.fullmatch(pin):
+                return result
+            protected.add(pin)
+        override = get_local_binary_override()
+        override_path = Path(override).resolve(strict=True) if override else None
+        running = _running_executable_paths()
+        if running is None:
+            return result
+
+        for candidate in candidates:
+            version = _PRO_KERNEL_DIR_RE.fullmatch(candidate.name).group(1)
+            if version in protected or _cache_path_is_link(candidate) or not candidate.is_dir():
+                continue
+            resolved = candidate.resolve(strict=True)
+            if resolved.parent != cache or resolved != candidate:
+                continue
+            if override_path and override_path.is_relative_to(resolved):
+                continue
+            if any(path.is_relative_to(resolved) for path in running):
+                continue
+            size = _kernel_tree_size(candidate)
+            if size is None:
+                continue
+            identity = candidate.stat(follow_symlinks=False)
+            # Recheck occupancy immediately before removal. Only executable
+            # paths are read; command lines may contain credentials.
+            running = _running_executable_paths()
+            if running is None:
+                break
+            if any(path.is_relative_to(resolved) for path in running):
+                continue
+            current = candidate.stat(follow_symlinks=False)
+            if (_cache_path_is_link(candidate) or candidate.resolve(strict=True) != resolved
+                    or (identity.st_dev, identity.st_ino) != (current.st_dev, current.st_ino)):
+                continue
+            try:
+                shutil.rmtree(candidate)
+            except OSError:
+                logger.debug("CloakBrowser 旧内核清理已跳过", exc_info=True)
+                continue
+            result["removed"] += 1
+            result["freed_bytes"] += size
+            result["skipped"] -= 1
+    except Exception:
+        logger.debug("CloakBrowser 旧内核清理已跳过", exc_info=True)
+    if result["removed"]:
+        logger.info("CloakBrowser 已清理 %d 个旧内核，释放 %.1f MB",
+                    result["removed"], result["freed_bytes"] / (1024 * 1024))
+    return result
 
 
 def _latest_compatible(payload: dict[str, Any]) -> str:
@@ -206,7 +404,7 @@ async def _check_kernel(http: HttpService, channel: str) -> dict[str, Any]:
         latest = str(payload.get("version") or "").strip()
         if not latest:
             raise ValueError("内核更新服务没有返回版本号")
-        installed = kernel_binary_installed(latest)
+        installed = kernel_channel_active(channel, latest)
         return {
             "channel": channel,
             "resolved_channel": str(payload.get("resolved_channel") or channel),
@@ -262,7 +460,7 @@ def cloak_update_status(settings: Settings) -> dict[str, Any]:
         channel = dict(item)
         latest = str(channel.get("latest_version") or "")
         if latest:
-            installed = kernel_binary_installed(latest)
+            installed = kernel_channel_active(str(channel.get("channel") or ""), latest)
             channel.update({
                 "installed": installed,
                 "update_available": not installed,
@@ -300,13 +498,21 @@ async def check_cloakbrowser_update(settings: Settings, http: HttpService,
             channel for channel in (channels if channels is not None else required_kernel_channels())
             if channel in KERNEL_CHANNELS
         ))
+        previous_state = dict(_state)
         _state.update({"status": "checking", "current_version": current, "error": ""})
 
-        component_result, *kernel_results = await asyncio.gather(
-            _check_component(http, current),
-            *(_check_kernel(http, channel) for channel in required_channels),
-            return_exceptions=True,
-        )
+        try:
+            component_result, *kernel_results = await asyncio.gather(
+                _check_component(http, current),
+                *(_check_kernel(http, channel) for channel in required_channels),
+                return_exceptions=True,
+            )
+        except asyncio.CancelledError:
+            # The lock excludes a newer check; restore its predecessor so the
+            # UI does not remain permanently stuck on a cancelled request.
+            _state.clear()
+            _state.update(previous_state)
+            raise
         errors: list[str] = []
         if isinstance(component_result, BaseException):
             latest = ""
@@ -347,7 +553,8 @@ async def check_cloakbrowser_update(settings: Settings, http: HttpService,
         return dict(_state)
 
 
-def mark_cloakbrowser_updated(settings: Settings, version: str) -> None:
+def mark_cloakbrowser_updated(settings: Settings, version: str, *,
+                             kernel_versions: dict[str, str] | None = None) -> None:
     """Refresh the snapshot after an explicit component and kernel update."""
     if not _enabled(settings):
         return
@@ -355,8 +562,17 @@ def mark_cloakbrowser_updated(settings: Settings, version: str) -> None:
     for source in _state.get("kernel_channels", []):
         item = dict(source)
         latest = str(item.get("latest_version") or "")
+        channel = str(item.get("channel") or "")
+        activated = str((kernel_versions or {}).get(channel) or "")
+        if activated and kernel_channel_active(channel, activated):
+            try:
+                if not latest or Version(activated) >= Version(latest):
+                    latest = activated
+                    item["latest_version"] = latest
+            except InvalidVersion:
+                pass
         if latest:
-            installed = kernel_binary_installed(latest)
+            installed = kernel_channel_active(channel, latest)
             item.update({
                 "installed": installed,
                 "update_available": not installed,

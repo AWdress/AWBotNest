@@ -14,12 +14,16 @@ from uuid import uuid4
 import httpx
 
 from ..config import DATA_DIR, Settings
+from ..cloak_proxy import CLOAKBROWSER_INSTALL_REQUIREMENT
+from ..deps import DependencyManager
 
 
 class BrowserService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._serial = asyncio.Lock()
+        self._dependencies_ready = False
+        self._dependency_lock = asyncio.Lock()
 
     @staticmethod
     def _proxy(value):
@@ -85,6 +89,14 @@ class BrowserService:
     async def run(self, url: str, action: Callable[[Any], Any], *, headless: bool = True,
                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
                   user_agent: str = "", ua: str | None = None, proxy=None) -> Any:
+        if self.engine == "cloakbrowser" and not self._dependencies_ready:
+            async with self._dependency_lock:
+                if not self._dependencies_ready:
+                    await DependencyManager(self.settings).ensure(
+                        [CLOAKBROWSER_INSTALL_REQUIREMENT],
+                        plugin_name="CloakBrowser 浏览器引擎", target_only=True,
+                    )
+                    self._dependencies_ready = True
         user_agent = user_agent or ua or ""
         # Preserve explicit direct mode for CloakBrowser's inheritance wrapper.
         resolved_proxy = (False if proxy is False or proxy == "" else

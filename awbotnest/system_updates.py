@@ -268,6 +268,11 @@ class SystemUpdateService:
             _logger.warning(message)
             self._last_warning = message
 
+    async def check_scheduled(self) -> dict[str, Any]:
+        # An hourly tick can precede cache expiry because fetching takes time.
+        # Bypass that cache, but keep the failure backoff for background checks.
+        return await self.check(force=time.monotonic() >= self._retry_after)
+
     async def check(self, force: bool = False, include_history: bool = False,
                     notify: bool = True) -> dict[str, Any]:
         if self._closed:

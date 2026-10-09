@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -25,6 +25,7 @@ from .config import Settings
 
 
 logger = logging.getLogger("awbotnest.cloak")
+CLOAKBROWSER_INSTALL_REQUIREMENT = "cloakbrowser[geoip]>=0.5.10,<0.6"
 
 _settings: Settings | None = None
 _USE_PLATFORM_PROXY = object()
@@ -149,6 +150,8 @@ class _FreeSessionGate:
 
     def begin_maintenance(self) -> None:
         with self._condition:
+            if self._maintenance:
+                raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
             if self._active or self._queue:
                 raise RuntimeError("仍有 CloakBrowser 会话正在运行或排队，请稍后重试")
             self._maintenance = True
@@ -178,6 +181,18 @@ def requirements_use_cloakbrowser(requirements: Iterable[str]) -> bool:
     return any(canonicalize_name(Requirement(item).name) == "cloakbrowser" for item in requirements)
 
 
+def with_cloakbrowser_geoip(requirements: Iterable[str]) -> list[str]:
+    """Supply browser extras without changing a plugin's version constraints."""
+    result = []
+    for item in requirements:
+        parsed = Requirement(item)
+        if canonicalize_name(parsed.name) == "cloakbrowser":
+            parsed.extras.add("geoip")
+            item = str(parsed)
+        result.append(item)
+    return result
+
+
 def bind_cloakbrowser_settings(settings: Settings) -> None:
     """Bind live settings without importing the optional CloakBrowser package."""
     global _settings
@@ -194,6 +209,27 @@ def begin_cloak_update() -> None:
 
 def cancel_cloak_update() -> None:
     _SESSION_GATE.cancel_maintenance()
+
+
+async def await_cloak_update_operation(operation: Awaitable[Any]) -> Any:
+    """Finish an installer/worker before cancellation can reopen browser access."""
+    task = asyncio.ensure_future(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # Cancelling an asyncio waiter does not stop its pip process or worker
+        # thread. Keep maintenance active until the operation has really ended,
+        # including when shutdown/request handling cancels the waiter repeatedly.
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()  # Consume a failure, preserving the caller's cancellation.
+        raise
 
 
 def reset_cloakbrowser_runtime() -> None:

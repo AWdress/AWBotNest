@@ -14,6 +14,7 @@ const props = defineProps({
   connectionLabel: { type: String, default: '正在连接' },
   version: { type: String, default: '' },
   latestVersion: { type: String, default: '' },
+  hasUpdate: Boolean,
   checkReleases: { type: Function, default: null },
   restarting: Boolean,
 })
@@ -440,6 +441,16 @@ onUnmounted(() => {
 
 <template>
   <div class="control-center" @click.stop>
+    <button v-if="hasUpdate" class="control-btn update-control" type="button"
+            :title="`发现新版本 v${latestVersion}`"
+            :aria-label="`发现新版本 v${latestVersion}，查看更新内容`"
+            @click.stop="openModal('about')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 19V5M5 12l7-7 7 7"/>
+      </svg>
+      <span class="notice-badge">新</span>
+    </button>
     <button class="control-btn" :class="{ active: panel === 'shortcuts' }"
             title="快捷入口" @click="togglePanel('shortcuts')">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -684,6 +695,7 @@ onUnmounted(() => {
 }
 .control-btn:hover, .control-btn.active { color: var(--text-primary); border-color: var(--border-light); background: var(--bg-hover); }
 .control-btn svg { width: 19px; height: 19px; }
+.control-btn.update-control { color: var(--accent); }
 .avatar-btn { border-radius: 50%; overflow: hidden; color: #fff; font-size: 11px; font-weight: 700; background: linear-gradient(145deg, var(--accent), var(--accent-2)); }
 .profile-trigger {
   min-width: 118px; min-height: 42px; display: flex; align-items: center; gap: 9px; padding: 2px 5px 2px 2px;

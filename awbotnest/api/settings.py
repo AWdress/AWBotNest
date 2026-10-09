@@ -18,6 +18,7 @@ from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
+from packaging.version import Version
 
 from .. import __version__
 from ..activity import activity
@@ -26,12 +27,13 @@ from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
 from ..deps import DependencyManager
 from ..cloak_proxy import (
-    begin_cloak_update, cancel_cloak_update, cloak_session_status,
+    CLOAKBROWSER_INSTALL_REQUIREMENT,
+    await_cloak_update_operation, begin_cloak_update, cancel_cloak_update, cloak_session_status,
     configure_cloakbrowser, unload_cloakbrowser_modules,
 )
 from ..cloak_updates import (
     check_cloakbrowser_update, cloak_update_status, current_kernel_versions,
-    kernel_binary_installed,
+    cleanup_cloakbrowser_kernels, kernel_binary_installed, kernel_channel_active,
     mark_cloakbrowser_updated, update_cloakbrowser_kernel,
 )
 from ..services.http import HttpService
@@ -63,6 +65,13 @@ def create_router(deps) -> APIRouter:
 
     def masked_channels():
         return mask_channels(settings)
+
+    def check_settings_save_available():
+        if cloak_session_status().get("maintenance"):
+            raise HTTPException(
+                status_code=409,
+                detail="CloakBrowser 正在更新，暂时无法保存系统设置，请等待系统重启",
+            )
 
     @router.get("/api/settings", dependencies=[Depends(require_admin)])
     async def get_settings():
@@ -493,6 +502,7 @@ def create_router(deps) -> APIRouter:
     @router.put("/api/settings", dependencies=[Depends(require_admin)])
     async def update_settings(request: Request):
         raw = await request.json()
+        check_settings_save_available()
         if not isinstance(raw, dict):
             raise HTTPException(status_code=400, detail="设置必须是对象")
         update_system_notification = "system_update_notify_enabled" in raw
@@ -624,12 +634,15 @@ def create_router(deps) -> APIRouter:
         if body.browser_engine == "cloakbrowser":
             try:
                 await DependencyManager(body).ensure(
-                    ["cloakbrowser>=0.5.10,<0.6"],
+                    [CLOAKBROWSER_INSTALL_REQUIREMENT],
                     plugin_name="CloakBrowser 浏览器引擎",
                     target_only=True,
                 )
             except Exception as exc:
                 raise HTTPException(status_code=502, detail=f"CloakBrowser 安装失败：{exc}") from exc
+        # An update can enter maintenance while dependency installation awaits.
+        # No await is allowed between this check and the synchronous mutation.
+        check_settings_save_available()
         settings.api_id = body.api_id
         if body.api_hash != "********":
             settings.api_hash = body.api_hash.strip()
@@ -814,25 +827,32 @@ def create_router(deps) -> APIRouter:
             begin_cloak_update()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        manager = DependencyManager(settings)
         update_status: dict[str, Any] = {"required_kernel_channels": []}
-        try:
-            await manager.ensure(
-                ["cloakbrowser>=0.5.10,<0.6"],
-                plugin_name="CloakBrowser 浏览器引擎",
-                target_only=True,
-                upgrade=True,
-            )
-            version = manager.target_version("cloakbrowser")
-            # pip may have replaced files belonging to modules already loaded by a
-            # plugin.  Reload the optional package before asking it to install the
-            # newly discovered browser kernels.
-            unload_cloakbrowser_modules()
-            configure_cloakbrowser(settings)
+        install_started = False
 
+        def finish_failed_update() -> bool:
+            if install_started and restart_event is not None:
+                # pip can have replaced imported files even when installation
+                # fails or the request is cancelled. Keep browsers blocked until
+                # the host reloads every plugin against the new dependency tree.
+                asyncio.get_running_loop().call_later(0.8, restart_event.set)
+                return True
+            if install_started:
+                unload_cloakbrowser_modules()
+                try:
+                    configure_cloakbrowser(settings)
+                except Exception:
+                    logger.warning("CloakBrowser 依赖已变更，重启宿主后生效")
+            cancel_cloak_update()
+            return False
+
+        try:
+            manager = DependencyManager(settings)
             key_active = bool(
                 settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
             )
+            requirement = CLOAKBROWSER_INSTALL_REQUIREMENT
+            expected_component = ""
             if key_active:
                 channels = (
                     runtime.cloakbrowser_channels()
@@ -841,6 +861,36 @@ def create_router(deps) -> APIRouter:
                 update_status = await check_cloakbrowser_update(
                     settings, HttpService(settings), channels,
                 )
+                expected_component = str(update_status.get("latest_version") or "")
+                if not expected_component or update_status.get("error"):
+                    raise RuntimeError(
+                        "更新检查失败：" + str(update_status.get("error") or "未获取到组件版本")
+                    )
+                # Install the release we just discovered, not an older version a
+                # lagging pip mirror happens to consider its latest release.
+                requirement += f",=={expected_component}"
+            install_started = True
+            await await_cloak_update_operation(manager.ensure(
+                [requirement],
+                plugin_name="CloakBrowser 浏览器引擎",
+                target_only=True,
+                upgrade=True,
+            ))
+            version = manager.target_version("cloakbrowser")
+            if not version or (expected_component and Version(version) != Version(expected_component)):
+                raise RuntimeError(
+                    f"组件版本校验失败：需要 {expected_component or '已安装版本'}，"
+                    f"实际为 {version or '未安装'}"
+                )
+            # pip may have replaced files belonging to modules already loaded by a
+            # plugin.  Reload the optional package before asking it to install the
+            # newly discovered browser kernels.
+            unload_cloakbrowser_modules()
+            configure_cloakbrowser(settings)
+
+            protected_versions: set[str] = set()
+            kernel_versions: dict[str, str] = {}
+            if key_active:
                 failed_channels = [
                     item for item in update_status.get("kernel_channels", [])
                     if item.get("status") == "error"
@@ -852,23 +902,44 @@ def create_router(deps) -> APIRouter:
                     )
                     raise RuntimeError(f"浏览器内核版本检查失败：{details}")
                 for item in update_status.get("kernel_channels", []):
-                    if not item.get("update_available"):
-                        continue
                     channel = str(item.get("channel") or "")
-                    downloaded = await asyncio.to_thread(
-                        update_cloakbrowser_kernel,
-                        settings.cloakbrowser_license_key,
-                        channel,
-                    )
-                    expected = str(downloaded or item.get("latest_version") or "")
+                    latest = str(item.get("latest_version") or "")
+                    expected = latest
+                    if item.get("update_available"):
+                        downloaded = await await_cloak_update_operation(asyncio.to_thread(
+                            update_cloakbrowser_kernel,
+                            settings.cloakbrowser_license_key,
+                            channel,
+                        ))
+                        expected = str(downloaded or latest)
+                        if not latest or Version(expected) < Version(latest):
+                            raise RuntimeError(f"{channel.title()} 内核未更新到已检测的新版本")
                     if not kernel_binary_installed(expected):
                         raise RuntimeError(
                             f"{channel.title()} 内核更新完成后未找到浏览器文件"
                         )
-            mark_cloakbrowser_updated(settings, version)
+                    if not kernel_channel_active(channel, expected):
+                        raise RuntimeError(f"{channel.title()} 内核尚未切换到新版本")
+                    protected_versions.add(expected)
+                    kernel_versions[channel] = expected
+            # Do not touch cached kernels on a failed or check-only operation.
+            # Keep the old unkeyed binary so deleting/disabling a key still works.
+            if protected_versions:
+                try:
+                    await await_cloak_update_operation(asyncio.to_thread(
+                        cleanup_cloakbrowser_kernels, protected_versions,
+                    ))
+                except Exception:
+                    logger.warning("CloakBrowser 旧内核清理失败，将在下次更新时重试")
+            mark_cloakbrowser_updated(settings, version, kernel_versions=kernel_versions)
+        except asyncio.CancelledError:
+            if finish_failed_update():
+                logger.warning("CloakBrowser 更新请求已取消，系统将重启以重新加载依赖")
+            raise
         except Exception as exc:
-            cancel_cloak_update()
-            raise HTTPException(status_code=502, detail=f"CloakBrowser 更新失败：{exc}") from exc
+            restarting = finish_failed_update()
+            suffix = "；系统将重启以重新加载依赖" if restarting else ""
+            raise HTTPException(status_code=502, detail=f"CloakBrowser 更新失败：{exc}{suffix}") from exc
         will_restart = restart_event is not None
         key_active = bool(settings.cloakbrowser_use_free_key and settings.cloakbrowser_license_key)
         if will_restart:

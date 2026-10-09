@@ -56,10 +56,10 @@ async def _run_configured_once() -> bool:
         cleaner_hour = max(0, min(int(cleaner.get("hour", 3)), 23))
         cleaner_minute = max(0, min(int(cleaner.get("minute", 0)), 59))
         async def clean_logs_job():
-            logger.debug("日志自动清理开始")
             try:
                 removed = memory_logs.trim(int(cleaner.get("keep_lines", 1000)))
-                logger.debug("日志自动清理完成：清理 %d 条", removed)
+                logger.info("日志自动清理完成：清理 %d 条，保留 %d 条",
+                            removed, len(memory_logs.recent(1000)))
                 return removed
             except Exception:
                 logger.exception("定时任务失败：日志自动清理")
@@ -111,8 +111,8 @@ async def start_platform(settings, accounts, runtime, scheduler, market) -> None
 
     system_updates = get_system_update_service(settings, runtime)
     scheduler.add_interval(
-        "__platform__", "系统更新检查", system_updates.check,
-        seconds=6 * 60 * 60,
+        "__platform__", "系统更新检查", system_updates.check_scheduled,
+        seconds=60 * 60,
     )
     runtime.system_update_task = asyncio.create_task(
         system_updates.check(), name="system-update-check",
