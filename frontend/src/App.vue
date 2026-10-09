@@ -400,7 +400,6 @@ onUnmounted(() => {
           :connection-label="connectionLabel"
           :version="version"
           :latest-version="latestVersion"
-          :has-update="hasUpdate"
           :check-releases="checkUpdate"
           :restarting="restarting"
           @restart="restart"
