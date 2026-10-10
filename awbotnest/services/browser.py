@@ -16,6 +16,8 @@ import httpx
 from ..config import DATA_DIR, Settings
 from ..cloak_proxy import CLOAKBROWSER_INSTALL_REQUIREMENT
 from ..deps import DependencyManager
+from ..workers import run_sync
+from ..scheduler import waiting_phase
 
 
 class BrowserService:
@@ -103,16 +105,17 @@ class BrowserService:
                           self._proxy(self.settings.proxy_url if proxy is None else proxy))
         if not (inspect.iscoroutinefunction(action) or inspect.iscoroutinefunction(getattr(action, "__call__", None))):
             # V1 的同步 action 必须收到同步 Page，否则 click 等调用不会执行。
-            async with self._serial:
-                task = asyncio.create_task(asyncio.to_thread(self._run_sync, url, action,
+            if self._serial.locked():
+                with waiting_phase("等待浏览器执行名额"):
+                    await self._serial.acquire()
+            else:
+                await self._serial.acquire()
+            try:
+                return await run_sync(self._run_sync, url, action,
                     headless=headless, timeout=timeout, cookies=cookies, user_agent=user_agent,
-                    proxy=resolved_proxy))
-                try:
-                    return await asyncio.shield(task)
-                except asyncio.CancelledError:
-                    # 等待工作线程释放浏览器，避免停用返回后仍在执行浏览器操作。
-                    await asyncio.gather(task, return_exceptions=True)
-                    raise
+                    proxy=resolved_proxy)
+            finally:
+                self._serial.release()
         launch_args: dict[str, object] = {"headless": headless}
         if resolved_proxy:
             launch_args["proxy"] = resolved_proxy

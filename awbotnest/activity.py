@@ -12,6 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 from .config import DATA_DIR
+from .workers import run_sync
 
 
 class ActivityTracker:
@@ -20,6 +21,7 @@ class ActivityTracker:
         self._data = self._read()
         self._last_save = 0.0
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._seen_events: set[tuple[str, str]] = set()
         self._seen_success: set[tuple[str, str]] = set()
 
@@ -30,7 +32,8 @@ class ActivityTracker:
         except (OSError, json.JSONDecodeError):
             return {}
 
-    def record(self, plugin_id: str, success: bool, event_id: str | None = None) -> None:
+    def record(self, plugin_id: str, success: bool, event_id: str | None = None,
+               *, persist: bool = True) -> None:
         with self._lock:
             if event_id:
                 key = (str(plugin_id), str(event_id))
@@ -51,13 +54,9 @@ class ActivityTracker:
             values[key] = int(values.get(key, 0)) + 1
             cutoff = int(time.time()) - 8 * 24 * 3600
             self._data = {key: value for key, value in self._data.items() if int(key) >= cutoff}
-            if time.monotonic() - self._last_save < 10:
-                return
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
-            temporary.replace(self.path)
-            self._last_save = time.monotonic()
+            save_due = persist and time.monotonic() - self._last_save >= 10
+        if save_due:
+            self.flush()
 
     def timeline(self, hours: int = 24) -> dict[str, object]:
         hours = max(1, min(int(hours), 168))
@@ -91,12 +90,18 @@ class ActivityTracker:
         return {"buckets": buckets, "totals": dict(totals), "successes": dict(successes)}
 
     def flush(self) -> None:
-        with self._lock:
+        # Disk writes must not hold the in-memory lock used by status requests.
+        # Serialize writers before taking a snapshot so an older flush cannot
+        # overwrite newer counts or race on the shared temporary filename.
+        with self._write_lock:
+            with self._lock:
+                data = {key: dict(value) for key, value in self._data.items()}
             self.path.parent.mkdir(parents=True, exist_ok=True)
             temporary = self.path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(self._data, ensure_ascii=False), encoding="utf-8")
+            temporary.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
             temporary.replace(self.path)
-            self._last_save = time.monotonic()
+            with self._lock:
+                self._last_save = time.monotonic()
 
 
 activity = ActivityTracker()
@@ -127,18 +132,18 @@ async def track_call(plugin_id, callback):
     event_id = uuid4().hex
     scope = {'plugin_id': plugin_id, 'active': True}
     token = _running.set(scope)
-    def record(success):
+    async def record(success):
         try:
-            activity.record(plugin_id, success, event_id)
-            activity.flush()
+            activity.record(plugin_id, success, event_id, persist=False)
+            await run_sync(activity.flush)
         except (OSError, ValueError, TypeError):
             logging.getLogger(__name__).debug('插件活动统计保存失败', exc_info=True)
-    record(False)
     try:
+        await record(False)
         value = callback()
         result = await value if inspect.isawaitable(value) else value
         if result is not False and not (isinstance(result, dict) and result.get('ok') is False):
-            record(True)
+            await record(True)
         return result
     finally:
         scope['active'] = False

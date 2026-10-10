@@ -112,6 +112,7 @@ watch(
       ? window.setInterval(() => refreshPlatformStatus(true).catch(() => {}), 2000)
       : null
   },
+  { immediate: true },
 )
 
 function formatUptime(seconds) {
@@ -201,6 +202,7 @@ function clockLabel(date) {
 function nextRunLabel(job) {
   if (job.running) {
     const progress = job.progress || {}
+    if (progress.status === 'pending') return progress.step || '等待执行'
     return progress.status === 'running' && progress.step
       ? `${progress.step}${(progress.percent ?? progress.progress) != null ? ` · ${progress.percent ?? progress.progress}%` : ''}`
       : '运行中'

@@ -22,6 +22,7 @@ from .notifier import NotificationService
 from .activity import set_current, reset_current, track_call
 from .interactive_profile import InteractiveProfiler
 from .governance import PluginBusyError, PluginQueueTimeout
+from .workers import run_sync
 
 EventCallback = Callable[[Any], Awaitable[Any]]
 TASK_DRAIN_TIMEOUT_SECONDS = 10.0
@@ -412,7 +413,7 @@ class PluginContext:
         async def invoke(*args, **kwargs):
             if inspect.iscoroutinefunction(callback):
                 return await callback(*args, **kwargs)
-            value = await asyncio.to_thread(callback, *args, **kwargs)
+            value = await run_sync(callback, *args, **kwargs)
             return await value if inspect.isawaitable(value) else value
         return self.scheduler.add(self.instance_id, name,
             self._managed(invoke, operation=f"schedule:{name}"), trigger, **fields)
@@ -422,7 +423,7 @@ class PluginContext:
         async def invoke() -> Any:
             if inspect.iscoroutinefunction(callback):
                 return await callback()
-            value = await asyncio.to_thread(callback)
+            value = await run_sync(callback)
             return await value if inspect.isawaitable(value) else value
         return self.scheduler.add_interval(
             self.instance_id, name, self._managed(invoke, operation=f"job:{name}"), seconds=seconds,
@@ -433,7 +434,7 @@ class PluginContext:
         async def invoke() -> Any:
             if inspect.iscoroutinefunction(callback):
                 return await callback()
-            value = await asyncio.to_thread(callback)
+            value = await run_sync(callback)
             return await value if inspect.isawaitable(value) else value
         return self.scheduler.add_cron(self.instance_id, name,
             self._managed(invoke, operation=f"job:{name}"), **fields)

@@ -178,15 +178,18 @@ def create_router(deps) -> APIRouter:
         loaded = runtime.loaded.get(plugin_id)
         context = loaded.context if loaded else None
         wecom_handlers = routes.wecom_handler_count(plugin_id) if loaded else 0
+        execution = runtime.services.governor.status(plugin_id)
         return {"id": plugin_id, "enabled": meta.enabled, "loaded": bool(loaded),
                 "error": meta.error or runtime._errors.get(plugin_id, ""),
                 "handlers": (sum(len(item._handlers) for item in loaded.contexts) + wecom_handlers) if loaded else 0,
                 "wecom_handlers": wecom_handlers,
-                "background_tasks": runtime.services.governor.status(plugin_id)["background_tasks"],
+                "background_tasks": execution["background_tasks"],
+                "pending_tasks": execution.get("pending_tasks", 0),
+                "pending_shutdown_tasks": execution.get("pending_shutdown_tasks", 0),
                 "instances": ([{"id": item.instance_id, "account": item.account_name or "全局实例"}
                                for item in loaded.contexts] if loaded else []),
-                "circuits": runtime.services.governor.status(plugin_id)["circuits"],
-                "policy": runtime.services.governor.status(plugin_id)["policy"],
+                "circuits": execution["circuits"],
+                "policy": execution["policy"],
                 "events": runtime.services.governor.events.query(plugin_id)}
 
     @router.post("/api/plugins/{plugin_id}/events/{event_id}/replay", dependencies=[Depends(require_admin)])

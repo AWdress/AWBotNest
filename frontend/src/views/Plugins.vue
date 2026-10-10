@@ -352,6 +352,7 @@ async function replayEvent(event) {
 function eventLabel(type) {
   return ({
     plugin_enabled: '插件已启动', plugin_disabled: '插件已停止',
+    execution_queued: '等待执行', queue_timeout: '等待超时，未执行',
     execution_started: '开始执行', execution_succeeded: '执行完成',
     execution_failed: '执行失败', execution_cancelled: '执行已取消',
     circuit_opened: '功能已熔断', circuit_rejected: '熔断期间已降级',
@@ -1794,7 +1795,7 @@ onUnmounted(() => {
           <template v-else-if="runtimeData">
             <div class="runtime-summary">
               <span><b>{{ runtimeData.instances.length }}</b><small>运行实例</small></span>
-              <span><b>{{ runtimeData.background_tasks }}</b><small>后台任务</small></span>
+              <span><b>{{ runtimeData.background_tasks }}</b><small>后台任务<template v-if="runtimeData.pending_tasks"> · {{ runtimeData.pending_tasks }} 个排队</template></small></span>
               <span><b>{{ runtimeData.circuits.filter(item => item.open).length }}</b><small>已熔断功能</small></span>
               <span><b>{{ runtimeData.policy.max_concurrency }}</b><small>并发上限</small></span>
             </div>

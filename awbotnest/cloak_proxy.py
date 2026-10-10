@@ -22,6 +22,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from .config import Settings
+from .scheduler import waiting_phase
 
 
 logger = logging.getLogger("awbotnest.cloak")
@@ -74,35 +75,91 @@ class _FreeSessionGate:
     def acquire(self, cancel: threading.Event | None = None,
                 timeout: float = 1800.0) -> _SessionLease | None:
         started = time.monotonic()
-        ticket = object()
+        ticket = self._enqueue()
+        if ticket is None:
+            return None
+        lease = None
+        try:
+            while True:
+                with self._condition:
+                    if cancel is not None and cancel.is_set():
+                        return None
+                    lease, delay = self._try_acquire(ticket, started, timeout)
+                    if lease is None:
+                        self._condition.wait(timeout=delay)
+                        continue
+                self._log_wait(started)
+                return lease
+        except BaseException:
+            if lease is not None:
+                lease.release()
+            raise
+        finally:
+            self._withdraw(ticket)
+
+    async def acquire_async(self, timeout: float = 1800.0) -> _SessionLease | None:
+        """Use the shared FIFO without reserving an executor thread while waiting."""
+        started = time.monotonic()
+        ticket = self._enqueue()
+        if ticket is None:
+            return None
+        lease = None
+        try:
+            lease, delay = self._try_acquire(ticket, started, timeout)
+            if lease is None:
+                with waiting_phase("等待浏览器会话"):
+                    while lease is None:
+                        await asyncio.sleep(delay)
+                        lease, delay = self._try_acquire(ticket, started, timeout)
+            self._log_wait(started)
+            # Deliver a cancellation requested at the claim boundary while this
+            # helper still owns (and can release) the lease. Afterwards returning
+            # to the launch wrapper has no separate task/thread result handoff.
+            await asyncio.sleep(0)
+            return lease
+        except BaseException:
+            if lease is not None:
+                lease.release()
+            raise
+        finally:
+            self._withdraw(ticket)
+
+    def _enqueue(self) -> object | None:
         with self._condition:
             if self._maintenance:
                 raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
             if not _platform_license_key():
                 return None
+            ticket = object()
             self._queue.append(ticket)
-            while True:
-                if cancel is not None and cancel.is_set():
-                    self._remove(ticket)
-                    return None
-                if self._maintenance:
-                    self._remove(ticket)
-                    raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
-                now = time.monotonic()
-                if self._queue and self._queue[0] is ticket and not self._active \
-                        and now >= self._cooldown_until:
-                    self._queue.popleft()
-                    self._active = True
-                    waited = now - started
-                    if waited >= 0.1:
-                        logger.info("CloakBrowser 免费会话排队完成（等待 %.1f 秒）", waited)
-                    return _SessionLease(self)
-                remaining = timeout - (now - started)
-                if remaining <= 0:
-                    self._remove(ticket)
-                    raise TimeoutError("等待 CloakBrowser 免费会话超时")
-                cooldown = max(0.0, self._cooldown_until - now)
-                self._condition.wait(timeout=min(0.25, remaining, cooldown or 0.25))
+            return ticket
+
+    def _try_acquire(self, ticket: object, started: float,
+                     timeout: float) -> tuple[_SessionLease | None, float]:
+        with self._condition:
+            if self._maintenance:
+                raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
+            now = time.monotonic()
+            if self._queue and self._queue[0] is ticket and not self._active \
+                    and now >= self._cooldown_until:
+                self._queue.popleft()
+                self._active = True
+                return _SessionLease(self), 0.0
+            remaining = timeout - (now - started)
+            if remaining <= 0:
+                raise TimeoutError("等待 CloakBrowser 免费会话超时")
+            cooldown = max(0.0, self._cooldown_until - now)
+            return None, min(0.25, remaining, cooldown or 0.25)
+
+    @staticmethod
+    def _log_wait(started: float) -> None:
+        waited = time.monotonic() - started
+        if waited >= 0.1:
+            logger.info("CloakBrowser 免费会话排队完成（等待 %.1f 秒）", waited)
+
+    def _withdraw(self, ticket: object) -> None:
+        with self._condition:
+            self._remove(ticket)
 
     def _remove(self, ticket: object) -> None:
         try:
@@ -310,27 +367,7 @@ def _inherit_launch_proxy(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str |
 
 
 async def _acquire_session_async() -> _SessionLease | None:
-    cancel = threading.Event()
-    task = asyncio.create_task(asyncio.to_thread(_SESSION_GATE.acquire, cancel))
-    try:
-        # Cancelling the caller must not discard a lease already acquired by
-        # the worker thread before its result reaches the event loop.
-        return await asyncio.shield(task)
-    except asyncio.CancelledError:
-        cancel.set()
-        # Disable and shutdown may both cancel the same caller. Finish the
-        # thread handoff even when another cancellation arrives during cleanup.
-        while not task.done():
-            try:
-                await asyncio.shield(task)
-            except asyncio.CancelledError:
-                continue
-            except Exception:
-                break
-        lease = task.result() if not task.cancelled() and task.exception() is None else None
-        if lease is not None:
-            lease.release()
-        raise
+    return await _SESSION_GATE.acquire_async()
 
 
 def _attach_session_lease(target: Any, lease: _SessionLease | None) -> Any:

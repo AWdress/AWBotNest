@@ -1,3 +1,3 @@
 """AWBotNest（Telethon）。"""
 
-__version__ = "2.0.1.1"
+__version__ = "2.0.1.2"

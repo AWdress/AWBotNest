@@ -81,6 +81,14 @@ function jobNextRun(job) {
   return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${clock}`
 }
 
+function jobExecutionLabel(job) {
+  if (!job.running) return jobNextRun(job)
+  const progress = job.progress || {}
+  if (progress.status === 'pending') return progress.step || '等待执行'
+  if (progress.status === 'running') return `已运行 ${progress.duration_seconds || 0} 秒`
+  return progress.step || '正在执行'
+}
+
 const modalTitle = computed(() => ({
   logs: '运行日志',
   network: '网络测试',
@@ -597,9 +605,9 @@ onUnmounted(() => {
         <div v-else-if="modal === 'services'" class="modal-body jobs-list">
           <div v-if="!jobs.length" class="empty">暂无定时任务</div>
           <div v-for="job in jobs" :key="job.id" class="job-row">
-            <span><small>{{ jobOwnerLabel(job) }}</small><strong>{{ jobDisplayName(job) }}</strong><em v-if="job.progress?.status">{{ job.progress.step || '正在运行' }}{{ job.progress.duration_seconds != null ? ` · ${job.progress.duration_seconds} 秒` : '' }}</em></span>
-            <code>{{ job.running && job.progress?.status === 'running' ? `已运行 ${job.progress.duration_seconds || 0} 秒` : (job.running ? '正在执行' : jobNextRun(job)) }}</code>
-            <button class="btn" :disabled="job.running" @click="runJob(job)">{{ job.running ? '运行中' : '执行' }}</button>
+            <span><small>{{ jobOwnerLabel(job) }}</small><strong>{{ jobDisplayName(job) }}</strong><em v-if="job.progress?.status">{{ job.progress.step || (job.progress.status === 'pending' ? '等待执行' : '正在运行') }}{{ job.progress.duration_seconds != null ? ` · ${job.progress.duration_seconds} 秒` : '' }}</em></span>
+            <code>{{ jobExecutionLabel(job) }}</code>
+            <button class="btn" :disabled="job.running" @click="runJob(job)">{{ job.running ? (job.progress?.status === 'pending' ? '等待中' : '运行中') : '执行' }}</button>
           </div>
         </div>
 

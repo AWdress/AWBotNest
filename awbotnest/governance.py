@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable
 import logging
 from telethon.events import StopPropagation
 from .config import DATA_DIR
+from .scheduler import waiting_phase
 logger = logging.getLogger("awbotnest.governance")
 
 
@@ -74,10 +75,12 @@ class CircuitState:
 
 class PluginBusyError(RuntimeError):
     """Admission was rejected; this is not a failure of the plugin callback."""
+    not_started = True
 
 
 class PluginQueueTimeout(TimeoutError):
     """The callback never started before its deadline."""
+    not_started = True
 
 
 def _safe_text(value: str) -> str:
@@ -259,22 +262,24 @@ class PluginGovernor:
             raise RuntimeError(f"插件功能暂时降级：{operation} 连续失败，请稍后重试")
 
         started = time.monotonic()
-        self.events.append(
-            plugin_id, "execution_started", persist=False,
-            operation=operation, data=event_data or {},
-        )
         effective_timeout = policy.timeout_seconds if timeout is None else timeout
         acquired = False
         released = False
+        callback_started = False
         if queued:
             self._pending[plugin_id] = self._pending.get(plugin_id, 0) + 1
+            self.events.append(plugin_id, "execution_queued", persist=False, operation=operation)
         self._executions[plugin_id] = self._executions.get(plugin_id, 0) + 1
         try:
             # Include admission wait in the deadline and run in the caller's
             # task, so a plugin can close its own context without cancelling a
             # separate wait_for parent. Explicit timeout<=0 retains workers.
             async with asyncio.timeout(effective_timeout if effective_timeout > 0 else None):
-                await semaphore.acquire()
+                if queued:
+                    with waiting_phase("等待插件执行名额"):
+                        await semaphore.acquire()
+                else:
+                    await semaphore.acquire()
                 acquired = True
                 if queued:
                     self._remove_pending(plugin_id)
@@ -282,6 +287,11 @@ class PluginGovernor:
                 try:
                     if self._semaphores.get(plugin_id) is not semaphore or plugin_id in self._release_tasks:
                         raise PluginBusyError("插件已停用或正在重新加载")
+                    self.events.append(
+                        plugin_id, "execution_started", persist=False,
+                        operation=operation, data=event_data or {},
+                    )
+                    callback_started = True
                     result = await self._invoke(func)
                 finally:
                     semaphore.release()
@@ -297,14 +307,16 @@ class PluginGovernor:
         except asyncio.CancelledError:
             self.events.append(plugin_id, "execution_cancelled", operation=operation)
             raise
-        except (PluginBusyError, PluginQueueTimeout):
+        except (PluginBusyError, PluginQueueTimeout) as exc:
             # Nested capability calls may also be waiting on a saturated
             # provider. Overload must not open the caller's circuit either.
+            if callback_started:
+                exc.not_started = False
             raise
         except TimeoutError as exc:
             if not acquired:
                 self.events.append(
-                    plugin_id, "queue_timeout", persist=False, operation=operation,
+                    plugin_id, "queue_timeout", operation=operation,
                 )
                 raise PluginQueueTimeout("等待插件任务执行超时") from None
             circuit.failures += 1
