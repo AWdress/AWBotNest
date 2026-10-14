@@ -618,7 +618,7 @@ onUnmounted(() => {
               <div class="about-mark">
                 <img :src="logoWhite" alt="AWBotNest Logo">
               </div>
-              <div>
+              <div class="about-brand">
                 <h2>{{ about.name }}</h2>
                 <p>插件化机器人</p>
               </div>
@@ -809,7 +809,7 @@ onUnmounted(() => {
 }
 .control-modal {
   width: min(1040px, 94vw); max-height: 88vh; overflow: hidden; display: flex; flex-direction: column;
-  position: relative;
+  position: relative; min-width: 0;
   border: 1px solid var(--border-light); border-radius: 16px; background: var(--bg-card); box-shadow: var(--shadow-float);
 }
 .control-modal.theme-dialog { width: min(520px, calc(100vw - 40px)); max-height: 420px; }
@@ -868,7 +868,8 @@ onUnmounted(() => {
 .job-row small { color: var(--text-muted); }
 .job-row em { display: block; margin-top: 4px; color: var(--success); font-size: 11px; font-style: normal; }
 .job-row code { color: var(--text-secondary); }
-.about-modal { display: flex; flex-direction: column; gap: 24px; }
+.about-modal { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.about-modal > * { min-width: 0; flex-shrink: 0; }
 .about-hero {
   display: flex; align-items: center; gap: 14px; padding: 18px;
   border: 1px solid var(--border); border-radius: 14px;
@@ -880,14 +881,15 @@ onUnmounted(() => {
   overflow: hidden; box-shadow: 0 10px 24px rgba(47,128,237,.22);
 }
 .about-mark img { width: 46px; height: 46px; object-fit: contain; }
+.about-brand { min-width: 0; overflow-wrap: anywhere; }
 .about-hero h2 { margin: 0; font-size: 22px; }
 .about-hero p { margin: 4px 0 0; color: var(--text-secondary); }
 .about-current { margin-left: auto; padding: 6px 11px; border-radius: 99px; background: var(--accent-dim); color: var(--accent); font-weight: 700; }
 .about-info-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.about-info-grid > div { padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--bg-elevated); }
+.about-info-grid > div { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 11px; background: var(--bg-elevated); }
 .about-info-grid span, .about-info-grid strong { display: block; }
 .about-info-grid span { color: var(--text-muted); font-size: 11px; }
-.about-info-grid strong { margin-top: 6px; overflow: hidden; color: var(--text-primary); text-overflow: ellipsis; white-space: nowrap; }
+.about-info-grid strong { margin-top: 6px; color: var(--text-primary); white-space: normal; overflow-wrap: anywhere; }
 .about-section h3 { margin: 0 0 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 17px; }
 .about-links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .about-links a { padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-elevated); color: var(--accent); text-align: center; }
@@ -943,7 +945,7 @@ onUnmounted(() => {
   .notifications-pop { width: calc(100vw - 16px); max-width: calc(100vw - 16px); box-sizing: border-box; }
   .notice-content { word-break: break-word; overflow-wrap: anywhere; }
   .control-modal-mask { padding: 0; }
-  .control-modal { width: 100vw; max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
+  .control-modal { width: 100%; max-height: 100dvh; height: 100dvh; border-radius: 0; border: 0; }
   .control-modal .modal-body { padding: 14px; }
   .log-level-tabs { width: 100%; overflow-x: auto; }
   .log-level-tabs button { flex: 1 0 auto; }
@@ -953,10 +955,11 @@ onUnmounted(() => {
   .check-grid { grid-template-columns: 1fr; }
   .job-row { grid-template-columns: 1fr auto; }
   .job-row code { grid-column: 1; }
-  .about-info-grid { grid-template-columns: 1fr 1fr; }
+  .about-info-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .about-links { grid-template-columns: 1fr; }
-  .about-hero { align-items: flex-start; flex-wrap: wrap; }
-  .about-current { margin-left: 0; }
+  .about-hero { display: grid; grid-template-columns: 58px minmax(0, 1fr); row-gap: 6px; }
+  .about-mark { grid-row: span 2; }
+  .about-current { grid-column: 2; justify-self: start; max-width: 100%; margin-left: 0; overflow-wrap: anywhere; }
   .version-row { align-items: flex-start; flex-direction: column; }
   .version-row .btn { width: 100%; }
   .control-pop.user-pop {
