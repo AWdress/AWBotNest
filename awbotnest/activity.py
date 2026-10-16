@@ -4,7 +4,6 @@ import json
 import time
 import threading
 import contextvars
-import functools
 import inspect
 import logging
 from uuid import uuid4
@@ -12,6 +11,7 @@ from collections import Counter
 from pathlib import Path
 
 from .config import DATA_DIR
+from .compat import wraps
 from .workers import run_sync
 
 
@@ -159,7 +159,7 @@ def install_client_hooks(client):
         if not callable(original):
             continue
         def wrap(fn):
-            @functools.wraps(fn)
+            @wraps(fn)
             async def wrapped(*args, **kwargs):
                 current = _current_plugin.get()
                 if current:

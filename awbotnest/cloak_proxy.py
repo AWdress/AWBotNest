@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import importlib
 import inspect
 import logging
@@ -22,6 +21,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from .config import Settings
+from .compat import wraps
 from .scheduler import waiting_phase
 
 
@@ -379,7 +379,7 @@ def _attach_session_lease(target: Any, lease: _SessionLease | None) -> Any:
         raise RuntimeError("CloakBrowser 返回对象缺少 close()，无法管理免费会话")
     state = {"closing": False}
     if inspect.iscoroutinefunction(close):
-        @functools.wraps(close)
+        @wraps(close)
         async def async_close(*args: Any, **kwargs: Any) -> Any:
             state["closing"] = True
             try:
@@ -393,7 +393,7 @@ def _attach_session_lease(target: Any, lease: _SessionLease | None) -> Any:
 
         target.close = async_close
     else:
-        @functools.wraps(close)
+        @wraps(close)
         def sync_close(*args: Any, **kwargs: Any) -> Any:
             state["closing"] = True
             try:
@@ -428,7 +428,7 @@ def _wrap_launch(function: Callable[..., Any]) -> Callable[..., Any]:
     if getattr(function, "__awbotnest_cloak_proxy__", False):
         return function
     if inspect.iscoroutinefunction(function):
-        @functools.wraps(function)
+        @wraps(function)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             resolved, request_proxy = _inherit_launch_proxy(kwargs)
             outermost = _launch_depth.get() == 0
@@ -448,7 +448,7 @@ def _wrap_launch(function: Callable[..., Any]) -> Callable[..., Any]:
 
         wrapper = async_wrapper
     else:
-        @functools.wraps(function)
+        @wraps(function)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
             resolved, request_proxy = _inherit_launch_proxy(kwargs)
             outermost = _launch_depth.get() == 0
@@ -484,7 +484,7 @@ class _ProxyingHttpx:
         if name not in _HTTPX_REQUEST_FUNCTIONS or not callable(value):
             return value
 
-        @functools.wraps(value)
+        @wraps(value)
         def request_with_proxy(*args: Any, **kwargs: Any) -> Any:
             if "proxy" not in kwargs:
                 proxy = _effective_request_proxy()
@@ -506,7 +506,7 @@ def _patch_geoip_download(module: Any) -> None:
     if not callable(original) or getattr(original, "__awbotnest_cloak_proxy__", False):
         return
 
-    @functools.wraps(original)
+    @wraps(original)
     def download_geoip(dest: Path) -> None:
         proxy = _effective_request_proxy()
         if not proxy:

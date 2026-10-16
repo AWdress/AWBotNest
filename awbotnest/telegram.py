@@ -4,6 +4,7 @@ import asyncio
 import logging
 import json
 import errno
+import inspect
 import re
 import socket
 import time
@@ -14,6 +15,8 @@ from urllib.parse import urlparse
 
 from telethon import TelegramClient
 from telethon.errors import (
+    AccessTokenExpiredError, AccessTokenInvalidError, ApiIdInvalidError,
+    AuthKeyError, UnauthorizedError,
     PasswordHashInvalidError, PhoneCodeInvalidError, ServerError,
     SessionPasswordNeededError, TimedOutError,
 )
@@ -50,6 +53,10 @@ class TelegramAccounts:
         self._lock = asyncio.Lock()
         self._connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._recovery_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
+        self._disconnect_watchers: dict[
+            tuple[str, str], tuple[TelegramClient, asyncio.Task[None]]
+        ] = {}
+        self._permanent_disconnects: dict[tuple[str, str], TelegramClient] = {}
         self._recovery_refresh_lock = asyncio.Lock()
         self._suppressed_users: set[str] = set()
         self._stopping = False
@@ -172,10 +179,106 @@ class TelegramAccounts:
         if clients.get(account_id) is client:
             clients.pop(account_id, None)
         if client is not None:
+            await self._unwatch_client(kind, account_id, client)
             try:
                 await client.disconnect()
             except Exception:
                 logger.debug("账号 %s 连接清理失败", account_id, exc_info=True)
+
+    @staticmethod
+    def _permanent_connection_error(exc: object) -> bool:
+        return isinstance(exc, (
+            UnauthorizedError, AuthKeyError, ApiIdInvalidError,
+            AccessTokenInvalidError, AccessTokenExpiredError,
+        ))
+
+    def _watch_client(self, kind: str, account_id: str, client: TelegramClient) -> None:
+        """Watch terminal disconnection, not Telethon's in-place TCP retries."""
+        if self._stopping:
+            return
+        key = (kind, account_id)
+        existing = self._disconnect_watchers.get(key)
+        if existing is not None:
+            if existing[0] is client and not existing[1].done():
+                return
+            existing[1].cancel()
+        # Some integrations expose only the send methods; real Telethon clients
+        # always expose this public awaitable.
+        disconnected = getattr(client, "disconnected", None)
+        if not inspect.isawaitable(disconnected):
+            return
+        disconnected = asyncio.ensure_future(disconnected)
+
+        def consumed(done: asyncio.Future) -> None:
+            # Also consume errors if the observer is cancelled before its first
+            # turn, before shield() has attached its own completion callback.
+            if not done.cancelled():
+                done.exception()
+
+        disconnected.add_done_callback(consumed)
+        self._permanent_disconnects.pop(key, None)
+        task = asyncio.create_task(
+            self._watch_disconnect(kind, account_id, client, disconnected),
+            name=f"telegram-disconnect:{kind}:{account_id}",
+        )
+        self._disconnect_watchers[key] = (client, task)
+
+        def finished(done: asyncio.Task[None]) -> None:
+            current = self._disconnect_watchers.get(key)
+            if current is not None and current[1] is done:
+                self._disconnect_watchers.pop(key, None)
+            if not done.cancelled():
+                done.exception()
+
+        task.add_done_callback(finished)
+
+    async def _unwatch_client(self, kind: str, account_id: str, client) -> None:
+        key = (kind, account_id)
+        if self._permanent_disconnects.get(key) is client:
+            self._permanent_disconnects.pop(key, None)
+        current = self._disconnect_watchers.get(key)
+        if current is None or current[0] is not client:
+            return
+        self._disconnect_watchers.pop(key, None)
+        task = current[1]
+        if task is not asyncio.current_task():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _watch_disconnect(self, kind: str, account_id: str, client,
+                                disconnected: Awaitable[object]) -> None:
+        error: Exception | None = None
+        try:
+            # Cancelling this observer must never cancel a client's shared
+            # disconnection future or another observer waiting on it.
+            await asyncio.shield(disconnected)
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise
+        except Exception as exc:
+            error = exc
+        clients = self.bots if kind == "bot" else self.users
+        if (self._stopping or clients.get(account_id) is not client
+                or (kind == "user" and account_id in self._suppressed_users)):
+            return
+        if client.is_connected():
+            # DC migration can finish the old future and reconnect this same
+            # client before we resume. Preserve its handlers and watch the new
+            # connection rather than restarting otherwise healthy plugins.
+            current = self._disconnect_watchers.get((kind, account_id))
+            if current is not None and current[1] is asyncio.current_task():
+                self._disconnect_watchers.pop((kind, account_id), None)
+            self._watch_client(kind, account_id, client)
+            return
+        update_error = getattr(client, "_updates_error", None)
+        if self._permanent_connection_error(error) or self._permanent_connection_error(update_error):
+            self._permanent_disconnects[(kind, account_id)] = client
+            logger.warning("账号 %s 凭据或会话已失效，请重新登录", account_id)
+            return
+        reason = update_error or error
+        logger.warning("账号 %s 已断开，将自动恢复%s", account_id,
+                       f"（{type(reason).__name__}）" if reason else "")
+        self._schedule_recovery(kind, account_id)
 
     def _connection_failed(self, kind: str, account_id: str, exc: Exception,
                            retry: bool) -> bool | None:
@@ -193,10 +296,15 @@ class TelegramAccounts:
         key = (kind, account_id)
         if self._stopping or (kind == "user" and account_id in self._suppressed_users):
             return
-        if key in self._recovery_tasks:
+        existing = self._recovery_tasks.get(key)
+        if existing is not None and not existing.done():
             return
-        task = asyncio.create_task(self._recover_account(kind, account_id),
-                                   name=f"telegram-recovery:{kind}:{account_id}")
+        clients = self.bots if kind == "bot" else self.users
+        disconnected_client = clients.get(account_id)
+        task = asyncio.create_task(
+            self._recover_account(kind, account_id, disconnected_client=disconnected_client),
+            name=f"telegram-recovery:{kind}:{account_id}",
+        )
         self._recovery_tasks[key] = task
 
         def finished(done: asyncio.Task[None]) -> None:
@@ -207,30 +315,56 @@ class TelegramAccounts:
 
         task.add_done_callback(finished)
 
-    async def _recover_account(self, kind: str, account_id: str) -> None:
+    async def _recover_account(self, kind: str, account_id: str, *,
+                               disconnected_client=None) -> None:
+        key = (kind, account_id)
         delay = self._retry_delay
         refresh_failures = 0
         while not self._stopping:
             await asyncio.sleep(delay)
             if self._stopping:
                 return
+            clients = self.bots if kind == "bot" else self.users
+            blocked = self._permanent_disconnects.get(key)
+            if blocked is not None and clients.get(account_id) is blocked:
+                return
             if kind == "user":
                 if account_id in self._suppressed_users or account_id not in self.settings.user_sessions:
                     return
-                result = await self._start_user(account_id, retry=False)
             else:
                 spec = next((item for item in self.settings.bot_specs()
                              if item.id == account_id and item.token), None)
                 if spec is None:
                     return
+            current = clients.get(account_id)
+            connecting = getattr(getattr(current, "_sender", None), "_connect_lock", None)
+            if (current is not None and not current.is_connected()
+                    and connecting is not None and connecting.locked()):
+                # A slow DC migration owns this client while its new transport
+                # handshakes. Do not disconnect it or open the same session in
+                # parallel; failed handshakes release the lock for our retry.
+                continue
+            if kind == "user":
+                result = await self._start_user(account_id, retry=False)
+            else:
                 result = await self._start_bot(spec, retry=False)
             if result is None:
                 return  # Invalid credentials/session require an administrator.
             if result:
+                connected = clients.get(account_id)
+                if connected is None or not connected.is_connected():
+                    continue
+                if connected is disconnected_client:
+                    # Telethon completed a DC switch itself during our retry
+                    # delay; its event handlers are still attached.
+                    self._watch_client(kind, account_id, connected)
+                    return
                 try:
                     async with self._recovery_refresh_lock:
                         if self._stopping or (kind == "user" and account_id in self._suppressed_users):
                             return
+                        if clients.get(account_id) is not connected or not connected.is_connected():
+                            continue
                         if self.on_recovered is not None:
                             await self.on_recovered(kind, account_id)
                 except Exception:
@@ -238,6 +372,11 @@ class TelegramAccounts:
                     log = logger.warning if refresh_failures == 1 else logger.debug
                     log("账号 %s 已连接，插件绑定失败，将重试", account_id, exc_info=True)
                     delay = min(60.0, max(self._retry_delay, delay * 2))
+                    continue
+                # A new connection can fail while plugin bindings are being
+                # refreshed. Its watcher cannot start a duplicate recovery task,
+                # so keep this one alive until the replacement is really online.
+                if clients.get(account_id) is not connected or not connected.is_connected():
                     continue
                 logger.info("账号 %s 已恢复在线", account_id)
                 return
@@ -254,7 +393,11 @@ class TelegramAccounts:
         self._stopping = True
         tasks = [task for task in self._recovery_tasks.values()
                  if task is not asyncio.current_task()]
+        tasks.extend(task for _, task in self._disconnect_watchers.values()
+                     if task is not asyncio.current_task())
         self._recovery_tasks.clear()
+        self._disconnect_watchers.clear()
+        self._permanent_disconnects.clear()
         for task in tasks:
             task.cancel()
         if tasks:
@@ -270,6 +413,7 @@ class TelegramAccounts:
         async with self._connection_locks.setdefault(key, asyncio.Lock()):
             existing = self.bots.get(bot_spec.id)
             if existing is not None and existing.is_connected():
+                self._watch_client("bot", bot_spec.id, existing)
                 return True
             await self._discard_client("bot", bot_spec.id, existing)
             bot = None
@@ -280,6 +424,7 @@ class TelegramAccounts:
                     await self._discard_client("bot", bot_spec.id, bot)
                     return None
                 self.bots[bot_spec.id] = bot
+                self._watch_client("bot", bot_spec.id, bot)
                 try:
                     await asyncio.wait_for(self._cache_profile(f"bot_{bot_spec.id}", bot), timeout=15)
                 except Exception:
@@ -305,6 +450,7 @@ class TelegramAccounts:
             return None
         existing = self.users.get(session_name)
         if existing is not None and existing.is_connected():
+            self._watch_client("user", session_name, existing)
             return True
         await self._discard_client("user", session_name, existing)
         session_path = self.sessions_dir / session_name
@@ -323,6 +469,7 @@ class TelegramAccounts:
                 await self._discard_client("user", session_name, client)
                 return None
             self.users[session_name] = client
+            self._watch_client("user", session_name, client)
             try:
                 profile = await asyncio.wait_for(self._cache_profile(session_name, client), timeout=15)
                 self._remember_notification_target(session_name, profile)
@@ -397,6 +544,7 @@ class TelegramAccounts:
         self._pending_logins.pop(session_name, None)
         self._suppressed_users.discard(session_name)
         self.users[session_name] = client
+        self._watch_client("user", session_name, client)
         me = await client.get_me()
         try:
             profile = await self._cache_profile(session_name, client)

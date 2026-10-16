@@ -78,8 +78,8 @@ jobs:
           push: false
           load: true
           tags: awbotnest_v2:ci
-          cache-from: type=gha,scope=awbotnest-${{ matrix.arch }}
-          cache-to: type=gha,scope=awbotnest-${{ matrix.arch }},mode=max
+          cache-from: type=gha,scope=awbotnest-protected-${{ matrix.arch }}
+          cache-to: type=gha,scope=awbotnest-protected-${{ matrix.arch }},mode=min
       - name: 校验镜像架构
         env:
           EXPECTED_PLATFORM: ${{ matrix.platform }}

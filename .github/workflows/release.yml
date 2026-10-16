@@ -60,8 +60,8 @@ jobs:
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=awbotnest-${{ matrix.arch }}
-          cache-to: type=gha,scope=awbotnest-${{ matrix.arch }},mode=max
+          cache-from: type=gha,scope=awbotnest-protected-${{ matrix.arch }}
+          cache-to: type=gha,scope=awbotnest-protected-${{ matrix.arch }},mode=min
       - name: 保存架构镜像摘要
         env:
           DIGEST: ${{ steps.build.outputs.digest }}

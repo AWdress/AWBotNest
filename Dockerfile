@@ -9,7 +9,7 @@ RUN npm install
 COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.13-slim-bookworm
+FROM python:3.13-slim-bookworm AS runtime-base
 
 WORKDIR /app
 
@@ -27,13 +27,30 @@ RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml README.md VERSION ./
+FROM runtime-base AS core-build
+
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir Nuitka==4.3
 COPY awbotnest ./awbotnest
+COPY scripts/build_image_core.py ./build_image_core.py
+# Build on each target's native runner; do not export C sources or compiler tools.
+RUN python build_image_core.py --output /compiled
+
+FROM runtime-base AS runtime
+
+COPY README.md VERSION ./
+COPY --from=core-build /compiled/awbotnest*.so ./
+COPY --from=core-build /nuitka-licenses/ /usr/share/licenses/nuitka/
+COPY scripts/image_entrypoint.py ./run.py
 COPY plugins ./plugins
 COPY --from=frontend /app/static ./static
 
-RUN pip install --no-cache-dir --no-deps . \
-    && mkdir -p data sessions plugins
+RUN chmod +x /app/run.py \
+    && ln -s /app/run.py /usr/local/bin/awbotnest \
+    && mkdir -p data sessions plugins \
+    && python -c "from pathlib import Path; import awbotnest; from awbotnest.config import APP_ROOT; assert hasattr(awbotnest, '__compiled__'); assert APP_ROOT == Path('/app'); assert not Path('/app/awbotnest').exists()"
 
 # Keep xvfb-run away from PID 1: its X-server readiness handshake uses signals.
 # Native AMD64/ARM64 builds both check Xvfb and the target Chromium runtime.
@@ -46,4 +63,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:18001/readyz', timeout=3)" || exit 1
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--"]
-CMD ["xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "-m", "awbotnest.main"]
+CMD ["xvfb-run", "-a", "-e", "/dev/stderr", "-s", "-screen 0 1920x1080x24 -nolisten tcp", "python", "/app/run.py"]
