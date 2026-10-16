@@ -86,3 +86,42 @@ jobs:
         run: |
           ACTUAL_PLATFORM=$(docker image inspect awbotnest_v2:ci --format '{{.Os}}/{{.Architecture}}')
           test "$ACTUAL_PLATFORM" = "$EXPECTED_PLATFORM"
+      - name: 验证编译镜像启动与就绪
+        run: |
+          # Disposable container: no credentials, external network or host data.
+          docker run -d --network none --name awbotnest-ci awbotnest_v2:ci
+          trap 'docker rm -fv awbotnest-ci >/dev/null 2>&1 || true' EXIT
+          READY=false
+          for ATTEMPT in $(seq 1 30); do
+            if docker exec awbotnest-ci python -c "import json, urllib.request; result = json.load(urllib.request.urlopen('http://127.0.0.1:18001/readyz', timeout=3)); assert result['ok'] and result['components']['scheduler']" >/dev/null 2>&1; then
+              READY=true
+              break
+            fi
+            test "$(docker inspect awbotnest-ci --format '{{.State.Running}}')" = true
+            sleep 2
+          done
+          test "$READY" = true
+          docker exec -i awbotnest-ci python - <<'PY'
+          import json
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+          import awbotnest
+          from awbotnest import __version__
+          assert hasattr(awbotnest, '__compiled__')
+          assert __version__ == Path('/app/VERSION').read_text().strip()
+          assert not Path('/app/awbotnest').exists()
+          with urllib.request.urlopen('http://127.0.0.1:18001/openapi.json', timeout=3) as response:
+              assert json.load(response)['info']['version'] == __version__
+          try:
+              urllib.request.urlopen('http://127.0.0.1:18001/api/accounts', timeout=3)
+          except urllib.error.HTTPError as error:
+              assert error.code == 401
+          else:
+              raise AssertionError('Compiled API did not enforce authentication')
+          print('Compiled image startup, readiness and authentication OK')
+          PY
+          docker stop --time 30 awbotnest-ci
+          EXIT_CODE=$(docker inspect awbotnest-ci --format '{{.State.ExitCode}}')
+          # Uvicorn re-raises SIGTERM after graceful shutdown on current Python.
+          test "$EXIT_CODE" = 0 || test "$EXIT_CODE" = 143
