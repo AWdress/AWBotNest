@@ -35,6 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc g++ \
     && pip install --no-cache-dir Nuitka==4.3
 COPY awbotnest ./awbotnest
 COPY scripts/build_image_core.py ./build_image_core.py
+COPY scripts/image_module_entrypoint.py ./image_module_entrypoint.py
 # Build on each target's native runner; do not export C sources or compiler tools.
 RUN python build_image_core.py --output /compiled
 
@@ -42,6 +43,7 @@ FROM runtime-base AS runtime
 
 COPY README.md VERSION ./
 COPY --from=core-build /compiled/awbotnest*.so ./
+COPY --from=core-build /compiled/awbotnest/main.py ./awbotnest/main.py
 COPY --from=core-build /nuitka-licenses/ /usr/share/licenses/nuitka/
 COPY scripts/image_entrypoint.py ./run.py
 COPY plugins ./plugins
@@ -50,7 +52,7 @@ COPY --from=frontend /app/static ./static
 RUN chmod +x /app/run.py \
     && ln -s /app/run.py /usr/local/bin/awbotnest \
     && mkdir -p data sessions plugins \
-    && python -c "from pathlib import Path; import awbotnest; from awbotnest.config import APP_ROOT; assert hasattr(awbotnest, '__compiled__'); assert APP_ROOT == Path('/app'); assert not Path('/app/awbotnest').exists()"
+    && python -c "from pathlib import Path; import awbotnest; import awbotnest.main; from awbotnest.config import APP_ROOT; assert hasattr(awbotnest, '__compiled__'); assert hasattr(awbotnest.main, '__compiled__'); assert APP_ROOT == Path('/app'); assert sorted(p.name for p in Path('/app/awbotnest').iterdir()) == ['main.py']"
 
 # Keep xvfb-run away from PID 1: its X-server readiness handshake uses signals.
 # Native AMD64/ARM64 builds both check Xvfb and the target Chromium runtime.
