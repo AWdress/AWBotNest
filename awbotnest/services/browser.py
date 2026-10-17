@@ -16,6 +16,7 @@ import httpx
 from ..config import DATA_DIR, Settings
 from ..cloak_proxy import CLOAKBROWSER_INSTALL_REQUIREMENT
 from ..deps import DependencyManager
+from ..governance import pause_browser_queue_timeout
 from ..workers import run_sync
 from ..scheduler import waiting_phase
 
@@ -91,35 +92,41 @@ class BrowserService:
     async def run(self, url: str, action: Callable[[Any], Any], *, headless: bool = True,
                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
                   user_agent: str = "", ua: str | None = None, proxy=None) -> Any:
-        if self.engine == "cloakbrowser" and not self._dependencies_ready:
-            async with self._dependency_lock:
-                if not self._dependencies_ready:
-                    await DependencyManager(self.settings).ensure(
-                        [CLOAKBROWSER_INSTALL_REQUIREMENT],
-                        plugin_name="CloakBrowser 浏览器引擎", target_only=True,
-                    )
-                    self._dependencies_ready = True
-        user_agent = user_agent or ua or ""
-        # Preserve explicit direct mode for CloakBrowser's inheritance wrapper.
-        resolved_proxy = (False if proxy is False or proxy == "" else
-                          self._proxy(self.settings.proxy_url if proxy is None else proxy))
-        if not (inspect.iscoroutinefunction(action) or inspect.iscoroutinefunction(getattr(action, "__call__", None))):
-            # V1 的同步 action 必须收到同步 Page，否则 click 等调用不会执行。
-            if self._serial.locked():
-                with waiting_phase("等待浏览器执行名额"):
-                    await self._serial.acquire()
-            else:
-                await self._serial.acquire()
-            try:
+        # Both action styles share a FIFO queue. Waiting for another browser is
+        # not a failed/skipped execution and does not consume its action timeout.
+        with pause_browser_queue_timeout(), waiting_phase("等待浏览器执行名额"):
+            await self._serial.acquire()
+        try:
+            if self.engine == "cloakbrowser" and not self._dependencies_ready:
+                async with self._dependency_lock:
+                    if not self._dependencies_ready:
+                        await DependencyManager(self.settings).ensure(
+                            [CLOAKBROWSER_INSTALL_REQUIREMENT],
+                            plugin_name="CloakBrowser 浏览器引擎", target_only=True,
+                        )
+                        self._dependencies_ready = True
+            user_agent = user_agent or ua or ""
+            # Preserve explicit direct mode for CloakBrowser's inheritance wrapper.
+            resolved_proxy = (False if proxy is False or proxy == "" else
+                              self._proxy(self.settings.proxy_url if proxy is None else proxy))
+            if not (inspect.iscoroutinefunction(action)
+                    or inspect.iscoroutinefunction(getattr(action, "__call__", None))):
+                # V1 的同步 action 必须收到同步 Page，否则 click 等调用不会执行。
                 return await run_sync(self._run_sync, url, action,
                     headless=headless, timeout=timeout, cookies=cookies, user_agent=user_agent,
                     proxy=resolved_proxy)
-            finally:
-                self._serial.release()
+            return await self._run_async(url, action, headless=headless, timeout=timeout,
+                                         cookies=cookies, user_agent=user_agent, proxy=resolved_proxy)
+        finally:
+            # run_sync drains its native worker; _run_async drains its cleanup.
+            # Neither may release this permit while its browser is still alive.
+            self._serial.release()
+
+    async def _run_async(self, url, action, *, headless, timeout, cookies, user_agent, proxy):
         launch_args: dict[str, object] = {"headless": headless}
-        if resolved_proxy:
-            launch_args["proxy"] = resolved_proxy
-        elif resolved_proxy is False and self.engine == "cloakbrowser":
+        if proxy:
+            launch_args["proxy"] = proxy
+        elif proxy is False and self.engine == "cloakbrowser":
             launch_args["proxy"] = None
         playwright = browser = context = None
         try:
@@ -148,6 +155,11 @@ class BrowserService:
             value = action(page)
             return await asyncio.wait_for(value, timeout=timeout) if isinstance(value, Awaitable) else value
         finally:
+            await self._close_async(context, browser, playwright)
+
+    @staticmethod
+    async def _close_async(context, browser, playwright) -> None:
+        async def close_resources():
             try:
                 if context is not None:
                     await context.close()
@@ -158,6 +170,23 @@ class BrowserService:
                 finally:
                     if playwright is not None:
                         await playwright.stop()
+
+        # A repeated cancellation must not interrupt close() and admit the next
+        # queued browser while this one still consumes memory or a free seat.
+        cleanup = asyncio.create_task(close_resources())
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+                except BaseException:
+                    break
+            if not cleanup.cancelled():
+                cleanup.exception()
+            raise
 
     async def page_source(self, url: str, **kwargs: Any) -> str:
         def source(page):

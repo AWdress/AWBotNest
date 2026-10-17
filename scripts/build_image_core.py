@@ -25,14 +25,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-def api_app():
+def api_app(settings=None, runtime=None):
     from awbotnest.api import create_app
     from awbotnest.config import Settings
     from awbotnest.routing import PluginRoutes
     from awbotnest.scheduler import PluginScheduler
 
     return create_app(
-        Settings(), SimpleNamespace(), SimpleNamespace(), PluginScheduler(),
+        Settings() if settings is None else settings,
+        SimpleNamespace(), SimpleNamespace() if runtime is None else runtime, PluginScheduler(),
         PluginRoutes(), market=SimpleNamespace(clear_cache=lambda: None),
     )
 
@@ -61,11 +62,61 @@ def verify_interfaces() -> None:
     # account, credentials, config file or external service is used here.
     if not inspect.iscoroutinefunction(admin_dependency(Settings())):
         raise RuntimeError("Compiled async dependencies lost coroutine metadata")
-    with TestClient(api_app()) as client:
+    class OfflineHttp:
+        def __init__(self):
+            self.calls = []
+
+        async def get(self, url, *, timeout):
+            self.calls.append((url, timeout))
+            return SimpleNamespace(status_code=200)
+
+    http = OfflineHttp()
+    settings = Settings(admin_token="image-build-only-auth")
+    runtime = SimpleNamespace(services=SimpleNamespace(http=http))
+    with TestClient(api_app(settings, runtime)) as client:
         if client.get("/api/accounts").status_code != 401:
             raise RuntimeError("Compiled API did not enforce authentication")
         if client.post("/api/auth/login", json={}).status_code != 422:
             raise RuntimeError("Compiled API did not validate request bodies")
+        for method, path in (("GET", "/api/ui/network-targets"), ("POST", "/api/ui/network-test")):
+            if client.request(method, path).status_code != 401:
+                raise RuntimeError("Compiled network diagnostics did not enforce authentication")
+        headers = {"Authorization": f"Bearer {settings.admin_token}"}
+        response = client.get("/api/ui/network-targets", headers=headers)
+        targets = {
+            "telegram": ("Telegram API", "https://api.telegram.org"),
+            "github": ("GitHub API", "https://api.github.com"),
+            "plugin_store": ("插件市场", "https://raw.githubusercontent.com"),
+        }
+        expected = [{"id": key, "name": name, "url": url} for key, (name, url) in targets.items()]
+        if response.status_code != 200 or response.json() != {"targets": expected}:
+            raise RuntimeError("Compiled network target list changed or failed")
+        for key, (_, url) in targets.items():
+            response = client.post("/api/ui/network-test", json={"id": key}, headers=headers)
+            if (response.status_code != 200 or response.json().get("ok") is not True
+                    or http.calls[-1:] != [(url, 12)]):
+                raise RuntimeError("Compiled network diagnostics did not use its fixed target")
+        calls = list(http.calls)
+        response = client.post("/api/ui/network-test", json={"id": "unknown"}, headers=headers)
+        if response.status_code != 404 or http.calls != calls:
+            raise RuntimeError("Compiled network diagnostics accepted an unknown target")
+
+        # These requests exercise the CookieCloud rate state without reading a
+        # saved snapshot, decrypting a payload or writing any Cookie data.
+        response = client.get("/cookiecloud/health")
+        if response.status_code != 503 or response.json() != {"status": "UNCONFIGURED"}:
+            raise RuntimeError("Compiled CookieCloud health failed without configuration")
+        if client.post("/cookiecloud/update", json={}).status_code != 404:
+            raise RuntimeError("Compiled CookieCloud accepted an unconfigured upload")
+        settings.cookie_settings = {"uuid": "image-build-only-uuid", "password": "image-build-only-password"}
+        response = client.get("/cookiecloud/health")
+        if response.status_code != 200 or response.json() != {"status": "OK"}:
+            raise RuntimeError("Compiled CookieCloud health failed with configuration")
+        for method in ("GET", "POST"):
+            if client.request(method, "/cookiecloud/get/image-build-wrong-uuid").status_code != 404:
+                raise RuntimeError("Compiled CookieCloud did not reject an unknown UUID")
+        if client.post("/cookiecloud/update", json={"uuid": "image-build-only-uuid"}).status_code != 400:
+            raise RuntimeError("Compiled CookieCloud did not validate upload contents")
 
     # A source plugin must still import the compiled public interfaces and load
     # through the ordinary plugin loader. Keep the disposable entry out of both

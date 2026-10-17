@@ -16,7 +16,7 @@ from .plugins import PluginRuntime
 from .telegram import TelegramAccounts
 from .scheduler import PluginScheduler
 from .services import PlatformServices
-from .logs import create_file_handler, install_secret_filters, memory_logs
+from .logs import clean_log_history, create_file_handler, install_secret_filters, memory_logs
 from .routing import PluginRoutes
 from .notifier import NotificationService
 from .backup import BackupManager
@@ -25,6 +25,16 @@ from .market import PluginMarket
 from .cloak_proxy import reset_cloakbrowser_runtime
 from .cloak_updates import check_cloakbrowser_update
 from .system_updates import get_system_update_service
+from .resources import MemoryPressureMonitor
+
+
+async def watch_memory_pressure() -> None:
+    monitor = MemoryPressureMonitor()
+    while True:
+        # Sampling is read-only: cancelling it must not delay plugin shutdown
+        # behind a busy worker pool. An in-flight sample may finish on its own.
+        await asyncio.to_thread(monitor.check)
+        await asyncio.sleep(30)
 
 
 async def run_once() -> bool:
@@ -56,14 +66,8 @@ async def _run_configured_once() -> bool:
         cleaner_hour = max(0, min(int(cleaner.get("hour", 3)), 23))
         cleaner_minute = max(0, min(int(cleaner.get("minute", 0)), 59))
         async def clean_logs_job():
-            try:
-                removed = memory_logs.trim(int(cleaner.get("keep_lines", 1000)))
-                logger.info("日志自动清理完成：清理 %d 条，保留 %d 条",
-                            removed, len(memory_logs.recent(1000)))
-                return removed
-            except Exception:
-                logger.exception("定时任务失败：日志自动清理")
-                raise
+            result = clean_log_history(cleaner.get("keep_lines", 1000), automatic=True, handler=memory_logs)
+            return result["removed"]
         scheduler.add_cron(
             "__platform__", "log-cleaner",
             clean_logs_job,
@@ -255,6 +259,7 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
 
     platform_task = asyncio.create_task(initialize_platform())
     server_task = asyncio.create_task(server.serve())
+    memory_pressure_task = asyncio.create_task(watch_memory_pressure(), name="memory-pressure-monitor")
     try:
         # V1 starts the web console independently of Telegram and plugin setup.
         done, _ = await asyncio.wait({platform_task, server_task}, return_when=asyncio.FIRST_COMPLETED)
@@ -275,7 +280,8 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         app.state.platform_ready = False
         restart_watcher.cancel()
         platform_task.cancel()
-        await asyncio.gather(restart_watcher, platform_task, return_exceptions=True)
+        memory_pressure_task.cancel()
+        await asyncio.gather(restart_watcher, platform_task, memory_pressure_task, return_exceptions=True)
         try:
             await app.state.wecom_commands.close()
         except Exception:

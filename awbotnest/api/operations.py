@@ -24,7 +24,7 @@ from ..activity import activity
 from ..auth import token_matches
 from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
-from ..logs import memory_logs
+from ..logs import clean_log_history, memory_logs
 from ..market import normalize_repo
 from ..routing import WebhookRequest
 from .models import *
@@ -265,9 +265,7 @@ def create_router(deps, list_plugins) -> APIRouter:
 
     @router.post("/api/system/clean_logs", dependencies=[Depends(require_admin)])
     async def clean_logs():
-        keep = int(settings.log_cleaner.get("keep_lines", 1000))
-        removed = memory_logs.trim(keep)
-        return {"ok": True, "removed": removed, "kept": min(len(memory_logs.records), keep)}
+        return clean_log_history(settings.log_cleaner.get("keep_lines", 1000), handler=memory_logs)
 
     @router.get("/api/plugins/store", dependencies=[Depends(require_admin)])
     async def plugin_store(refresh: bool = False):

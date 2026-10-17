@@ -1230,15 +1230,15 @@ const cleaningLogs = ref(false)
 async function cleanLogsNow() {
   const ok = await confirm({
     title: '立即清理日志',
-    message: `将清理运行日志和所有插件日志，每个日志保留最近 ${s.value.LOG_CLEANER.keep_lines} 条。确认执行？`,
+    message: '将按已保存的设置清理日志历史，磁盘日志文件不受影响。确认清理？',
     confirmText: '确认清理',
   })
   if (!ok) return
 
   cleaningLogs.value = true
   try {
-    await api.cleanLogs()
-    toast.success('日志已清理完成')
+    const result = await api.cleanLogs()
+    toast.success(`日志清理完成：清理 ${result.removed} 条，保留 ${result.kept} 条`)
   } catch (err) {
     toast.error('清理日志失败：' + err.message)
   } finally {
@@ -3079,7 +3079,7 @@ onBeforeRouteLeave(async () => {
             <div class="maint-heading">
               <div>
                 <div class="maint-name">日志清理</div>
-              <div class="maint-desc muted">定期清理运行日志和插件历史日志，减少磁盘占用。</div>
+              <div class="maint-desc muted">系统与插件共用一份日志历史，按总条数保留；磁盘日志文件不受影响。</div>
               </div>
               <button type="button" class="toggle" :class="{ on: s.LOG_CLEANER.enabled }"
                       :aria-pressed="s.LOG_CLEANER.enabled" aria-label="启用日志清理"
@@ -3097,7 +3097,7 @@ onBeforeRouteLeave(async () => {
                 </div>
               </div>
               <div class="field">
-                <label>每个日志保留条数</label>
+                <label>历史保留条数</label>
                 <input class="input" type="number" min="1" max="1000" v-model.number="s.LOG_CLEANER.keep_lines" />
               </div>
             </div>

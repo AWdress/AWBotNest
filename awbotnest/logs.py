@@ -184,6 +184,28 @@ class MemoryLogHandler(logging.Handler):
 memory_logs = MemoryLogHandler()
 
 
+def clean_log_history(keep: int, *, automatic: bool = False,
+                      handler: MemoryLogHandler | None = None) -> dict[str, int | bool]:
+    """Trim shared console history and leave one persistent result record."""
+    logger = logging.getLogger("awbotnest.logs")
+    mode = "自动" if automatic else "手动"
+    history = memory_logs if handler is None else handler
+    try:
+        history.acquire()
+        try:
+            removed = history.trim(keep)
+            # Keep the count consistent if plugins log from worker threads.
+            # This operation's own result is appended after the snapshot.
+            kept = len(history.records)
+        finally:
+            history.release()
+    except Exception:
+        logger.exception("日志%s清理失败", mode)
+        raise
+    logger.info("日志%s清理完成：清理 %d 条，保留 %d 条", mode, removed, kept)
+    return {"ok": True, "removed": removed, "kept": kept}
+
+
 class PyrogramNoiseFilter(logging.Filter):
     """Drop known framework chatter that is not useful to operators."""
     _noisy = ("PEER_ID_INVALID", "ID not found:", "PeerIdInvalid",

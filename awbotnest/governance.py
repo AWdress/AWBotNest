@@ -10,6 +10,8 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, replace
 from itertools import islice
 from pathlib import Path
@@ -28,6 +30,43 @@ MAX_MEMORY_EVENTS = 1000
 # A UI restart rebuilds the services in the same process. Keep unfinished
 # shutdown work visible to the replacement runtime, not only its old governor.
 _DRAINING_TASKS: dict[str, set[asyncio.Task]] = {}
+
+
+@dataclass
+class _ExecutionDeadline:
+    owner: asyncio.Task | None
+    timeout: asyncio.Timeout | None
+
+
+_execution_deadlines: ContextVar[tuple[_ExecutionDeadline, ...]] = ContextVar(
+    "plugin_execution_deadlines", default=(),
+)
+
+
+@contextmanager
+def pause_browser_queue_timeout():
+    """Exclude only browser admission wait from this task's plugin budgets."""
+    task = asyncio.current_task()
+    loop = asyncio.get_running_loop()
+    paused: list[tuple[asyncio.Timeout, float]] = []
+    for record in _execution_deadlines.get():
+        deadline = record.timeout
+        # ContextVars propagate to child tasks; their parent deadlines must
+        # remain active. An already due timeout must not be revived either.
+        if record.owner is not task or deadline is None or deadline.expired():
+            continue
+        when = deadline.when()
+        remaining = when - loop.time() if when is not None else 0
+        if remaining > 0:
+            deadline.reschedule(None)
+            paused.append((deadline, remaining))
+    try:
+        yield
+    finally:
+        resumed_at = loop.time()
+        for deadline, remaining in paused:
+            if not deadline.expired() and deadline.when() is None:
+                deadline.reschedule(resumed_at + remaining)
 
 
 @dataclass(frozen=True)
@@ -274,7 +313,7 @@ class PluginGovernor:
             # Include admission wait in the deadline and run in the caller's
             # task, so a plugin can close its own context without cancelling a
             # separate wait_for parent. Explicit timeout<=0 retains workers.
-            async with asyncio.timeout(effective_timeout if effective_timeout > 0 else None):
+            async with asyncio.timeout(effective_timeout if effective_timeout > 0 else None) as deadline:
                 if queued:
                     with waiting_phase("等待插件执行名额"):
                         await semaphore.acquire()
@@ -292,7 +331,16 @@ class PluginGovernor:
                         operation=operation, data=event_data or {},
                     )
                     callback_started = True
-                    result = await self._invoke(func)
+                    record = _ExecutionDeadline(asyncio.current_task(), deadline)
+                    token = _execution_deadlines.set((*_execution_deadlines.get(), record))
+                    try:
+                        result = await self._invoke(func)
+                    finally:
+                        # A background child may retain the inherited context
+                        # after this callback finishes. Do not retain its owner
+                        # task/deadline or let it affect a later execution.
+                        record.owner = record.timeout = None
+                        _execution_deadlines.reset(token)
                 finally:
                     semaphore.release()
                     released = True

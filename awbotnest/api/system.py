@@ -319,6 +319,12 @@ def create_router(deps) -> APIRouter:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"ok": True, "job_id": job_id}
 
+    network_targets = {
+        "telegram": ("Telegram API", "https://api.telegram.org"),
+        "github": ("GitHub API", "https://api.github.com"),
+        "plugin_store": ("插件市场", "https://raw.githubusercontent.com"),
+    }
+
     @router.get("/api/ui/network-targets", dependencies=[Depends(require_admin)])
     async def get_network_targets():
         return {"targets": [{"id": key, "name": value[0], "url": value[1]}

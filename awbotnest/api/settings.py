@@ -405,6 +405,8 @@ def create_router(deps) -> APIRouter:
         record_sync("clear", "success", "本地 Cookie 数据已清空")
         return {"ok": True, "sync_status": await cookie_sync_state(), "history": sync_history()}
 
+    cookiecloud_rate: dict[str, list[float]] = {}
+
     def check_cookiecloud_rate(request: Request) -> None:
         client = request.client.host if request.client else "unknown"
         now = time.monotonic()
