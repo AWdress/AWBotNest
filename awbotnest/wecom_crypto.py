@@ -24,6 +24,7 @@ _XML_FIELD = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 _XML_SCALAR_FIELDS = {
     "ToUserName", "FromUserName", "CreateTime", "MsgType", "AgentID", "MsgId", "Content", "Event",
     "MediaId", "PicUrl", "FileName", "FileSize", "EventKey", "ThumbMediaId", "TaskId", "ChangeType",
+    "CardType", "ResponseCode", "QuestionKey", "OptionId",
 }
 _XML_LIST_ITEMS = {
     "SelectedItems": frozenset({"SelectedItem"}),

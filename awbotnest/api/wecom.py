@@ -14,6 +14,7 @@ from ..wecom_config import (callback_member_allowed, channel_config, validate_ca
                             validate_callback_message)
 from ..wecom_crypto import (MAX_CALLBACK_BYTES, WeComCrypto, WeComCryptoError,
                             message_signature, parse_callback_message, parse_xml_fields)
+from ..wecom_messages import WeComButtonUpdate
 
 
 MAX_REPLY_BYTES = 2048
@@ -100,6 +101,19 @@ def _reply_xml(config: dict, sender: str, text: str) -> bytes:
     return ET.tostring(root, encoding="utf-8")
 
 
+def _button_update_xml(config: dict, sender: str, result: WeComButtonUpdate) -> bytes:
+    """The documented passive response disables buttons for the clicking member.
+
+    Protocol: https://developer.work.weixin.qq.com/document/path/90241
+    """
+    root = ET.Element("xml")
+    for key, value in {"ToUserName": sender, "FromUserName": config["corpid"],
+                       "CreateTime": str(int(time.time())), "MsgType": "update_button"}.items():
+        ET.SubElement(root, key).text = value
+    ET.SubElement(ET.SubElement(root, "Button"), "ReplaceName").text = result.replace_name
+    return ET.tostring(root, encoding="utf-8")
+
+
 def create_router(deps) -> APIRouter:
     router = APIRouter(tags=["企业微信回调"])
 
@@ -174,9 +188,17 @@ def create_router(deps) -> APIRouter:
             raise HTTPException(status_code=503, detail="回调服务暂不可用") from None
         if not reply:
             return PlainTextResponse("success", headers={"Cache-Control": "no-store"})
-        if not isinstance(reply, str):
+        if isinstance(reply, WeComButtonUpdate):
+            if (not assistant_consumed or message.get("MsgType") != "event"
+                    or message.get("Event") != "template_card_event"
+                    or not message.get("EventKey", "").startswith("awbn:assistant:")):
+                raise HTTPException(status_code=503, detail="助手按钮回复格式不正确")
+            reply_body = _button_update_xml(config, sender, reply)
+        elif isinstance(reply, str):
+            reply_body = _reply_xml(config, sender, reply)
+        else:
             raise HTTPException(status_code=503, detail="回调服务暂不可用")
-        encrypted = crypto.encrypt(_reply_xml(config, sender, reply))
+        encrypted = crypto.encrypt(reply_body)
         reply_time, reply_nonce = str(int(time.time())), secrets.token_hex(16)
         root = ET.Element("xml")
         for key, value in {"Encrypt": encrypted,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import logging
@@ -175,6 +176,77 @@ class NotificationService:
 
         response = await self._wecom_application_request(config, text, user_id, before_send=before_send)
         return self._wecom_delivery_data(response)
+
+    async def send_wecom_card(self, channel_id: str, user_id: str, *, title: str, text: str,
+                             buttons: list[dict], task_id: str, permission_check=None) -> dict:
+        """Send a private interactive card, without text-command or channel fallback.
+
+        Protocol: https://developer.work.weixin.qq.com/document/path/90236
+        Button keys are opaque interaction references, never executable payloads.
+        """
+        from .wecom_config import callback_member_allowed, channel_config, validate_callback_config
+
+        config = channel_config(self.settings, channel_id)
+        if (config is None or config.get("enabled", True) is not True
+                or config.get("callback_enabled") is not True):
+            raise PermissionError("企业微信消息回调已停用")
+        validate_callback_config(config)
+        if not callback_member_allowed(config, user_id):
+            raise PermissionError("此成员无权接收助手交互消息")
+        if (not isinstance(title, str) or not title.strip() or len(title) > 36
+                or not isinstance(text, str) or len(text) > 160
+                or not isinstance(task_id, str) or not re.fullmatch(r"[A-Za-z0-9_@-]{1,128}", task_id)):
+            raise ValueError("企业微信交互卡片格式不正确")
+        if not isinstance(buttons, list) or not 1 <= len(buttons) <= 6:
+            raise ValueError("企业微信交互卡片需要 1 到 6 个按钮")
+        values = []
+        keys = set()
+        for button in buttons:
+            if not isinstance(button, dict):
+                raise ValueError("企业微信交互按钮格式不正确")
+            label, key = button.get("label"), button.get("key")
+            if (not isinstance(label, str) or not label.strip() or len(label) > 80
+                    or not isinstance(key, str) or not key or len(key.encode("utf-8")) > 1024
+                    or any(ord(char) < 33 or ord(char) == 127 for char in key)
+                    or key in keys):
+                raise ValueError("企业微信交互按钮格式不正确")
+            keys.add(key)
+            values.append({"text": label, "key": key, "type": 0, "style": 1})
+
+        def before_send() -> None:
+            current = channel_config(self.settings, channel_id)
+            if (current is None or current.get("enabled", True) is not True
+                    or current.get("callback_enabled") is not True):
+                raise PermissionError("企业微信消息回调已停用")
+            validate_callback_config(current)
+            if not callback_member_allowed(current, user_id) or any(
+                    current.get(key) != config.get(key)
+                    for key in ("corpid", "agentid", "secret", "proxy", "callback_token", "callback_aes_key")):
+                raise PermissionError("企业微信接收权限或应用配置已变更")
+            if permission_check is not None:
+                permission_check()
+
+        async def deliver() -> dict:
+            before_send()
+            base, token, agentid = await self._wecom_application_token(config)
+            before_send()
+            response = await self._wecom_post(
+                f"{base}/cgi-bin/message/send", params={"access_token": token},
+                json={"touser": user_id, "msgtype": "template_card", "agentid": int(agentid),
+                      "template_card": {"card_type": "button_interaction",
+                                        "source": {"desc": "AWBotNest 助手", "desc_color": 1},
+                                        "main_title": {"title": title}, "sub_title_text": text,
+                                        "task_id": task_id, "button_list": values},
+                      "enable_id_trans": 0, "enable_duplicate_check": 1,
+                      "duplicate_check_interval": 900},
+            )
+            return self._wecom_delivery_data(response)
+
+        try:
+            return await asyncio.wait_for(deliver(), timeout=15)
+        except TimeoutError:
+            # A timed-out POST may already have delivered. Never retry automatically.
+            raise DeliveryUncertain("企业微信交互卡片发送结果未确认；未重复发送") from None
 
     @staticmethod
     def _wecom_media_base(config: dict) -> str:

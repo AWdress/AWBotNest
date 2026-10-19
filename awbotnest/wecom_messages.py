@@ -21,6 +21,18 @@ def valid_wecom_media_id(value: Any) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
+class WeComButtonUpdate:
+    """A passive response that disables the clicked user's card buttons."""
+
+    replace_name: str
+
+    def __post_init__(self) -> None:
+        if (not isinstance(self.replace_name, str) or not self.replace_name.strip()
+                or len(self.replace_name.encode("utf-8")) > 64):
+            raise ValueError("企业微信按钮状态文案格式不正确")
+
+
+@dataclass(frozen=True, slots=True)
 class WeComMedia:
     """已鉴权下载的企业微信媒体；内容与文件名不写入对象摘要。"""
 

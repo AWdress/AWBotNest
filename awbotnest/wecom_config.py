@@ -43,7 +43,8 @@ def validate_callback_message(message: dict, config: dict) -> bool:
     This checks plaintext fields, not the signature/AES envelope.
     """
     scalar_fields = {"ToUserName", "FromUserName", "AgentID", "MsgType", "CreateTime", "MsgId",
-                     "Content", "MediaId", "PicUrl", "FileName", "FileSize", "Event", "EventKey"}
+                     "Content", "MediaId", "PicUrl", "FileName", "FileSize", "Event", "EventKey",
+                     "TaskId", "CardType", "ResponseCode"}
     if (not isinstance(message, dict)
             or any(not isinstance(message[key], str) for key in scalar_fields if key in message)):
         raise ValueError("回调消息字段格式不正确")

@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import logging
+import re
 import secrets
 import time
 import weakref
@@ -28,7 +29,10 @@ ACTIVE = {"queued", "running", "waiting_confirmation", "waiting_input"}
 MAX_IMAGE = 5 * 1024 * 1024
 HELP = ("助手已开启。可以发送文字、图片、文本文件或语音。\n/新会话：开始新的对话\n"
         "/停止：停止当前任务\n/退出助手：恢复普通插件消息")
-COMMANDS = {"/助手", "/退出助手", "/新会话", "/停止", "/确认", "/拒绝", "/选择", "/回答"}
+COMMANDS = {"/助手", "/退出助手", "/新会话", "/停止"}
+RETIRED_DECISIONS = {"/确认", "/拒绝", "/选择", "/回答"}
+BUTTON_PREFIX = b"awbn:assistant:"
+BUTTON_DATA = re.compile(r"awbn:assistant:([cq]):([0-9a-f]{8}):(yes|no|[0-5])")
 
 
 class ChannelDisconnected(ConnectionError):
@@ -171,7 +175,7 @@ class AssistantChannels:
                     raise TimeoutError("Bot 连接尚未恢复，请在网页查看任务记录") from None
                 await asyncio.sleep(min(.25, remaining))
 
-    async def _send(self, item, text):
+    async def _send(self, item, text, *, buttons=None):
         # Split on UTF-8 bytes, never silently truncate an approval preview.
         encoded = str(text).encode("utf-8")
         if len(encoded) > 64000:
@@ -182,16 +186,91 @@ class AssistantChannels:
             chunks.append(part)
             encoded = encoded[len(part.encode("utf-8")):]
         deadline = time.monotonic() + self._delivery_wait_seconds
-        for part in chunks:
+        message_id = None
+        for index, part in enumerate(chunks):
             await self._wait_live(item, deadline=deadline)
             timeout = min(15, max(.001, deadline - time.monotonic()))
             if item["kind"] == "telegram":
-                await asyncio.wait_for(self._bots[item["channel_id"]][0].send_message(
-                    int(item["user_id"]), part, parse_mode=None, link_preview=False), timeout)
+                kwargs = {"parse_mode": None, "link_preview": False}
+                if buttons and index == len(chunks) - 1:
+                    from telethon import Button
+                    kwargs["buttons"] = [[Button.inline(button["label"], button["key"].encode("ascii"))
+                                           for button in row] for row in buttons]
+                message = await asyncio.wait_for(self._bots[item["channel_id"]][0].send_message(
+                    int(item["user_id"]), part, **kwargs), timeout)
+                message_id = getattr(message, "id", None)
             else:
                 await asyncio.wait_for(self.deps.runtime.notifier.send_wecom_text(
                     item["channel_id"], item["user_id"], part,
                     permission_check=lambda: self._live(item)), 15)
+        return message_id
+
+    async def interact(self, kind, channel_id, user_id, identity, receipt_id, data, *,
+                       message_id=None, client=None, task_id=None):
+        """Consume native buttons only; callback data never grants authority."""
+        await self.start()
+        if isinstance(data, bytes):
+            try:
+                data = data.decode("ascii")
+            except UnicodeError:
+                data = ""
+        match = BUTTON_DATA.fullmatch(data) if isinstance(data, str) else None
+        invalid = "按钮已失效，请查看最新消息。"
+        if (not match or len(str(receipt_id)) > 100 or not str(receipt_id)
+                or match[1] == "c" and match[3] not in {"yes", "no"}
+                or match[1] == "q" and not match[3].isdigit()):
+            return invalid
+        user = str(user_id).lower() if kind == "wecom" else str(user_id)
+        key = _id(kind, channel_id, user)
+        async with self._peer_locks.setdefault(key, asyncio.Lock()):
+            item = self._bindings.get(key)
+            if not item or not item.get("enabled") or item.get("identity") != identity:
+                return invalid
+            try:
+                self._live(item)
+            except (PermissionError, ValueError, ChannelDisconnected):
+                return invalid
+            record_kind = "confirmation" if match[1] == "c" else "input"
+            record = item.get(record_kind)
+            if (not record or record.get("expires", 0) <= time.time()
+                    or not secrets.compare_digest(match[2], record.get("code", ""))
+                    or record.get("session_id") != item["session_id"]
+                    or record.get("message_epoch") != item.get("message_epoch", 0)):
+                return invalid
+            if kind == "telegram":
+                if (not self._bots.get(channel_id) or self._bots[channel_id][0] is not client
+                        or type(message_id) is not int or message_id <= 0
+                        or record.get("message_id") != message_id):
+                    return invalid
+            elif kind == "wecom":
+                if not task_id or task_id != record.get("task_id"):
+                    return invalid
+            else:
+                return invalid
+            try:
+                session = await self.assistant.session(item["session_id"])
+                if (session.get("run") or {}).get("id") != record["run_id"]:
+                    return invalid
+                if not await self._claim(key, "button:" + str(receipt_id)):
+                    return invalid
+                self._live(item)
+                if kind == "telegram" and self._bots[channel_id][0] is not client:
+                    return invalid
+                if record_kind == "confirmation":
+                    await self.assistant.confirm(record["run_id"], record["id"], match[3] == "yes")
+                    reply = "已确认。" if match[3] == "yes" else "已拒绝。"
+                else:
+                    index = int(match[3])
+                    if index >= len(record["options"]):
+                        return invalid
+                    await self.assistant.answer(record["run_id"], record["id"], record["options"][index])
+                    reply = "已选择。"
+            except (ValueError, KeyError, PermissionError):
+                return invalid
+            item = {**item, record_kind: None}
+            self._bindings[key] = item
+            await self.store.put("channel_binding", item)
+            return reply
 
     async def _claim(self, item_id, message_id):
         receipt = _id("receipt", item_id, message_id)
@@ -248,6 +327,8 @@ class AssistantChannels:
             return True, "Bot 连接正在恢复，请稍后重发。"
         except (PermissionError, ValueError):
             return False, ""
+        if command in RETIRED_DECISIONS:
+            return True, "请点击消息下方的按钮。"
         if command.startswith("/") and command not in COMMANDS:
             return False, ""
         if command not in COMMANDS and (not item.get("enabled") or not (text.strip() or image_loader or attachment_loader or audio_loader)):
@@ -260,11 +341,17 @@ class AssistantChannels:
                 return True, ""
             self._live(item)
             if command in {"/助手", "/退出助手"}:
-                item = {**item, "enabled": command == "/助手", "message_epoch": item.get("message_epoch", 0) + 1}
-                self._bindings[key] = item
-                await self.store.put("channel_binding", item)
+                entering = command == "/助手"
+                changed = bool(item.get("enabled")) != entering
+                if changed:
+                    item = {**item, "enabled": entering, "message_epoch": item.get("message_epoch", 0) + 1,
+                            "confirmation": None, "input": None}
+                    self._bindings[key] = item
+                    await self.store.put("channel_binding", item)
                 if command == "/退出助手":
                     return True, "已退出助手，后续消息交给原插件处理。"
+                if changed:
+                    await self._resume_watcher(item)
                 if not argument:
                     return True, HELP
                 text = argument
@@ -275,35 +362,6 @@ class AssistantChannels:
                 await self.store.put("channel_binding", item)
                 await self._stop(item)
                 return True, "已停止当前助手任务。"
-            elif command in {"/选择", "/回答"}:
-                values = argument.split(maxsplit=1)
-                question = item.get("input")
-                if (not question or len(values) != 2 or not secrets.compare_digest(values[0].encode(), question["code"].encode())
-                        or question["expires"] <= time.time()
-                        or command == "/选择" and values[1] not in question["options"]
-                        or command == "/回答" and not question.get("allow_custom")):
-                    return True, "选项无效或已过期，请查看最新的问题。"
-                try:
-                    await self.assistant.answer(question["run_id"], question["id"], values[1])
-                except (ValueError, KeyError) as exc:
-                    return True, self.assistant.clean(str(exc), 1000)
-                item = {**item, "input": None}
-                self._bindings[key] = item
-                await self.store.put("channel_binding", item)
-                return True, "已选择。" if command == "/选择" else "已回答。"
-            elif command in {"/确认", "/拒绝"}:
-                confirmation = item.get("confirmation")
-                if (not confirmation or not argument or not secrets.compare_digest(argument.encode(), confirmation["code"].encode())
-                        or confirmation["expires"] <= time.time()):
-                    return True, "确认码无效或已过期，请查看最新的操作预览。"
-                try:
-                    await self.assistant.confirm(confirmation["run_id"], confirmation["id"], command == "/确认")
-                except (ValueError, KeyError) as exc:
-                    return True, self.assistant.clean(str(exc), 1000)
-                item = {**item, "confirmation": None}
-                self._bindings[key] = item
-                await self.store.put("channel_binding", item)
-                return True, "已确认。" if command == "/确认" else "已拒绝。"
             elif command == "/新会话":
                 try:
                     session = await self.assistant.session(item["session_id"])
@@ -317,13 +375,41 @@ class AssistantChannels:
                 self._bindings[key] = item
                 await self.store.put("channel_binding", item)
                 return True, "已开始新会话。"
+            item, session = await self._session(item)
+            question = item.get("input")
+            session_run = session.get("run") or {}
+            if question and (session_run.get("id") != question["run_id"]
+                    or (session_run.get("pending_input") or {}).get("id") != question["id"]):
+                item = {**item, "input": None}
+                self._bindings[key] = item
+                await self.store.put("channel_binding", item)
+                question = None
+            if question and command not in COMMANDS:
+                answer = text.strip()
+                choice_text = set(question["options"]) | set(question.get("labels", []))
+                for index, label in enumerate(question.get("labels", []), 1):
+                    choice_text.update((str(index), f"{index}. {label}", f"{index}：{label}"))
+                if (not question.get("allow_custom") or not answer
+                        or image_loader or attachment_loader or audio_loader
+                        or answer in choice_text):
+                    return True, "请点击消息中的选项按钮。"
+                if (question["expires"] <= time.time() or question.get("session_id") != item["session_id"]
+                        or question.get("message_epoch") != item.get("message_epoch", 0)):
+                    return True, "问题已过期，请查看最新消息。"
+                try:
+                    await self.assistant.answer(question["run_id"], question["id"], answer)
+                except (ValueError, KeyError) as exc:
+                    return True, self.assistant.clean(str(exc), 1000)
+                item = {**item, "input": None}
+                self._bindings[key] = item
+                await self.store.put("channel_binding", item)
+                return True, ""
             if self._queue.full():
                 # Roll back the receipt: provider retries can be admitted later.
                 await self.store.delete("channel_receipt", _id("receipt", key, str(message_id)))
                 return True, "助手等待中的消息较多，请稍后重发。"
-            item, _ = await self._session(item)
             self._queue.put_nowait((item.copy(), text.strip(), image_loader, attachment_loader, audio_loader))
-        return True, "已收到，正在处理。"
+        return True, ""
 
     async def _session(self, item):
         """A pruned/deleted channel conversation must not permanently break its binding.
@@ -348,6 +434,26 @@ class AssistantChannels:
                 await self.assistant.cancel(session["run"]["id"])
         except KeyError:
             pass
+
+    def _start_watcher(self, item, run_id):
+        key = (item["id"], run_id)
+        task = asyncio.create_task(self._watch(item.copy(), run_id), name="assistant-channel-result")
+        self._watchers[key] = task
+        task.add_done_callback(lambda done, k=key: self._watcher_done(k, done))
+
+    async def _resume_watcher(self, item):
+        try:
+            session = await self.assistant.session(item["session_id"])
+        except KeyError:
+            return
+        run = session.get("run") or {}
+        if run.get("status") not in ACTIVE:
+            return
+        previous = self._watchers.get((item["id"], run["id"]))
+        if previous:
+            previous.cancel()
+            await asyncio.gather(previous, return_exceptions=True)
+        self._start_watcher(item, run["id"])
 
     async def _work(self):
         while True:
@@ -398,9 +504,7 @@ class AssistantChannels:
                                                               attachments=attachments, audio=audio)
                         key = (item["id"], run["id"])
                         if key not in self._watchers:
-                            task = asyncio.create_task(self._watch(item, run["id"]), name="assistant-channel-result")
-                            self._watchers[key] = task
-                            task.add_done_callback(lambda done, k=key: self._watcher_done(k, done))
+                            self._start_watcher(item, run["id"])
                         break
                 if busy_reply:
                     await self._send(item, "当前任务尚未结束。请稍后发送附件，或先用 /停止 结束任务。")
@@ -423,21 +527,31 @@ class AssistantChannels:
         if not task.cancelled() and task.exception() is not None:
             log.warning("助手渠道结果发送失败（%s）", type(task.exception()).__name__)
 
-    async def _send_preview(self, item, preview, fallback):
+    async def _send_preview(self, item, preview, fallback, *, controls=None):
         # Invalidate previous codes before attempting a new multipart preview.
         # A delivered final chunk is not proof that every earlier chunk arrived.
         async with self._peer_locks.setdefault(item["id"], asyncio.Lock()):
             # Authorization checks must not confuse a known transport outage
             # with revocation. _send waits outside this lock before each chunk.
             current = self._live(item, require_connected=False)
-            if current["session_id"] != item["session_id"]:
+            if (current["session_id"] != item["session_id"] or not current.get("enabled")
+                    or current.get("message_epoch", 0) != item.get("message_epoch", 0)):
                 raise PermissionError("助手会话已变更")
             current = {**current, "confirmation": None, "input": None}
             self._bindings[item["id"]] = current
             await self.store.put("channel_binding", current)
         try:
-            await self._send(item, preview)
-            return True
+            message_id = await self._send(item, preview,
+                buttons=controls["buttons"] if controls and item["kind"] == "telegram" else None)
+            if controls and item["kind"] == "telegram" and (type(message_id) is not int or message_id <= 0):
+                raise ValueError("按钮消息未确认送达")
+            if controls and item["kind"] == "wecom":
+                await self._wait_live(item)
+                await self.deps.runtime.notifier.send_wecom_card(
+                    item["channel_id"], item["user_id"], title=controls["title"], text="请核对上方完整内容后选择。",
+                    buttons=[button for row in controls["buttons"] for button in row], task_id=controls["task_id"],
+                    permission_check=lambda: self._live(item))
+            return {"message_id": message_id}
         except PermissionError:
             raise
         except Exception as exc:
@@ -449,7 +563,54 @@ class AssistantChannels:
                 log.warning("助手渠道预览发送失败（%s）", type(exc).__name__)
             return False
 
+    async def _telegram_typing(self, item, run_id):
+        """Native presence, not another chat message; never essential to delivery."""
+        if item["kind"] != "telegram":
+            return
+        client = self._bots.get(item["channel_id"], (None,))[0]
+        if not callable(getattr(client, "action", None)):
+            return
+        try:
+            # Fast replies need no transient status at all.
+            await asyncio.sleep(1)
+            while not self._closed:
+                current = self._live(item)
+                if (not current.get("enabled") or current["session_id"] != item["session_id"]
+                        or self._bots[item["channel_id"]][0] is not client):
+                    return
+                run = await self.assistant.run(run_id)
+                if run.get("status") not in ACTIVE:
+                    return
+                if run.get("status") != "running":
+                    await asyncio.sleep(1)
+                    continue
+                # Telethon's default cancellation sends another RPC, which can
+                # wait indefinitely offline and block watcher/channel shutdown.
+                # Stop the sender only; Telegram expires native presence itself.
+                async with client.action(int(item["user_id"]), "typing", delay=5, auto_cancel=False):
+                    while not self._closed:
+                        await asyncio.sleep(1)
+                        current = self._live(item)
+                        if (not current.get("enabled") or current["session_id"] != item["session_id"]
+                                or self._bots[item["channel_id"]][0] is not client):
+                            return
+                        if (await self.assistant.run(run_id)).get("status") != "running":
+                            break
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Presence errors must not cancel an accepted task or replay a send.
+            return
+
     async def _watch(self, item, run_id):
+        typing = asyncio.create_task(self._telegram_typing(item, run_id), name="assistant-telegram-typing")
+        try:
+            await self._watch_results(item, run_id)
+        finally:
+            typing.cancel()
+            await asyncio.gather(typing, return_exceptions=True)
+
+    async def _watch_results(self, item, run_id):
         delivered = None
         input_delivered = None
         while not self._closed:
@@ -462,17 +623,24 @@ class AssistantChannels:
                 if not isinstance(arguments, str):
                     arguments = json.dumps(arguments, ensure_ascii=False, indent=2)
                 warning = "\n将提交到 GitHub，内容可能公开。请确认没有敏感信息。" if pending.get("tool") == "submit_github_issue" else ""
-                preview = (f"需要管理员确认\n{pending.get('summary', '')}{warning}\n\n{arguments}"
-                           f"\n\n确认：/确认 {code}\n拒绝：/拒绝 {code}")
-                if await self._send_preview(item, preview,
-                        "操作预览未能完整发送，请在网页中审阅并确认。本次消息确认码无效。"):
+                preview = f"需要管理员确认\n{pending.get('summary', '')}{warning}\n\n{arguments}\n\n请点击下方按钮。"
+                controls = {"title": "需要管理员确认", "task_id": f"awbnas_{code}_{secrets.token_hex(4)}",
+                            "buttons": [[{"label": "确认执行", "key": f"awbn:assistant:c:{code}:yes"},
+                                         {"label": "拒绝", "key": f"awbn:assistant:c:{code}:no"}]]}
+                sent = await self._send_preview(item, preview,
+                        "操作预览未能完整发送，请在网页中审阅并确认。本次消息按钮无效。", controls=controls)
+                if sent:
                     async with self._peer_locks.setdefault(item["id"], asyncio.Lock()):
                         current = self._live(item, require_connected=False)
                         latest = await self.assistant.run(run_id)
-                        if (latest.get("pending_confirmation") or {}).get("id") == pending["id"]:
+                        if (current["session_id"] == item["session_id"] and current.get("enabled")
+                                and current.get("message_epoch", 0) == item.get("message_epoch", 0)
+                                and (latest.get("pending_confirmation") or {}).get("id") == pending["id"]):
                             expires = datetime.fromisoformat(pending["expires_at"]).timestamp()
                             current = {**current, "confirmation": {"id": pending["id"], "run_id": run_id,
-                                       "code": code, "expires": min(time.time() + 900, expires)}}
+                                       "code": code, "expires": min(time.time() + 900, expires),
+                                       "session_id": item["session_id"], "message_epoch": item.get("message_epoch", 0),
+                                       "message_id": sent["message_id"], "task_id": controls["task_id"]}}
                             self._bindings[item["id"]] = current
                             await self.store.put("channel_binding", current)
                 delivered = pending["id"]
@@ -481,21 +649,32 @@ class AssistantChannels:
                 code = secrets.token_hex(4)
                 options = question.get("options", [])
                 preview = ("需要补充信息\n" + str(question.get("question", "")) + "\n\n"
-                           + "\n".join(f"{option['id']}：{option['label']}" for option in options)
-                           + f"\n\n回复：/选择 {code} 选项ID")
+                           + "\n".join(f"{index + 1}：{option['label']}" for index, option in enumerate(options))
+                           + "\n\n请点击下方选项。")
                 if question.get("allow_custom"):
-                    preview += f"\n或回复：/回答 {code} 补充内容"
-                if await self._send_preview(item, preview,
-                        "问题未能完整发送，请在网页中查看并回答。本次消息回答码无效。"):
+                    preview += "\n需要补充时，直接发送文字。"
+                controls = {"title": "需要补充信息", "task_id": f"awbnas_{code}_{secrets.token_hex(4)}",
+                            "buttons": [[{"label": f"{index + 1}. {str(option['label'])[:50]}" +
+                                                  ("…" if len(str(option["label"])) > 50 else ""),
+                                          "key": f"awbn:assistant:q:{code}:{index}"}]
+                                        for index, option in enumerate(options)]}
+                sent = await self._send_preview(item, preview,
+                        "问题未能完整发送，请在网页中查看并回答。本次消息按钮无效。", controls=controls)
+                if sent:
                     async with self._peer_locks.setdefault(item["id"], asyncio.Lock()):
                         current = self._live(item, require_connected=False)
                         latest = await self.assistant.run(run_id)
-                        if (latest.get("pending_input") or {}).get("id") == question["id"]:
+                        if (current["session_id"] == item["session_id"] and current.get("enabled")
+                                and current.get("message_epoch", 0) == item.get("message_epoch", 0)
+                                and (latest.get("pending_input") or {}).get("id") == question["id"]):
                             expires = datetime.fromisoformat(question["expires_at"]).timestamp()
                             current = {**current, "input": {"id": question["id"], "run_id": run_id,
                                        "code": code, "options": [option["id"] for option in options],
+                                       "labels": [option["label"] for option in options],
                                        "allow_custom": question.get("allow_custom", False),
-                                       "expires": min(time.time() + 900, expires)}}
+                                       "expires": min(time.time() + 900, expires),
+                                       "session_id": item["session_id"], "message_epoch": item.get("message_epoch", 0),
+                                       "message_id": sent["message_id"], "task_id": controls["task_id"]}}
                             self._bindings[item["id"]] = current
                             await self.store.put("channel_binding", current)
                 input_delivered = question["id"]
@@ -569,16 +748,53 @@ class AssistantChannels:
                 log.warning("助手 Telegram 消息处理失败")
                 command = (event.raw_text or "").strip().split(maxsplit=1)
                 item = self._bindings.get(_id("telegram", channel_id, str(event.sender_id)))
-                intended = command and command[0] in COMMANDS | {"/配对"}
+                intended = command and command[0] in COMMANDS | RETIRED_DECISIONS | {"/配对"}
                 if consumed or intended or item and item.get("enabled") and (not command or not command[0].startswith("/")):
                     raise events.StopPropagation
                 return
             raise events.StopPropagation
 
+        async def callback_handler(event):
+            data = getattr(event, "data", b"")
+            if not isinstance(data, bytes) or not data.startswith(BUTTON_PREFIX):
+                return
+            reply = "按钮已失效，请查看最新消息。"
+            try:
+                if (event.is_private and not getattr(event, "via_inline", False)
+                        and type(event.sender_id) is int and event.sender_id > 0
+                        and event.chat_id == event.sender_id):
+                    reply = await self.interact("telegram", channel_id, str(event.sender_id), identity,
+                        str(event.id), data, message_id=event.message_id, client=client)
+                try:
+                    await asyncio.wait_for(event.answer(reply, alert=False), 5)
+                except Exception:
+                    pass
+                if reply in {"已确认。", "已拒绝。", "已选择。"}:
+                    try:
+                        kwargs = {"buttons": None}
+                        if callable(getattr(event, "get_message", None)):
+                            message = await asyncio.wait_for(event.get_message(), 5)
+                            text = getattr(message, "raw_text", None)
+                            if isinstance(text, str) and text:
+                                kwargs.update(text=text + "\n\n" + reply, parse_mode=None, link_preview=False)
+                        await asyncio.wait_for(client.edit_message(event.sender_id, event.message_id, **kwargs), 10)
+                    except Exception:
+                        pass
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                try:
+                    await asyncio.wait_for(event.answer("处理未确认，请在网页查看任务记录。", alert=False), 5)
+                except Exception:
+                    pass
+            raise events.StopPropagation
+
         client.add_event_handler(handler, events.NewMessage(incoming=True))
-        self._bots[channel_id] = (client, identity, handler)
+        client.add_event_handler(callback_handler, events.CallbackQuery(pattern=rb"^awbn:assistant:"))
+        self._bots[channel_id] = (client, identity, handler, callback_handler)
         if old:
-            old[0].remove_event_handler(old[2])
+            for old_handler in old[2:]:
+                old[0].remove_event_handler(old_handler)
 
     async def handle_wecom(self, channel_id, message):
         config = channel_config(self.deps.settings, channel_id)
@@ -586,7 +802,21 @@ class AssistantChannels:
                 or not callback_member_allowed(config, message.get("FromUserName", ""))):
             return False, ""
         validate_callback_config(config)
-        if not validate_callback_message(message, config) or message.get("MsgType") not in {"text", "image", "file", "voice"}:
+        if not validate_callback_message(message, config):
+            return False, ""
+        if message.get("MsgType") == "event":
+            if (message.get("Event") != "template_card_event"
+                    or not str(message.get("EventKey", "")).startswith(BUTTON_PREFIX.decode("ascii"))):
+                return False, ""
+            from .wecom_messages import WeComButtonUpdate
+            receipt = hashlib.sha256(json.dumps(message, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+            reply = await self.interact("wecom", channel_id, message["FromUserName"],
+                list(callback_application(config)), receipt, message["EventKey"], task_id=message.get("TaskId"))
+            labels = {"已确认。": "已确认", "已拒绝。": "已拒绝", "已选择。": "已选择"}
+            # An early click while delivery is still unconfirmed must remain
+            # retryable; do not freeze a card until the operation is consumed.
+            return True, WeComButtonUpdate(labels[reply]) if reply in labels else ""
+        if message.get("MsgType") not in {"text", "image", "file", "voice"}:
             return False, ""
         if message["MsgType"] == "file" and not (is_text_filename(message.get("FileName", ""))
                                                   or is_audio_filename(message.get("FileName", ""))):
@@ -628,8 +858,9 @@ class AssistantChannels:
         self._closed = True
         if getattr(self.deps.accounts, "on_bot_ready", None) is self._bot_hook:
             self.deps.accounts.on_bot_ready = None
-        for client, _, handler in self._bots.values():
-            client.remove_event_handler(handler)
+        for bot in self._bots.values():
+            for handler in bot[2:]:
+                bot[0].remove_event_handler(handler)
         self._bots.clear()
         tasks = list(self._workers) + list(self._watchers.values())
         for task in tasks:
