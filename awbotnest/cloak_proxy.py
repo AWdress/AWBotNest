@@ -10,7 +10,7 @@ import tempfile
 import threading
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -34,6 +34,10 @@ _request_proxy: ContextVar[object | str | dict[str, object] | None] = ContextVar
     "awbotnest_cloak_request_proxy", default=_USE_PLATFORM_PROXY,
 )
 _launch_depth: ContextVar[int] = ContextVar("awbotnest_cloak_launch_depth", default=0)
+_USE_SETTINGS_LICENSE = object()
+_launch_license_key: ContextVar[object | str | None] = ContextVar(
+    "awbotnest_cloak_launch_license_key", default=_USE_SETTINGS_LICENSE,
+)
 _LAUNCH_FUNCTIONS = (
     "launch",
     "launch_async",
@@ -48,8 +52,9 @@ _HTTPX_REQUEST_FUNCTIONS = {
 
 
 class _SessionLease:
-    def __init__(self, gate: "_FreeSessionGate") -> None:
+    def __init__(self, gate: "_FreeSessionGate", license_key: str | None = None) -> None:
         self.gate = gate
+        self.license_key = license_key
         self.released = False
         self._lock = threading.Lock()
 
@@ -58,7 +63,7 @@ class _SessionLease:
             if self.released:
                 return
             self.released = True
-        self.gate.release(abnormal=abnormal)
+        self.gate.release(abnormal=abnormal, license_key=self.license_key)
 
 
 class _FreeSessionGate:
@@ -144,7 +149,7 @@ class _FreeSessionGate:
                     and now >= self._cooldown_until:
                 self._queue.popleft()
                 self._active = True
-                return _SessionLease(self), 0.0
+                return _SessionLease(self, _platform_license_key()), 0.0
             remaining = timeout - (now - started)
             if remaining <= 0:
                 raise TimeoutError("等待 CloakBrowser 免费会话超时")
@@ -168,8 +173,8 @@ class _FreeSessionGate:
             pass
         self._condition.notify_all()
 
-    def release(self, *, abnormal: bool = False) -> None:
-        key = _platform_license_key()
+    def release(self, *, abnormal: bool = False, license_key: str | None = None) -> None:
+        key = license_key
         with self._condition:
             self._active = False
             if abnormal and key:
@@ -186,6 +191,7 @@ class _FreeSessionGate:
             self._condition.notify_all()
 
     def _recover_remote_seat(self, key: str) -> None:
+        license_token = _launch_license_key.set(key)
         try:
             for delay in (3, 5, 10, 15, 30, 45, 60, 90):
                 time.sleep(delay)
@@ -201,6 +207,7 @@ class _FreeSessionGate:
                 except Exception:
                     continue
         finally:
+            _launch_license_key.reset(license_token)
             with self._condition:
                 self._recovery_running = False
                 self._condition.notify_all()
@@ -229,6 +236,23 @@ class _FreeSessionGate:
                 "cooldown_seconds": max(0, round(self._cooldown_until - time.monotonic())),
             }
 
+    def update_license(self, settings: Settings, *, enabled: bool, license_key: str) -> None:
+        """Change credentials only when no old keyed work can still use them."""
+        key = license_key.strip()
+        enabled = bool(enabled and key)
+        replacement = key if enabled else None
+        with self._condition:
+            current = _settings_license_key(settings)
+            if self._maintenance:
+                raise RuntimeError("CloakBrowser 正在更新，请等待系统重启")
+            if current != replacement and (
+                self._active or self._queue or self._recovery_running
+                or self._cooldown_until > time.monotonic()
+            ):
+                raise RuntimeError("CloakBrowser 仍有会话正在运行、排队或等待释放，请结束后再修改 Key")
+            settings.cloakbrowser_license_key = key
+            settings.cloakbrowser_use_free_key = enabled
+
 
 _SESSION_GATE = _FreeSessionGate()
 
@@ -254,6 +278,10 @@ def bind_cloakbrowser_settings(settings: Settings) -> None:
     """Bind live settings without importing the optional CloakBrowser package."""
     global _settings
     _settings = settings
+
+
+def update_cloakbrowser_license(settings: Settings, *, enabled: bool, license_key: str) -> None:
+    _SESSION_GATE.update_license(settings, enabled=enabled, license_key=license_key)
 
 
 def cloak_session_status() -> dict[str, object]:
@@ -309,14 +337,98 @@ def _platform_proxy() -> str | None:
 
 
 def _platform_license_key() -> str | None:
+    return _settings_license_key(_settings)
+
+
+def _settings_license_key(settings: Settings | None) -> str | None:
     enabled = bool(
-        getattr(_settings, "cloakbrowser_use_free_key", False)
-        if _settings is not None else False
+        getattr(settings, "cloakbrowser_use_free_key", False)
+        if settings is not None else False
     )
     if not enabled:
         return None
-    value = str(getattr(_settings, "cloakbrowser_license_key", "") if _settings is not None else "").strip()
+    value = str(getattr(settings, "cloakbrowser_license_key", "") if settings is not None else "").strip()
     return value or None
+
+
+def _effective_license_key() -> str | None:
+    value = _launch_license_key.get()
+    return _platform_license_key() if value is _USE_SETTINGS_LICENSE else value
+
+
+def _resolve_license_key(license_key: str | None = None) -> str | None:
+    # Do not delegate to the SDK: None/empty would otherwise read env or license.key.
+    return _effective_license_key()
+
+
+def _resolve_license_key_with_source(license_key: str | None = None) -> tuple[str | None, str]:
+    key = _effective_license_key()
+    return key, "param" if key else "none"
+
+
+def _license_env(base_env: Mapping[str, str | None] | None) -> dict[str, str]:
+    env = {name: value for name, value in
+           (os.environ if base_env is None else base_env).items() if value is not None}
+    env.pop("CLOAKBROWSER_LICENSE_KEY", None)
+    key = _effective_license_key()
+    if key:
+        env["CLOAKBROWSER_LICENSE_KEY"] = key
+    return env
+
+
+def _build_key_env(key: str | None, source: str,
+                   base_env: dict[str, str] | None) -> dict[str, str]:
+    # Also protects aliases of the SDK's original build_launch_env function.
+    return _license_env(base_env)
+
+
+def _build_launch_env(license_key: str | None = None,
+                      user_env: Mapping[str, str | None] | None = None,
+                      status_file: str | None = None) -> dict[str, str]:
+    env = _license_env(user_env)
+    if status_file is not None:
+        env["CLOAKBROWSER_LICENSE_STATUS_FILE"] = status_file
+    return env
+
+
+def _patch_license_policy(license_module: Any) -> None:
+    replacements = {
+        "resolve_license_key": _resolve_license_key,
+        "_resolve_license_key_with_source": _resolve_license_key_with_source,
+        "build_launch_env": _build_launch_env,
+        "_build_key_env": _build_key_env,
+    }
+    # browser imports resolver/env helpers by value; patch those aliases too.
+    # Original helpers still reference the patched license-module globals.
+    for name, module in tuple(sys.modules.items()):
+        if module is None or (name != "cloakbrowser" and not name.startswith("cloakbrowser.")):
+            continue
+        for attribute, replacement in replacements.items():
+            if module is license_module or attribute in vars(module):
+                setattr(module, attribute, replacement)
+        for attribute in ("validate_license", "get_session_seats", "check_for_pro_update"):
+            function = vars(module).get(attribute)
+            if callable(function):
+                setattr(module, attribute, _wrap_license_operation(function))
+
+
+def _wrap_license_operation(function: Callable[..., Any]) -> Callable[..., Any]:
+    """Keep SDK validation, seat queries and explicit updates on the same key."""
+    if getattr(function, "__awbotnest_cloak_license__", False):
+        return function
+    signature = inspect.signature(function)
+
+    @wraps(function)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        key = _effective_license_key()
+        if not key:
+            raise RuntimeError("CloakBrowser Key 未启用，请先在系统设置中启用")
+        bound = signature.bind_partial(*args, **kwargs)
+        bound.arguments["license_key"] = key
+        return function(*bound.args, **bound.kwargs)
+
+    setattr(wrapper, "__awbotnest_cloak_license__", True)
+    return wrapper
 
 
 def _proxy_url(value: str | dict[str, object] | None) -> str | None:
@@ -351,10 +463,8 @@ def _effective_request_proxy() -> str | None:
 
 def _inherit_launch_proxy(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str | dict[str, object] | None]:
     resolved = dict(kwargs)
-    if "license_key" not in resolved:
-        license_key = _platform_license_key()
-        if license_key:
-            resolved["license_key"] = license_key
+    # Key ownership is not a plugin override; only browser/proxy options are.
+    resolved["license_key"] = _effective_license_key()
     if "proxy" not in resolved:
         proxy = _platform_proxy()
         if proxy:
@@ -364,6 +474,30 @@ def _inherit_launch_proxy(kwargs: dict[str, Any]) -> tuple[dict[str, Any], str |
         # normalized here so plugins have an explicit, readable opt-out.
         resolved["proxy"] = None
     return resolved, resolved.get("proxy")
+
+
+def _launch_arguments(signature: inspect.Signature, args: tuple[Any, ...],
+                      kwargs: dict[str, Any]) -> tuple[tuple[Any, ...], dict[str, Any], Any]:
+    # SDK launch functions also accept positional license_key/proxy arguments.
+    bound = signature.bind_partial(*args, **kwargs)
+    extra_name = next((name for name, parameter in signature.parameters.items()
+                       if parameter.kind == inspect.Parameter.VAR_KEYWORD), None)
+    options = dict(bound.arguments)
+    if extra_name is not None:
+        options.update(options.pop(extra_name, {}))
+    resolved, proxy = _inherit_launch_proxy(options)
+    extras = {}
+    for name, value in resolved.items():
+        parameter = signature.parameters.get(name)
+        if parameter is not None and parameter.kind != inspect.Parameter.VAR_KEYWORD:
+            bound.arguments[name] = value
+        else:
+            extras[name] = value
+    if extras:
+        if extra_name is None:
+            raise TypeError("CloakBrowser 启动接口不支持系统授权参数，请更新组件")
+        bound.arguments[extra_name] = extras
+    return bound.args, bound.kwargs, proxy
 
 
 async def _acquire_session_async() -> _SessionLease | None:
@@ -427,44 +561,61 @@ def _launch_failure_may_hold_seat(exc: BaseException) -> bool:
 def _wrap_launch(function: Callable[..., Any]) -> Callable[..., Any]:
     if getattr(function, "__awbotnest_cloak_proxy__", False):
         return function
+    signature = inspect.signature(function)
     if inspect.iscoroutinefunction(function):
         @wraps(function)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            resolved, request_proxy = _inherit_launch_proxy(kwargs)
             outermost = _launch_depth.get() == 0
             lease = await _acquire_session_async() if outermost else None
-            proxy_token = _request_proxy.set(request_proxy)
-            depth_token = _launch_depth.set(_launch_depth.get() + 1)
+            license_token = _launch_license_key.set(
+                (lease.license_key if lease is not None else None) if outermost else _effective_license_key()
+            )
             try:
-                result = await function(*args, **resolved)
-                return _attach_session_lease(result, lease)
+                launch_args, resolved, request_proxy = _launch_arguments(signature, args, kwargs)
+                if not _effective_license_key() and os.environ.get("CLOAKBROWSER_BINARY_PATH"):
+                    raise RuntimeError("无 Key 模式不能使用 CLOAKBROWSER_BINARY_PATH，请移除该设置以使用免费内核")
+                proxy_token = _request_proxy.set(request_proxy)
+                depth_token = _launch_depth.set(_launch_depth.get() + 1)
+                try:
+                    result = await function(*launch_args, **resolved)
+                    return _attach_session_lease(result, lease)
+                finally:
+                    _launch_depth.reset(depth_token)
+                    _request_proxy.reset(proxy_token)
             except BaseException as exc:
                 if lease is not None:
                     lease.release(abnormal=_launch_failure_may_hold_seat(exc))
                 raise
             finally:
-                _launch_depth.reset(depth_token)
-                _request_proxy.reset(proxy_token)
+                _launch_license_key.reset(license_token)
 
         wrapper = async_wrapper
     else:
         @wraps(function)
         def sync_wrapper(*args: Any, **kwargs: Any) -> Any:
-            resolved, request_proxy = _inherit_launch_proxy(kwargs)
             outermost = _launch_depth.get() == 0
             lease = _SESSION_GATE.acquire() if outermost else None
-            proxy_token = _request_proxy.set(request_proxy)
-            depth_token = _launch_depth.set(_launch_depth.get() + 1)
+            license_token = _launch_license_key.set(
+                (lease.license_key if lease is not None else None) if outermost else _effective_license_key()
+            )
             try:
-                result = function(*args, **resolved)
-                return _attach_session_lease(result, lease)
+                launch_args, resolved, request_proxy = _launch_arguments(signature, args, kwargs)
+                if not _effective_license_key() and os.environ.get("CLOAKBROWSER_BINARY_PATH"):
+                    raise RuntimeError("无 Key 模式不能使用 CLOAKBROWSER_BINARY_PATH，请移除该设置以使用免费内核")
+                proxy_token = _request_proxy.set(request_proxy)
+                depth_token = _launch_depth.set(_launch_depth.get() + 1)
+                try:
+                    result = function(*launch_args, **resolved)
+                    return _attach_session_lease(result, lease)
+                finally:
+                    _launch_depth.reset(depth_token)
+                    _request_proxy.reset(proxy_token)
             except BaseException as exc:
                 if lease is not None:
                     lease.release(abnormal=_launch_failure_may_hold_seat(exc))
                 raise
             finally:
-                _launch_depth.reset(depth_token)
-                _request_proxy.reset(proxy_token)
+                _launch_license_key.reset(license_token)
 
         wrapper = sync_wrapper
     setattr(wrapper, "__awbotnest_cloak_proxy__", True)
@@ -486,6 +637,16 @@ class _ProxyingHttpx:
 
         @wraps(value)
         def request_with_proxy(*args: Any, **kwargs: Any) -> Any:
+            # Old SDK function aliases can outlive a module reload. Never let
+            # one send a stale key, even if it bypassed the public wrappers.
+            payload = kwargs.get("json")
+            supplied = [payload["license_key"]] if isinstance(payload, dict) and "license_key" in payload else []
+            for header, content in (kwargs.get("headers") or {}).items():
+                if header.lower() == "authorization" and str(content).lower().startswith("bearer "):
+                    supplied.append(str(content)[7:])
+            key = _effective_license_key()
+            if supplied and (not key or any(item != key for item in supplied)):
+                raise RuntimeError("CloakBrowser 请求的 Key 与系统设置不一致，已阻止发送")
             if "proxy" not in kwargs:
                 proxy = _effective_request_proxy()
                 if proxy:
@@ -543,16 +704,17 @@ def _patch_geoip_download(module: Any) -> None:
 
 
 def configure_cloakbrowser(settings: Settings) -> None:
-    """Make plugin-owned CloakBrowser calls inherit the live platform proxy.
+    """Apply the system's sole license identity and live proxy to CloakBrowser.
 
     The patch is deliberately limited to CloakBrowser modules. It does not put
-    proxy credentials in process-wide environment variables and never retries
+    credentials in process-wide environment variables and never retries
     a failed proxied request through a direct connection.
     """
     bind_cloakbrowser_settings(settings)
 
     package = importlib.import_module("cloakbrowser")
     browser_module = importlib.import_module("cloakbrowser.browser")
+    _patch_license_policy(importlib.import_module("cloakbrowser.license"))
     for module in (package, browser_module):
         for name in _LAUNCH_FUNCTIONS:
             function = getattr(module, name, None)
@@ -563,4 +725,4 @@ def configure_cloakbrowser(settings: Settings) -> None:
         _patch_httpx(importlib.import_module(name))
     _patch_geoip_download(importlib.import_module("cloakbrowser.geoip"))
 
-    logger.info("CloakBrowser 已接入系统浏览器设置（插件显式参数优先）")
+    logger.info("CloakBrowser 已接入系统浏览器设置，Key 统一由系统管理")

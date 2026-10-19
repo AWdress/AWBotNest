@@ -578,7 +578,11 @@ generated = await ctx.ai.generate_image("一张蓝绿色的极简海报")
 `ctx.browser` 跟随平台选择的浏览器引擎。插件不应读取或保存平台的浏览器密钥，也不应自行安装
 平台浏览器引擎。
 
-插件声明 `cloakbrowser` 依赖并直接调用其 `launch*` 接口时，免费 Key 模式可能由平台串行调度。
+插件声明 `cloakbrowser` 依赖并直接调用其 `launch*` 接口时，Key 统一使用系统设置，插件传入的
+`license_key` 或 `env` 中的 Key 不会覆盖系统设置；验证授权、查询席位和更新内核也使用同一把 Key。
+关闭免费 Key 模式或删除 Key 后使用无 Key 内核，不读取环境变量或缓存 `license.key`。
+无 Key 模式不支持 `CLOAKBROWSER_BINARY_PATH` 自定义内核，以免旧授权文件被原生内核读取。
+已启用 Key 的浏览器在系统内按单会话排队，运行、排队或等待席位释放时不能切换或停用 Key。
 插件必须在 `finally` 中调用 `browser.close()` 或 `context.close()`；只关闭 Page 不会释放浏览器会话，
 可能阻塞其他插件。未传 `proxy` 参数时自动继承平台代理；插件显式传入的 `proxy` 优先，传入
 `proxy=None`（或 `False`）可选择直连。

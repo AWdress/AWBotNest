@@ -29,7 +29,7 @@ from ..deps import DependencyManager
 from ..cloak_proxy import (
     CLOAKBROWSER_INSTALL_REQUIREMENT,
     await_cloak_update_operation, begin_cloak_update, cancel_cloak_update, cloak_session_status,
-    configure_cloakbrowser, unload_cloakbrowser_modules,
+    configure_cloakbrowser, unload_cloakbrowser_modules, update_cloakbrowser_license,
 )
 from ..cloak_updates import (
     check_cloakbrowser_update, cloak_update_status, current_kernel_versions,
@@ -645,6 +645,15 @@ def create_router(deps) -> APIRouter:
         # An update can enter maintenance while dependency installation awaits.
         # No await is allowed between this check and the synchronous mutation.
         check_settings_save_available()
+        try:
+            update_cloakbrowser_license(
+                settings, enabled=body.cloakbrowser_use_free_key,
+                license_key=(settings.cloakbrowser_license_key
+                             if body.cloakbrowser_license_key == "********"
+                             else body.cloakbrowser_license_key),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         settings.api_id = body.api_id
         if body.api_hash != "********":
             settings.api_hash = body.api_hash.strip()
@@ -680,11 +689,6 @@ def create_router(deps) -> APIRouter:
         if body.github_token != "********":
             settings.github_token = body.github_token.strip()
         settings.browser_engine = body.browser_engine
-        if body.cloakbrowser_license_key != "********":
-            settings.cloakbrowser_license_key = body.cloakbrowser_license_key.strip()
-        settings.cloakbrowser_use_free_key = bool(
-            body.cloakbrowser_use_free_key and settings.cloakbrowser_license_key
-        )
         settings.log_cleaner = normalized_cleaner
         save_settings(settings)
         market.clear_cache()
