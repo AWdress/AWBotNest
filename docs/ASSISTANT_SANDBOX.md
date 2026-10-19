@@ -28,11 +28,13 @@ Docker 不是绝对安全边界。broker 的 Docker socket 等同高权限管理
 
    ```sh
    mkdir -p secrets
+   chmod 0700 secrets
    umask 077
    python3 -c "from pathlib import Path; import secrets; p=Path('secrets/assistant-sandbox.token'); assert not p.exists(), '令牌已存在，不覆盖'; p.write_text(secrets.token_urlsafe(32), encoding='utf-8')"
+   chmod 0444 secrets/assistant-sandbox.token
    ```
 
-   `.token` 文件已被 Git 和 Docker 构建忽略。不要提交、截图或把令牌发给助手。
+   `.token` 文件已被 Git 和 Docker 构建忽略。目录仅当前用户可访问；文件使用只读权限，使已移除特权的执行服务能读取挂载的令牌。不要把整个 `secrets` 目录开放给其他用户，也不要提交、截图或把令牌发给助手。
 
 2. 构建两个执行端镜像，再只启动 broker。
 
