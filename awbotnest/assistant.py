@@ -23,6 +23,7 @@ from .assistant_web import PublicWeb
 from .assistant_maintenance import AssistantMaintenance
 from .assistant_sandbox import AssistantSandbox
 from .assistant_tools import validate_tool_arguments
+from .assistant_progress import ConversationWindow, ToolProgress
 from .config import DATA_DIR
 from .logs import redact_secrets
 from .services.ai_protocol import AIRequestError
@@ -30,10 +31,9 @@ from .services.ai_protocol import AIRequestError
 logger = logging.getLogger("awbotnest.assistant")
 ACTIVE = {"queued", "running", "waiting_confirmation", "waiting_input"}
 DEFAULTS = {"enabled": True, "model": "", "allow_actions": False,
-            "max_rounds": 8, "max_tool_calls": 16,
-            "max_tokens": 32000, "timeout_seconds": 120, "memory_enabled": True, "notify_tasks": False,
+            "timeout_seconds": 120, "memory_enabled": True, "notify_tasks": False,
             "allow_issue_submission": False, "mcp_enabled": False, "web_enabled": False}
-# Resent and charged on each tool turn: keep the safety policy consolidated
+# Resent on each tool turn: keep the safety policy consolidated
 # instead of repeating the same restrictions in several long paragraphs.
 SYSTEM = """你是 AWBotNest 系统助手，只服务已登录管理员，用简短中文回答。
 只用工具核实状态和执行，先查后改，不虚构结果；无工具、失败或结果不明时说明限制，不自动重试写入。取消不撤销已发生的操作。
@@ -64,15 +64,16 @@ def validate_settings(values, previous):
     # v2.0.1.8 stored per-plugin and repository allowlists. The administrator
     # now grants all installed plugins together; repository targets come only
     # from the installed plugin's recorded source, never these legacy lists.
-    values = {key: value for key, value in values.items() if key not in {"allowed_plugins", "issue_repositories"}}
+    # Retired task quotas are ignored, even if an older value is invalid.
+    retired = {"allowed_plugins", "issue_repositories", "max_rounds", "max_tool_calls", "max_tokens"}
+    values = {key: value for key, value in values.items() if key not in retired}
     if values.keys() - DEFAULTS.keys():
         raise ValueError("助手设置项不正确")
     result = {**copy.deepcopy(DEFAULTS), **{k: copy.deepcopy(v) for k, v in previous.items() if k in DEFAULTS}, **values}
     for key in ("enabled", "allow_actions", "memory_enabled", "notify_tasks", "allow_issue_submission", "mcp_enabled", "web_enabled"):
         if type(result[key]) is not bool:
             raise ValueError("开关格式不正确")
-    for key, low, high in (("max_rounds", 1, 12), ("max_tool_calls", 1, 32),
-                           ("max_tokens", 2000, 64000), ("timeout_seconds", 15, 300)):
+    for key, low, high in (("timeout_seconds", 15, 300),):
         if type(result[key]) is not int or not low <= result[key] <= high:
             raise ValueError(f"{key} 超出允许范围")
     if not isinstance(result["model"], str) or len(result["model"]) > 200:
@@ -877,7 +878,7 @@ class AssistantService:
                     step = await self._step(run, "audio", "语音转写", "正在识别语音", "running")
                     async with asyncio.timeout(limits["timeout_seconds"]):
                         transcript = await self.ai.transcribe_audio(audio["name"], audio["data"],
-                            audio["content_type"], budget_tokens=limits["max_tokens"])
+                            audio["content_type"], budget_tokens=None)
                 audio = None
                 source = next(message for message in reversed(session["messages"]) if message.get("audio"))
                 source["audio_transcript"] = self.clean(transcript["text"], 10000)
@@ -896,8 +897,7 @@ class AssistantService:
                 await self.store.put("session", session)
                 await self._save_run(run)
             from .assistant_context import prepare_context
-            history, context_budget = await prepare_context(self, run, session, limits,
-                                                            budget_tokens=limits["max_tokens"] - spent)
+            history, context_budget = await prepare_context(self, run, session, limits)
             spent += context_budget
             messages.extend(history)
             attachments = self._run_images.pop(run["id"], ())
@@ -911,7 +911,7 @@ class AssistantService:
                     step = await self._step(run, "vision", "识别图片", f"正在查看 {len(attachments)} 张图片", "running")
                     async with asyncio.timeout(limits["timeout_seconds"]):
                         vision = await recognize_images(self.ai, source["content"],
-                                                        attachments, limits["max_tokens"] - spent)
+                                                        attachments, None)
                 attachments = ()
                 observation = self.clean(vision["text"], 10000)
                 if not observation.strip():
@@ -934,12 +934,15 @@ class AssistantService:
                 await self.store.put("session", session)
                 await self._save_run(run)
             has_memories = self.settings["memory_enabled"] and bool(await self.store.list("memory", 1))
-            for round_number in range(limits["max_rounds"]):
+            window = ConversationWindow(len(messages))
+            progress = ToolProgress()
+            round_number = 0
+            while True:
                 if self._closed or not self.settings["enabled"]:
                     raise asyncio.CancelledError
                 custom = await self.store.list("skill", 50)
                 # Keep discovery cheap; list_skills exposes the remaining
-                # directory on demand instead of exhausting the turn budget.
+                # directory on demand instead of resending the full catalog.
                 catalog = self.builtin_skills.catalog_prompt([
                     {k: self.clean(v, 300) for k, v in item.items() if k in {"id", "name", "description"}}
                     for item in custom[:5]])
@@ -950,6 +953,11 @@ class AssistantService:
                     supplements = list(self._steering[run["id"]])
                     messages.extend({"role": "user", "content": extra["content"]} for extra in supplements)
                     self._steering[run["id"]].clear()
+                if supplements:
+                    progress.reset()
+                messages = self.clean_payload(messages)
+                window.summary = self.clean(window.summary, len(window.summary) + 1)
+                messages = window.compact(messages)
                 specs = [*self.tools.specs(), *self._local_specs()]
                 specs = [s for s in specs if s.get("read_only", False) or s["name"] == "run_plugin_action"
                          or self.settings["allow_actions"]]
@@ -1000,20 +1008,16 @@ class AssistantService:
                 # History and tool arguments may predate a credential change.
                 # Recheck every outbound round, without modifying stored data.
                 messages = self.clean_payload(messages)
-                # UTF-8 bytes deliberately overestimate tokens. Both input and output
-                # are charged per turn, even if a provider omits usage information.
+                # Keep conservative usage accounting without imposing a task quota.
                 request_size = len(json.dumps([messages, specs], ensure_ascii=False).encode())
-                remaining = limits["max_tokens"] - spent - request_size
-                if remaining < 128:
-                    raise ValueError("已达到本次用量上限，请缩短要求或新建会话")
-                output_limit = min(2048, remaining)
                 run["status"] = "queued"
                 await self._save_run(run)
                 async with self._slots:
                     if self._closed or not self.settings["enabled"]:
                         raise asyncio.CancelledError
                     run["status"] = "running"
-                    step = await self._step(run, "thinking", f"第 {round_number + 1} 轮", "正在分析", "running")
+                    round_number += 1
+                    step = await self._step(run, "thinking", f"第 {round_number} 轮", "正在分析", "running")
                     last_delta = 0.0
                     partial_text = ""
                     async def delta(text):
@@ -1024,8 +1028,8 @@ class AssistantService:
                             self.publish(run)
                             last_delta = time.monotonic()
                     async with asyncio.timeout(limits["timeout_seconds"]):
-                        options = {"model": limits["model"], "max_tokens": output_limit,
-                                   "budget_tokens": limits["max_tokens"] - spent}
+                        options = {"model": limits["model"], "max_tokens": 2048,
+                                   "budget_tokens": None}
                         if "on_delta" in inspect.signature(self.ai.tool_turn).parameters:
                             options["on_delta"] = delta
                         reply = await self.ai.tool_turn(messages, specs, **options)
@@ -1044,8 +1048,6 @@ class AssistantService:
                 run["usage"]["total_tokens"] = sum(run["usage"][k] for k in ("input_tokens", "output_tokens"))
                 run["budget_used"] = spent
                 await self._save_run(run)
-                if spent > limits["max_tokens"]:
-                    raise ValueError("已达到本次用量上限，未继续执行工具")
                 text = self.clean(reply.get("text") or "", 16000)
                 tool_calls = reply.get("tool_calls") or []
                 if not tool_calls:
@@ -1069,15 +1071,11 @@ class AssistantService:
                 messages.append(canonical)
                 if text:
                     await self._step(run, "plan", "处理计划", text)
-                if len(tool_calls) + calls > limits["max_tool_calls"]:
-                    raise ValueError("已达到本次工具调用上限，未执行后续操作")
                 async with self._lock:
                     for extra in supplements:
                         extra["steering_processed"] = True
                 ids = set()
-                for call_index, call in enumerate(tool_calls):
-                    if calls >= limits["max_tool_calls"] or spent > limits["max_tokens"]:
-                        raise ValueError("已达到本次用量或工具调用上限，未执行后续操作")
+                for call in tool_calls:
                     calls += 1
                     if (not isinstance(call, dict) or not isinstance(call.get("id"), str) or not call["id"]
                             or call["id"] in ids or not isinstance(call.get("arguments"), dict)):
@@ -1087,10 +1085,14 @@ class AssistantService:
                     available = {s["name"] for s in specs}
                     local = name in {s["name"] for s in self._local_specs()}
                     result = None
+                    read_only = True
+                    execution_started = False
                     try:
                         if name not in available:
                             raise PermissionError("工具未获授权")
                         prepared = await self._prepare_local(name, args, session_id=run["session_id"]) if local else self.tools.prepare(name, args)
+                        read_only = prepared["read_only"]
+                        progress.before(name, args, read_only=read_only)
                         # Refusal applies to the operation, not one exact payload spelling.
                         fingerprint = digest([name, args.get("plugin_id"), args.get("action")])
                         if fingerprint in rejected:
@@ -1109,17 +1111,11 @@ class AssistantService:
                             # Children acquire the shared slots themselves. Holding
                             # a parent slot here would deadlock two parent runs.
                             from .assistant_delegates import AssistantDelegates
-                            allowance = min(16000, (limits["max_tokens"] - spent) // 2)
-                            if allowance < 2000:
-                                raise ValueError("剩余用量不足，不能启动子助手")
                             step = await self._step(run, "delegate", "只读子助手", "正在分别查询", "running")
-                            async with asyncio.timeout(limits["timeout_seconds"]):
-                                result = await AssistantDelegates(
-                                    self.ai, self.tools, clean=self.clean, slots=self._slots).run(
-                                        prepared["arguments"]["tasks"], max_tokens=allowance,
-                                        max_tool_calls=max(0, limits["max_tool_calls"] - calls
-                                                           - (len(tool_calls) - call_index - 1)),
-                                        model=limits["model"])
+                            result = await AssistantDelegates(
+                                self.ai, self.tools, clean=self.clean, slots=self._slots).run(
+                                    prepared["arguments"]["tasks"], model=limits["model"],
+                                    timeout_seconds=limits["timeout_seconds"])
                             spent += result["budget_used"]
                             calls += result["tool_calls"]
                             for key in ("input_tokens", "output_tokens"):
@@ -1138,18 +1134,23 @@ class AssistantService:
                                     raise PermissionError("确认已过期，未执行操作，请重新发起")
                                 step = await self._step(run, "tool", prepared["summary"], "执行中", "running")
                                 async with asyncio.timeout(limits["timeout_seconds"]):
+                                    execution_started = True
                                     result = await self._local_execute(prepared, run) if local else await self.tools.execute(prepared)
+                                    if not read_only and isinstance(result, dict) and result.get("error"):
+                                        raise ValueError("写操作返回错误，需核实实际结果")
                                 step.update(status="completed", content="已完成")
                     except (ValueError, PermissionError, KeyError) as exc:
+                        if execution_started and not read_only:
+                            await self._step(run, "tool", str(name), "执行未确认，未重试；请检查实际结果", "failed")
+                            raise ValueError("工具执行未确认，已停止；请检查实际结果") from None
                         result = {"error": self.clean(str(exc), 500)}
                         await self._step(run, "tool", str(name), result["error"], "failed")
                     except Exception:
                         # An uncertain side effect is never retried automatically.
                         await self._step(run, "tool", str(name), "执行未确认，未重试；请检查实际结果", "failed")
                         raise ValueError("工具执行未确认，已停止；请检查实际结果") from None
-                    # An issue preview is bounded by its own payload limit and
-                    # must remain complete. The next turn still charges every
-                    # byte against the ordinary context budget.
+                    progress.observe(name, args, result, read_only=read_only)
+                    # Keep the complete issue preview within its payload limit.
                     result_limit = 32000 if name == "prepare_github_issue" else 8000
                     encoded = self.clean(json.dumps(self.clean_payload(result), ensure_ascii=False, default=str,
                                                    separators=(",", ":")), result_limit)
@@ -1157,8 +1158,6 @@ class AssistantService:
                         encoded = json.dumps({"truncated": True, "summary": encoded[:7000]}, ensure_ascii=False)
                     messages.append({"role": "tool", "tool_call_id": call["id"], "name": name, "content": encoded})
                     await self._save_run(run)
-            else:
-                raise ValueError("已达到本次处理轮数上限，可调整要求后继续")
         except asyncio.CancelledError:
             run.update(status="interrupted" if self._closed else "cancelled",
                        error="系统已停止，本次未继续执行" if self._closed else "已取消；已执行的操作不会回滚")
@@ -1167,8 +1166,7 @@ class AssistantService:
         except ValueError as exc:
             run.update(status="failed", error=self.clean(str(exc), 500))
         except AIRequestError as exc:
-            run.update(status="failed", error="已达到本次用量上限，未继续请求模型" if exc.category == "budget"
-                       else "AI 服务未返回有效的工具回复，请检查模型及接口协议")
+            run.update(status="failed", error="AI 服务未返回有效的工具回复，请检查模型及接口协议")
         except Exception as exc:
             run.update(status="failed", error=f"本次处理失败（{type(exc).__name__}），请检查 AI 服务或工具状态")
             logger.warning("助手任务失败：%s", type(exc).__name__)

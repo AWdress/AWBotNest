@@ -64,10 +64,10 @@ def _status(code):
     raise AIRequestError(message, category=category, status_code=code)
 
 
-async def transcribe(ai, name, data, mime="", *, budget_tokens=32000):
+async def transcribe(ai, name, data, mime="", *, budget_tokens: int | None = 32000):
     audio = parse_audio(name, data, mime)
     target, url = _target(ai)
-    if type(budget_tokens) is not int or budget_tokens < AUDIO_RESERVATION:
+    if budget_tokens is not None and (type(budget_tokens) is not int or budget_tokens < AUDIO_RESERVATION):
         raise AIRequestError("语音转写预算不足，未发送请求", category="budget")
     started, response_data = time.perf_counter(), None
     ai.usage.begin()

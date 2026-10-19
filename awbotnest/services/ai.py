@@ -393,13 +393,13 @@ class AIService:
             if not completed:
                 self.usage.fail()
 
-    async def transcribe_audio(self, name: str, data: bytes, mime: str = "", *, budget_tokens: int = 32000):
+    async def transcribe_audio(self, name: str, data: bytes, mime: str = "", *, budget_tokens: int | None = 32000):
         from .ai_audio import transcribe
         return await transcribe(self, name, data, mime, budget_tokens=budget_tokens)
 
     async def vision_turn(self, prompt: str, images: list[str], *, model: str = "",
-                          max_tokens: int = 2048, budget_tokens: int = 32000) -> dict[str, Any]:
-        """Assistant image observation with bounded output and shared budget.
+                          max_tokens: int = 2048, budget_tokens: int | None = 32000) -> dict[str, Any]:
+        """Assistant image observation with bounded output and optional budget.
 
         The public PluginAI.vision() string-returning contract is unchanged.
         Images are source material only; this request never includes tools.
@@ -408,7 +408,7 @@ class AIService:
         checked = validate_images(images)
         if not checked:
             raise ValueError("请先选择图片")
-        if type(budget_tokens) is not int or budget_tokens < 1:
+        if budget_tokens is not None and (type(budget_tokens) is not int or budget_tokens < 1):
             raise AIRequestError("AI 图片识别预算无效", category="budget")
         if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
             raise AIRequestError("AI 图片识别输出预算无效", category="configuration")

@@ -21,7 +21,7 @@ _CUSTOM_ID = re.compile(r"[A-Za-z0-9_-]{1,100}\Z")
 _READING_NOTE = (
     "技能读取接口支持分页。调用 list_skills 或 read_skill 时，若 complete 为 false，"
     "按返回的 next_offset 续读；选定技能要读完正文，才能按其流程操作。"
-    "续读仍受调用次数和 Token 预算限制，预算不足就说明尚未读完，不绕过限制或声称已完整读取。"
+    "有后续页就继续读取；资料缺失或读取失败时说明尚未读完，不声称已完整读取。"
 )
 
 

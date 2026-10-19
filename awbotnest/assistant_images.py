@@ -56,7 +56,7 @@ def validate_images(images) -> tuple[str, ...]:
     return tuple(result)
 
 
-async def recognize_images(ai, prompt: str, images, budget: int) -> dict:
+async def recognize_images(ai, prompt: str, images, budget: int | None = None) -> dict:
     method = getattr(ai, "vision_turn", None)
     if not callable(method):
         raise ValueError("当前 AI 服务不支持图片识别，请在 AI 服务中配置视觉模型")

@@ -17,7 +17,7 @@ const tabs = [
 ]
 const defaults = {
   enabled: true, model: '', allow_actions: false,
-  max_rounds: 8, max_tool_calls: 16, max_tokens: 32000, timeout_seconds: 120, memory_enabled: true, notify_tasks: false,
+  timeout_seconds: 120, memory_enabled: true, notify_tasks: false,
   allow_issue_submission: false,
   mcp_enabled: false,
   web_enabled: false,
@@ -555,7 +555,7 @@ async function loadOverview(initialize = false) {
   try {
     const value = await api.getAssistant(controller.signal)
     if (disposed || !props.open || opening !== openSequence || sequence !== overviewSequence) return
-    catalog.value = { ...catalog.value, ...value }
+    catalog.value = { ...catalog.value, ...value, settings: settingsValue(value.settings) }
     if (initialize) {
       if (settingsRevision === formRevisions.settings) settingsDraft.value = settingsValue(value.settings)
       const id = value.sessions?.some(item => item.id === selectedId.value) ? selectedId.value : (value.sessions?.[0]?.id || '')
@@ -706,7 +706,7 @@ async function saveSettings() {
   try {
     const value = await api.saveAssistantSettings(submitted, action.signal)
     if (!action.current()) return
-    catalog.value.settings = value
+    catalog.value.settings = settingsValue(value)
     if (formRevisions.settings === submittedRevision) settingsDraft.value = settingsValue(value)
     catalog.value.issue_status = { ...catalog.value.issue_status, enabled: !!(value.enabled && value.allow_actions && value.allow_issue_submission) }
     toast.success('助手设置已保存')
@@ -1198,7 +1198,7 @@ onBeforeUnmount(() => {
                     <label class="assistant-switch-row"><span>允许提交 GitHub Issue<small>{{ settingsDraft.allow_actions ? '提交前确认仓库、标题和正文。' : '提交前需先开启“允许执行修改操作”。' }}</small></span><input v-model="settingsDraft.allow_issue_submission" type="checkbox" /></label>
                     <p class="assistant-field-note">{{ catalog.issue_status?.configured ? '使用系统设置中已保存的 GitHub Token。' : '未配置 GitHub Token，只生成问题报告。可在系统设置中配置。' }}</p>
                   </div>
-                  <details class="assistant-advanced"><summary>执行上限</summary><div class="assistant-form-grid"><label class="assistant-field">最多执行轮数<input v-model.number="settingsDraft.max_rounds" type="number" min="1" max="12" class="input" /></label><label class="assistant-field">最多工具调用<input v-model.number="settingsDraft.max_tool_calls" type="number" min="1" max="32" class="input" /></label><label class="assistant-field">Token 预算<input v-model.number="settingsDraft.max_tokens" type="number" min="2000" max="64000" step="1000" class="input" /></label><label class="assistant-field">单次调用超时（秒）<input v-model.number="settingsDraft.timeout_seconds" type="number" min="15" max="300" class="input" /></label></div></details>
+                  <details class="assistant-advanced"><summary>请求设置</summary><label class="assistant-field">单次调用超时（秒）<input v-model.number="settingsDraft.timeout_seconds" type="number" min="15" max="300" class="input" /></label></details>
                   <button type="submit" class="btn btn-primary" :disabled="!!busy">{{ busy === 'settings' ? '保存中…' : '保存设置' }}</button>
                 </form>
                 <section class="assistant-channel-settings" aria-labelledby="assistant-channels-title">
@@ -1471,6 +1471,7 @@ onBeforeUnmount(() => {
 .assistant-mcp-tools li > small { margin-left: 10px; }
 .assistant-advanced { padding-top: 12px; border-top: 1px solid var(--border); }
 .assistant-advanced summary { cursor: pointer; font-size: 12px; color: var(--text-secondary); }
+.assistant-advanced > .assistant-field { margin-top: 16px; }
 .assistant-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
 .assistant-resource-list { margin-top: 28px; border-top: 1px solid var(--border); }
 .assistant-resource { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--border); }

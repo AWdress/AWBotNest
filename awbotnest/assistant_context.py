@@ -34,7 +34,8 @@ def _clean_content(service, message):
 
 
 async def prepare_context(service, run, session, limits, *, budget_tokens=None):
-    budget_tokens = limits["max_tokens"] if budget_tokens is None else budget_tokens
+    # Old callers may still pass a task budget. Only context size determines
+    # when to summarize now; usage remains observable but never cuts a task off.
     history = [message for message in session["messages"] if message.get("steering_run") != run["id"]]
     saved = session.get("context_summary") or {}
     marker = saved.get("through")
@@ -43,7 +44,7 @@ async def prepare_context(service, run, session, limits, *, budget_tokens=None):
         history = history[marker_index + 1:]
     summary = service.clean(saved.get("text", ""), 4000)
     charged = 0
-    if len(history) > 12 or len(json.dumps(history, ensure_ascii=False).encode()) > limits["max_tokens"] // 2:
+    if len(history) > 12 or len(json.dumps(history, ensure_ascii=False).encode()) > 24000:
         archive = history[:-4]
         if archive:
             step = await service._step(run, "summary", "整理较早的对话", "保留任务要求、已核实信息和待办事项", "running")
@@ -73,7 +74,7 @@ async def prepare_context(service, run, session, limits, *, budget_tokens=None):
                     raise asyncio.CancelledError
                 async with asyncio.timeout(limits["timeout_seconds"]):
                     reply = await service.ai.tool_turn(prompt, [], model=limits["model"], max_tokens=1000,
-                                                       budget_tokens=budget_tokens)
+                                                       budget_tokens=None)
             summary = service.clean(reply.get("text", ""), 4000)
             if not summary.strip() or reply.get("tool_calls"):
                 raise ValueError("较早对话未能整理，请新建会话后继续")
