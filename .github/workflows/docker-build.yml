@@ -182,7 +182,8 @@ jobs:
         run: |
           # Disposable CI credentials and containers only. No system data,
           # account, plugin directory or internet access is mounted in a runner.
-          TOKEN_FILE=$(mktemp "${RUNNER_TEMP}/assistant-token.XXXXXX")
+          TOKEN_DIR=$(mktemp -d "${RUNNER_TEMP}/assistant-secret.XXXXXX")
+          TOKEN_FILE="${TOKEN_DIR}/token"
           python -c 'import secrets,sys; from pathlib import Path; Path(sys.argv[1]).write_text(secrets.token_urlsafe(32))' "$TOKEN_FILE"
           # The capability-free broker cannot override a host-owned 0600
           # file. Its parent is private; the container gets only this file.
@@ -195,6 +196,7 @@ jobs:
             docker stop -t 35 awbn-sandbox-ci >/dev/null 2>&1 || true
             docker rm -fv awbn-sandbox-ci >/dev/null 2>&1 || true
             rm -f "$TOKEN_FILE"
+            rmdir "$TOKEN_DIR"
             return "$RESULT"
           }
           trap cleanup EXIT
