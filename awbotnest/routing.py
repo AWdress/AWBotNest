@@ -170,6 +170,7 @@ class PluginRoutes:
         self._action_metadata[key] = {
             "name": key[1], "description": description.strip(), "parameters": schema,
             "read_only": read_only, "agent_exposed": agent_exposed,
+            "parameters_declared": parameters is not None or agent_exposed,
             "generation": uuid.uuid4().hex, "validate_parameters": parameters is not None or agent_exposed,
         }
 

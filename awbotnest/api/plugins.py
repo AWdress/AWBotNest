@@ -27,7 +27,7 @@ from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
 from ..logs import memory_logs
 from ..market import normalize_repo
-from ..plugin_config import mask_config, restore_config_secrets, reveal_secret
+from ..plugin_config import mask_config, reveal_secret, save_plugin_config
 from ..routing import WebhookRequest
 from .models import *
 
@@ -394,24 +394,8 @@ def create_router(deps) -> APIRouter:
         values = dict(raw.get("values", raw))
         if len(json.dumps(values, ensure_ascii=False).encode("utf-8")) > 1024 * 1024:
             raise HTTPException(status_code=413, detail="插件配置超过 1 MB")
-        current_values = settings.plugin_config.get(plugin_id, {})
         try:
-            values = restore_config_secrets(plugin.config_schema or {}, values, current_values)
-            runtime.validate_config(plugin.config_schema or {}, values,
-                                    allow_extra=plugin.render_mode == "vue")
+            return await save_plugin_config(deps, plugin_id, values, persist=save_settings)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        settings.plugin_config[plugin_id] = values
-        save_settings(settings)
-        loaded = runtime.loaded.get(plugin_id)
-        if loaded:
-            await runtime.disable(plugin_id)
-            if plugin_id not in settings.enabled_plugins:
-                settings.enabled_plugins.append(plugin_id)
-                save_settings(settings)
-            meta = await runtime.enable(plugin_id)
-            if meta.error:
-                raise HTTPException(status_code=409, detail=meta.error)
-        safe_values = mask_config(plugin.config_schema or {}, settings.plugin_config[plugin_id])
-        return {"ok": True, "values": safe_values}
     return router

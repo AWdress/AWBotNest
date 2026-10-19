@@ -1189,7 +1189,7 @@ onBeforeUnmount(() => {
                   <label class="assistant-switch-row"><span>启用助手</span><input v-model="settingsDraft.enabled" type="checkbox" /></label>
                   <label class="assistant-field">模型<select v-model="settingsDraft.model" class="select"><option value="">使用系统默认文字模型</option><option v-for="model in catalog.models" :key="model.id" :value="model.id">{{ model.name }}</option></select></label>
                   <div class="assistant-field-note">模型和服务商在系统设置的 AI 服务中配置。</div>
-                  <label class="assistant-switch-row"><span>允许执行修改操作<small>每次修改前单独确认，不开放终端和任意文件读写。</small></span><input v-model="settingsDraft.allow_actions" type="checkbox" /></label>
+                  <label class="assistant-switch-row"><span>允许执行修改操作<small>可修改非敏感配置、执行插件按钮，每次操作前单独确认。密钥、密码和 Cookie 不开放。</small></span><input v-model="settingsDraft.allow_actions" type="checkbox" /></label>
                   <label class="assistant-switch-row"><span>使用已保存的记忆</span><input v-model="settingsDraft.memory_enabled" type="checkbox" /></label>
                   <label class="assistant-switch-row"><span>允许网页搜索和阅读<small>仅访问公网网页，不登录、不执行网页脚本。</small></span><input v-model="settingsDraft.web_enabled" type="checkbox" /></label>
                   <label class="assistant-switch-row"><span>允许使用外部工具（MCP）</span><input v-model="settingsDraft.mcp_enabled" type="checkbox" /></label>

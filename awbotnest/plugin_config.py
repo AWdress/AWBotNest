@@ -2,11 +2,119 @@
 from __future__ import annotations
 
 import copy
+import asyncio
+import inspect
 import json
+import logging
 import re
 from typing import Any
 
 MASK = "********"
+
+
+async def save_plugin_config(deps, plugin_id: str, values: dict[str, Any], *,
+                             before_change=None, after_change=None, before_recover=None,
+                             authorize=None, persist=None) -> dict[str, Any]:
+    """Shared administrative save path, including validation and live reload.
+
+    The assistant supplies synchronous approval checks; HTTP callers already
+    authenticate before entering this function. A failed save or reload restores
+    the previous configuration, rather than leaving a broken partial update.
+    """
+    from .config import save_settings
+    settings, runtime = deps.settings, deps.runtime
+    persist = persist or save_settings
+
+    def check(callback):
+        if callback is None:
+            return
+        result = callback()
+        if inspect.isawaitable(result):
+            if inspect.iscoroutine(result):
+                result.close()
+            raise TypeError("配置保存校验不能异步执行")
+        if result is False:
+            raise PermissionError("配置修改授权已撤销")
+
+    locks = getattr(runtime, "_lifecycle_locks", None)
+    if locks is None:
+        locks = runtime._lifecycle_locks = {}
+    async with locks.setdefault(plugin_id, asyncio.Lock()):
+        check(authorize)
+        check(before_change)
+        plugin = next((item for item in runtime.scan() if item.id == plugin_id), None)
+        if plugin is None:
+            raise ValueError("插件不存在")
+        if not isinstance(values, dict):
+            raise ValueError("插件配置必须是对象")
+        if len(json.dumps(values, ensure_ascii=False, allow_nan=False).encode("utf-8")) > 1024 * 1024:
+            raise ValueError("插件配置超过 1 MB")
+        previous_present = plugin_id in settings.plugin_config
+        previous = copy.deepcopy(settings.plugin_config.get(plugin_id, {}))
+        restored = restore_config_secrets(plugin.config_schema or {}, values, previous)
+        runtime.validate_config(plugin.config_schema or {}, restored, allow_extra=plugin.render_mode == "vue")
+        was_loaded = plugin_id in runtime.loaded
+        previous_instance = runtime.loaded.get(plugin_id)
+        was_enabled = plugin_id in settings.enabled_plugins
+        # Real runtimes use these unlocked helpers under the same lifecycle lock.
+        disable = getattr(runtime, "_disable", None) or getattr(runtime, "disable", None)
+        enable = getattr(runtime, "_enable", None) or getattr(runtime, "enable", None)
+        if was_loaded and (not callable(disable) or not callable(enable)):
+            raise ValueError("插件重载服务暂不可用")
+        changed = False
+        try:
+            settings.plugin_config[plugin_id] = restored
+            persist(settings)
+            changed = True
+            check(after_change)
+            if was_loaded:
+                await disable(plugin_id, persist=False)
+                check(authorize)
+                check(after_change)
+                if plugin_id not in settings.enabled_plugins:
+                    settings.enabled_plugins.append(plugin_id)
+                if getattr(runtime, "_enable", None) is not None:
+                    def before_start():
+                        check(authorize)
+                        check(after_change)
+                    result = await enable(plugin_id, before_start=before_start)
+                else:
+                    result = await enable(plugin_id)
+                check(authorize)
+                check(after_change)
+                if getattr(result, "error", ""):
+                    raise ValueError("插件配置未生效，已恢复原配置；请查看插件日志")
+        except BaseException:
+            if changed and was_loaded and plugin_id in runtime.loaded and runtime.loaded[plugin_id] is not previous_instance:
+                try:
+                    await disable(plugin_id, persist=False)
+                except Exception:
+                    logging.getLogger("awbotnest.plugins").exception("配置回滚时插件停用失败：%s", plugin_id)
+            if previous_present:
+                settings.plugin_config[plugin_id] = previous
+            else:
+                settings.plugin_config.pop(plugin_id, None)
+            if was_enabled and plugin_id not in settings.enabled_plugins:
+                settings.enabled_plugins.append(plugin_id)
+            elif not was_enabled and plugin_id in settings.enabled_plugins:
+                settings.enabled_plugins.remove(plugin_id)
+            if changed:
+                try:
+                    persist(settings)
+                    if was_loaded and plugin_id not in runtime.loaded:
+                        check(before_recover)
+                        if getattr(runtime, "_enable", None) is not None and before_recover is not None:
+                            recovered = await enable(plugin_id, before_start=lambda: check(before_recover))
+                        else:
+                            recovered = await enable(plugin_id)
+                        if getattr(recovered, "error", ""):
+                            logging.getLogger("awbotnest.plugins").error("插件原配置恢复后启动失败：%s", plugin_id)
+                except (ValueError, PermissionError):
+                    logging.getLogger("awbotnest.plugins").warning("插件运行状态未恢复，请检查插件状态：%s", plugin_id)
+                except Exception:
+                    logging.getLogger("awbotnest.plugins").exception("插件配置恢复失败：%s", plugin_id)
+            raise
+        return {"ok": True, "values": mask_config(plugin.config_schema or {}, settings.plugin_config[plugin_id])}
 
 
 def secret_field(spec: object) -> bool:

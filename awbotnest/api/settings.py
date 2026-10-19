@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import hmac
 import inspect
@@ -11,7 +12,7 @@ import secrets
 import tempfile
 import time
 import zipfile
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -47,6 +48,314 @@ from ..services.ai_protocol import API_FORMATS, normalize_api_format
 
 logger = logging.getLogger("awbotnest.api")
 
+def _check_before_commit(callback):
+    if callback is not None and callback() is not True:
+        raise PermissionError("确认已失效，请重新确认设置修改")
+
+
+def check_settings_save_available():
+    if cloak_session_status().get("maintenance"):
+        raise HTTPException(
+            status_code=409,
+            detail="CloakBrowser 正在更新，暂时无法保存系统设置，请等待系统重启",
+        )
+
+def current_ai_settings(settings) -> dict[str, object]:
+    if settings.ai_settings:
+        value = json.loads(json.dumps(settings.ai_settings))
+        if isinstance(value.get("capabilities"), dict):
+            value["capabilities"].setdefault("audio", {})
+        value.setdefault("timeout_seconds", 60)
+        value.setdefault("image_timeout_seconds", 300)
+        value.setdefault("max_concurrency", 3)
+        for provider in value.get("providers", []):
+            if isinstance(provider, dict):
+                provider.setdefault("api_format", "auto")
+        return value
+    provider_id = "default"
+    return {
+        "providers": [{"id": provider_id, "name": "OpenAI 兼容服务", "enabled": True,
+                       "base_url": settings.ai_base_url, "api_key": settings.ai_api_key,
+                       "api_format": "auto"}],
+        "models": [{"id": "default", "alias": settings.ai_model, "name": settings.ai_model,
+                    "enabled": True, "provider_id": provider_id, "model": settings.ai_model,
+                    "capabilities": ["text"]}],
+        "capabilities": {"text": {"default_model": settings.ai_model}, "vision": {}, "image": {}, "audio": {}},
+        "plugin_permissions": {},
+        "timeout_seconds": 60,
+        "image_timeout_seconds": 300,
+        "max_concurrency": 3,
+    }
+
+async def save_ai_settings_value(deps, value, *, before_commit=None):
+    """Persist AI configuration through the same UI and assistant path."""
+    settings = deps.settings
+    _check_before_commit(before_commit)
+    value = copy.deepcopy(value)
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="AI 设置格式不正确")
+    value.setdefault("timeout_seconds", 60)
+    value.setdefault("image_timeout_seconds", 300)
+    value.setdefault("max_concurrency", 3)
+    providers = value.get("providers", [])
+    if not isinstance(providers, list):
+        raise HTTPException(status_code=400, detail="AI 服务商列表格式不正确")
+    for provider in providers:
+        if not isinstance(provider, dict):
+            raise HTTPException(status_code=400, detail="AI 服务商配置格式不正确")
+        requested_format = str(provider.get("api_format") or "auto").strip().lower().replace("-", "_")
+        if requested_format not in API_FORMATS:
+            raise HTTPException(status_code=400, detail="AI 接口格式不受支持")
+        provider["api_format"] = normalize_api_format(requested_format)
+    # A mask preserves only that exact provider's saved key.  In particular,
+    # never copy the primary provider's credentials into a newly added service.
+    # current_ai_settings also supplies the single legacy provider's stable ID.
+    old_keys = {str(item.get("id")): str(item.get("api_key") or "")
+                for item in current_ai_settings(settings).get("providers", []) if isinstance(item, dict)}
+    for provider in value.get("providers", []):
+        if isinstance(provider, dict) and provider.get("api_key") == "********":
+            provider["api_key"] = old_keys.get(str(provider.get("id")), "")
+    _check_before_commit(before_commit)
+    snapshot = {name: copy.deepcopy(getattr(settings, name))
+                for name in ("ai_settings", "ai_base_url", "ai_api_key", "ai_model")}
+    try:
+        settings.ai_settings = value
+        provider = next((item for item in value.get("providers", []) if isinstance(item, dict) and item.get("enabled", True)), None)
+        if provider:
+            settings.ai_base_url = str(provider.get("base_url") or settings.ai_base_url)
+            settings.ai_api_key = str(provider.get("api_key") or "")
+        model = next((item for item in value.get("models", []) if isinstance(item, dict) and item.get("enabled", True)), None)
+        if model:
+            settings.ai_model = str(model.get("model") or model.get("alias") or settings.ai_model)
+        save_settings(settings)
+    except BaseException:
+        for name, previous in snapshot.items():
+            setattr(settings, name, previous)
+        raise
+    return {"ok": True, "restart_required": False}
+
+async def save_system_settings(deps, raw, *, before_commit=None, update_fields=None):
+    """Shared validated save path for the administrator UI and assistant."""
+    settings, market = deps.settings, deps.market
+    _check_before_commit(before_commit)
+    check_settings_save_available()
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=400, detail="设置必须是对象")
+    if update_fields is not None:
+        update_fields = frozenset(update_fields)
+        if not update_fields or not update_fields <= raw.keys() or not update_fields <= SettingsBody.model_fields.keys():
+            raise ValueError("局部设置修改字段不正确")
+    update_system_notification = "system_update_notify_enabled" in raw
+    if isinstance(raw.get("settings"), dict):
+        legacy = raw["settings"]
+        update_system_notification = "SYSTEM_UPDATE_NOTIFY_ENABLED" in legacy
+        proxy = legacy.get("proxy_set") or {}
+        legacy_cloak_key = legacy.get(
+            "CLOAKBROWSER_LICENSE_KEY",
+            "********" if settings.cloakbrowser_license_key else "",
+        )
+        legacy_cloak_key_enabled = (
+            settings.cloakbrowser_use_free_key
+            if legacy_cloak_key == "********"
+            else bool(str(legacy_cloak_key or "").strip())
+        )
+        raw = {
+            "api_id": legacy.get("API_ID", settings.api_id),
+            "api_hash": legacy.get("API_HASH", "********" if settings.api_hash else ""),
+            "bot_token": legacy.get("BOT_TOKEN", "********" if settings.bot_token else ""),
+            "bot_name": legacy.get("BOT_NAME", settings.bot_name),
+            "default_bot_id": legacy.get("DEFAULT_BOT_ID", settings.default_bot_id),
+            "default_bot_chat_id": legacy.get("DEFAULT_BOT_CHAT_ID", settings.default_bot_chat_id),
+            "web_host": settings.web_host,
+            "web_port": legacy.get("WEB_UI_PORT", settings.web_port),
+            "bots": legacy.get("BOTS", [asdict(bot) for bot in settings.bots]),
+            "ai_base_url": settings.ai_base_url,
+            "ai_api_key": "********" if settings.ai_api_key else "",
+            "ai_model": settings.ai_model,
+            "plugin_repos": legacy.get("PLUGIN_REPOS", settings.plugin_repos),
+            "notification_channels": legacy.get("NOTIFICATION_CHANNELS", settings.notification_channels),
+            "system_update_notify_enabled": legacy.get(
+                "SYSTEM_UPDATE_NOTIFY_ENABLED", settings.system_update_notify_enabled,
+            ),
+            "proxy_url": proxy.get("PROXY_URL", settings.proxy_url) if proxy.get("proxy_enable") else "",
+            "webhook_secret": legacy.get("WEBHOOK_SECRET", "********" if settings.webhook_secret else ""),
+            "api_key": legacy.get("API_KEY", "********" if settings.api_key else ""),
+            "pip_index_url": legacy.get("PIP_INDEX_URL", settings.pip_index_url),
+            "github_token": legacy.get("GITHUB_TOKEN", "********" if settings.github_token else ""),
+            "browser_engine": legacy.get("BROWSER_ENGINE", settings.browser_engine),
+            "cloakbrowser_use_free_key": legacy.get(
+                "CLOAKBROWSER_USE_FREE_KEY", legacy_cloak_key_enabled,
+            ),
+            "cloakbrowser_license_key": legacy_cloak_key,
+            "log_cleaner": legacy.get("LOG_CLEANER", settings.log_cleaner),
+        }
+    try:
+        existing = asdict(settings)
+        body = SettingsBody.model_validate({**{key: existing[key] for key in SettingsBody.model_fields
+                                               if key in existing}, **raw})
+    except Exception as exc:
+        # Pydantic's string form includes input_value, which can contain the
+        # complete Token/password supplied by a failed settings request.
+        raise HTTPException(status_code=422, detail="设置格式不正确，请检查字段类型、长度和取值范围") from exc
+    previous = (settings.api_id, settings.api_hash, settings.bot_token, settings.proxy_url,
+                settings.default_bot_id, settings.web_host, settings.web_port,
+                [(item.id, item.token) for item in settings.bots], dict(settings.log_cleaner))
+    existing_tokens = {item.id: item.token for item in settings.bots}
+    new_bots = [BotSettings(
+        id=str(item.get("id") or "").strip(),
+        name=str(item.get("name") or item.get("id") or "Bot").strip(),
+        token=(existing_tokens.get(str(item.get("id") or ""), "")
+               if item.get("token") == "********" else str(item.get("token") or "").strip()),
+    ) for item in body.bots if str(item.get("id") or "").strip() and item.get("id") != "default"]
+    bot_ids = [item.id for item in new_bots]
+    if len(bot_ids) != len(set(bot_ids)) or any(not item.replace("_", "").replace("-", "").isalnum() for item in bot_ids):
+        raise HTTPException(status_code=400, detail="Bot ID 必须唯一，且只能包含字母、数字、横线和下划线")
+    if (body.default_bot_id.strip() or "default") not in {"default", *bot_ids}:
+        raise HTTPException(status_code=400, detail="默认 Bot 不存在")
+    try:
+        new_repos = [normalize_repo(item) for item in body.plugin_repos if item.strip()]
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    current_channels = {str(item.get("id") or ""): item for item in settings.notification_channels}
+    channels = []
+    for raw_channel in body.notification_channels:
+        nested = raw_channel.get("config") if isinstance(raw_channel.get("config"), dict) else {}
+        item = {**nested, **raw_channel}
+        item.pop("config", None)
+        previous_channel = current_channels.get(str(item.get("id") or ""), {})
+        previous_nested = (previous_channel.get("config")
+                           if isinstance(previous_channel.get("config"), dict) else {})
+        for key in ("url", "webhook", "server", "token", "password", "secret", "device_key",
+                    "callback_token", "callback_aes_key"):
+            if item.get(key) == "********":
+                item[key] = previous_channel.get(key, previous_nested.get(key, ""))
+        if item.get("type") == "wechat":
+            item["type"] = "wecom"
+        try:
+            validate_callback_config(item)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if item.get("type") == "telegram":
+            # Telegram tokens are owned by the Bot settings above. Keeping
+            # a masked duplicate in the channel would corrupt later saves.
+            item.pop("token", None)
+            item["bot_id"] = str(item.get("id") or "")
+        channels.append(item)
+    channel_ids = [str(item.get("id") or "") for item in channels]
+    allowed_channels = {"telegram", "bark", "wecom", "wechat", "webhook"}
+    if any(not item for item in channel_ids) or len(channel_ids) != len(set(channel_ids)):
+        raise HTTPException(status_code=400, detail="通知渠道 ID 不能为空且必须唯一")
+    if any(str(item.get("type") or "") not in allowed_channels for item in channels):
+        raise HTTPException(status_code=400, detail="通知渠道类型不受支持")
+    try:
+        validate_callback_channels(channels)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    proxy_url = body.proxy_url.strip()
+    if "********" in proxy_url:
+        proxy_url = settings.proxy_url
+    if proxy_url:
+        parsed_proxy = urlparse(proxy_url)
+        if parsed_proxy.scheme not in {"http", "socks4", "socks5"} or not parsed_proxy.hostname or not parsed_proxy.port:
+            raise HTTPException(status_code=400, detail="代理地址必须是完整的 http/socks4/socks5 URL")
+    pip_index_url = body.pip_index_url.strip()
+    if pip_index_url:
+        parsed_index = urlparse(pip_index_url)
+        if parsed_index.scheme not in {"http", "https"} or not parsed_index.hostname:
+            raise HTTPException(status_code=400, detail="pip 镜像源必须是完整的 http/https URL")
+    cleaner = dict(body.log_cleaner or settings.log_cleaner)
+    try:
+        normalized_cleaner = {
+            "enabled": bool(cleaner.get("enabled", True)),
+            "keep_lines": max(1, min(int(cleaner.get("keep_lines", 1000)), 1000)),
+            "hour": max(0, min(int(cleaner.get("hour", 3)), 23)),
+            "minute": max(0, min(int(cleaner.get("minute", 0)), 59)),
+        }
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="日志清理设置格式不正确") from exc
+    if body.browser_engine == "cloakbrowser":
+        try:
+            await DependencyManager(body).ensure(
+                [CLOAKBROWSER_INSTALL_REQUIREMENT],
+                plugin_name="CloakBrowser 浏览器引擎",
+                target_only=True,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"CloakBrowser 安装失败：{exc}") from exc
+    # An update can enter maintenance while dependency installation awaits.
+    # No await is allowed between this check and the synchronous mutation.
+    check_settings_save_available()
+    _check_before_commit(before_commit)
+    snapshot = copy.deepcopy(settings)
+    try:
+        requested_key = (settings.cloakbrowser_license_key
+                         if body.cloakbrowser_license_key == "********"
+                         else body.cloakbrowser_license_key)
+        if (body.cloakbrowser_use_free_key != settings.cloakbrowser_use_free_key
+                or requested_key != settings.cloakbrowser_license_key):
+            try:
+                update_cloakbrowser_license(
+                    settings, enabled=body.cloakbrowser_use_free_key, license_key=requested_key,
+                )
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        settings.api_id = body.api_id
+        if body.api_hash != "********":
+            settings.api_hash = body.api_hash.strip()
+        if body.bot_token != "********":
+            settings.bot_token = body.bot_token.strip()
+        settings.bot_name = body.bot_name.strip() or "主要 Bot"
+        settings.default_bot_id = body.default_bot_id.strip() or "default"
+        settings.default_bot_chat_id = body.default_bot_chat_id.strip()
+        settings.web_host = body.web_host.strip() or "0.0.0.0"
+        settings.web_port = body.web_port
+        settings.bots = new_bots
+        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token} | set(channel_ids)
+        settings.bot_routing = {
+            plugin_id: ",".join(bot_id for bot_id in str(route).split(",")
+                                 if bot_id.strip() in valid_route_bots)
+            for plugin_id, route in settings.bot_routing.items()
+            if any(bot_id.strip() in valid_route_bots for bot_id in str(route).split(","))
+        }
+        settings.ai_base_url = body.ai_base_url.strip() or "https://api.openai.com/v1"
+        if body.ai_api_key != "********":
+            settings.ai_api_key = body.ai_api_key.strip()
+        settings.ai_model = body.ai_model.strip() or "gpt-4.1-mini"
+        settings.plugin_repos = new_repos
+        settings.notification_channels = channels
+        if update_system_notification:
+            settings.system_update_notify_enabled = body.system_update_notify_enabled
+        settings.proxy_url = proxy_url
+        if body.webhook_secret != "********":
+            settings.webhook_secret = body.webhook_secret.strip()
+        if body.api_key != "********":
+            settings.api_key = body.api_key.strip()
+        settings.pip_index_url = pip_index_url
+        if body.github_token != "********":
+            settings.github_token = body.github_token.strip()
+        settings.browser_engine = body.browser_engine
+        settings.log_cleaner = normalized_cleaner
+        if update_fields is not None:
+            # A confirmed partial edit must not also normalize unrelated saved
+            # data (route pruning, channel flattening, whitespace and repos).
+            # Keep using the UI validators and dependency checks, then commit
+            # only the exact top-level fields shown in the approval preview.
+            for item in fields(snapshot):
+                if item.name not in update_fields:
+                    setattr(settings, item.name, copy.deepcopy(getattr(snapshot, item.name)))
+        save_settings(settings)
+    except BaseException:
+        for item in fields(snapshot):
+            setattr(settings, item.name, copy.deepcopy(getattr(snapshot, item.name)))
+        # The browser gate keeps a reference to settings; restoring this object
+        # also restores its view of the old license without changing sessions.
+        raise
+    market.clear_cache()
+    current = (settings.api_id, settings.api_hash, settings.bot_token, settings.proxy_url,
+               settings.default_bot_id, settings.web_host, settings.web_port,
+               [(item.id, item.token) for item in settings.bots], dict(settings.log_cleaner))
+    return {"ok": True, "restart_required": current != previous}
+
 def create_router(deps) -> APIRouter:
     router = APIRouter()
     settings = deps.settings
@@ -65,13 +374,6 @@ def create_router(deps) -> APIRouter:
 
     def masked_channels():
         return mask_channels(settings)
-
-    def check_settings_save_available():
-        if cloak_session_status().get("maintenance"):
-            raise HTTPException(
-                status_code=409,
-                detail="CloakBrowser 正在更新，暂时无法保存系统设置，请等待系统重启",
-            )
 
     @router.get("/api/settings", dependencies=[Depends(require_admin)])
     async def get_settings():
@@ -124,36 +426,12 @@ def create_router(deps) -> APIRouter:
             }
         }
 
-    def current_ai_settings() -> dict[str, object]:
-        if settings.ai_settings:
-            value = json.loads(json.dumps(settings.ai_settings))
-            if isinstance(value.get("capabilities"), dict):
-                value["capabilities"].setdefault("audio", {})
-            value.setdefault("timeout_seconds", 60)
-            value.setdefault("image_timeout_seconds", 300)
-            value.setdefault("max_concurrency", 3)
-            for provider in value.get("providers", []):
-                if isinstance(provider, dict):
-                    provider.setdefault("api_format", "auto")
-            return value
-        provider_id = "default"
-        return {
-            "providers": [{"id": provider_id, "name": "OpenAI 兼容服务", "enabled": True,
-                           "base_url": settings.ai_base_url, "api_key": settings.ai_api_key,
-                           "api_format": "auto"}],
-            "models": [{"id": "default", "alias": settings.ai_model, "name": settings.ai_model,
-                        "enabled": True, "provider_id": provider_id, "model": settings.ai_model,
-                        "capabilities": ["text"]}],
-            "capabilities": {"text": {"default_model": settings.ai_model}, "vision": {}, "image": {}, "audio": {}},
-            "plugin_permissions": {},
-            "timeout_seconds": 60,
-            "image_timeout_seconds": 300,
-            "max_concurrency": 3,
-        }
+    def current_ai_settings_value():
+        return current_ai_settings(settings)
 
     @router.get("/api/ai/settings", dependencies=[Depends(require_admin)])
     async def get_ai_settings():
-        value = current_ai_settings()
+        value = current_ai_settings_value()
         safe = json.loads(json.dumps(value))
         for provider in safe.get("providers", []):
             if provider.get("api_key"):
@@ -167,36 +445,7 @@ def create_router(deps) -> APIRouter:
     @router.put("/api/ai/settings", dependencies=[Depends(require_admin)])
     async def save_ai_settings(request: Request):
         raw = await request.json()
-        value = raw.get("settings")
-        if not isinstance(value, dict):
-            raise HTTPException(status_code=400, detail="AI 设置格式不正确")
-        value.setdefault("timeout_seconds", 60)
-        value.setdefault("image_timeout_seconds", 300)
-        value.setdefault("max_concurrency", 3)
-        providers = value.get("providers", [])
-        if not isinstance(providers, list):
-            raise HTTPException(status_code=400, detail="AI 服务商列表格式不正确")
-        for provider in providers:
-            if not isinstance(provider, dict):
-                raise HTTPException(status_code=400, detail="AI 服务商配置格式不正确")
-            requested_format = str(provider.get("api_format") or "auto").strip().lower().replace("-", "_")
-            if requested_format not in API_FORMATS:
-                raise HTTPException(status_code=400, detail="AI 接口格式不受支持")
-            provider["api_format"] = normalize_api_format(requested_format)
-        old_keys = {str(item.get("id")): str(item.get("api_key") or "")
-                    for item in settings.ai_settings.get("providers", []) if isinstance(item, dict)}
-        for provider in value.get("providers", []):
-            if isinstance(provider, dict) and provider.get("api_key") == "********":
-                provider["api_key"] = old_keys.get(str(provider.get("id")), settings.ai_api_key)
-        settings.ai_settings = value
-        provider = next((item for item in value.get("providers", []) if isinstance(item, dict) and item.get("enabled", True)), None)
-        if provider:
-            settings.ai_base_url = str(provider.get("base_url") or settings.ai_base_url)
-            settings.ai_api_key = str(provider.get("api_key") or "")
-        model = next((item for item in value.get("models", []) if isinstance(item, dict) and item.get("enabled", True)), None)
-        if model:
-            settings.ai_model = str(model.get("model") or model.get("alias") or settings.ai_model)
-        save_settings(settings)
+        await save_ai_settings_value(deps, raw.get("settings") if isinstance(raw, dict) else None)
         return await get_ai_settings()
 
     @router.get("/api/ai/plugins", dependencies=[Depends(require_admin)])
@@ -257,7 +506,7 @@ def create_router(deps) -> APIRouter:
     async def ai_provider_models(request: Request):
         raw = await request.json()
         preview = raw.get("provider")
-        saved_providers = [item for item in current_ai_settings().get("providers", [])
+        saved_providers = [item for item in current_ai_settings_value().get("providers", [])
                            if isinstance(item, dict)]
         if isinstance(preview, dict):
             provider = dict(preview)
@@ -265,19 +514,19 @@ def create_router(deps) -> APIRouter:
             saved = next((item for item in saved_providers
                           if str(item.get("id") or "") == provider_id), None)
             if provider.get("api_key") == "********":
-                provider["api_key"] = str((saved or {}).get("api_key") or settings.ai_api_key)
+                provider["api_key"] = str((saved or {}).get("api_key") or "")
         else:
             provider_id = str(preview or "")
             provider = next((item for item in saved_providers
                              if str(item.get("id") or "") == provider_id), None)
         if not provider:
             raise HTTPException(status_code=404, detail="AI 服务不存在")
-        api_key = str(provider.get("api_key") or settings.ai_api_key)
+        api_key = str(provider.get("api_key") or "")
         base_url = str(provider.get("base_url") or settings.ai_base_url).strip().rstrip("/")
         parsed = urlparse(base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
             raise HTTPException(status_code=400, detail="AI 服务地址无效")
-        if not api_key or api_key == "********":
+        if not api_key.strip() or api_key == "********":
             raise HTTPException(status_code=400, detail="请填写 API Key")
         try:
             response = await runtime.services.http.get(
@@ -505,199 +754,7 @@ def create_router(deps) -> APIRouter:
 
     @router.put("/api/settings", dependencies=[Depends(require_admin)])
     async def update_settings(request: Request):
-        raw = await request.json()
-        check_settings_save_available()
-        if not isinstance(raw, dict):
-            raise HTTPException(status_code=400, detail="设置必须是对象")
-        update_system_notification = "system_update_notify_enabled" in raw
-        if isinstance(raw.get("settings"), dict):
-            legacy = raw["settings"]
-            update_system_notification = "SYSTEM_UPDATE_NOTIFY_ENABLED" in legacy
-            proxy = legacy.get("proxy_set") or {}
-            legacy_cloak_key = legacy.get(
-                "CLOAKBROWSER_LICENSE_KEY",
-                "********" if settings.cloakbrowser_license_key else "",
-            )
-            legacy_cloak_key_enabled = (
-                settings.cloakbrowser_use_free_key
-                if legacy_cloak_key == "********"
-                else bool(str(legacy_cloak_key or "").strip())
-            )
-            raw = {
-                "api_id": legacy.get("API_ID", settings.api_id),
-                "api_hash": legacy.get("API_HASH", "********" if settings.api_hash else ""),
-                "bot_token": legacy.get("BOT_TOKEN", "********" if settings.bot_token else ""),
-                "bot_name": legacy.get("BOT_NAME", settings.bot_name),
-                "default_bot_id": legacy.get("DEFAULT_BOT_ID", settings.default_bot_id),
-                "default_bot_chat_id": legacy.get("DEFAULT_BOT_CHAT_ID", settings.default_bot_chat_id),
-                "web_host": settings.web_host,
-                "web_port": legacy.get("WEB_UI_PORT", settings.web_port),
-                "bots": legacy.get("BOTS", [asdict(bot) for bot in settings.bots]),
-                "ai_base_url": settings.ai_base_url,
-                "ai_api_key": "********" if settings.ai_api_key else "",
-                "ai_model": settings.ai_model,
-                "plugin_repos": legacy.get("PLUGIN_REPOS", settings.plugin_repos),
-                "notification_channels": legacy.get("NOTIFICATION_CHANNELS", settings.notification_channels),
-                "system_update_notify_enabled": legacy.get(
-                    "SYSTEM_UPDATE_NOTIFY_ENABLED", settings.system_update_notify_enabled,
-                ),
-                "proxy_url": proxy.get("PROXY_URL", settings.proxy_url) if proxy.get("proxy_enable") else "",
-                "webhook_secret": legacy.get("WEBHOOK_SECRET", "********" if settings.webhook_secret else ""),
-                "api_key": legacy.get("API_KEY", "********" if settings.api_key else ""),
-                "pip_index_url": legacy.get("PIP_INDEX_URL", settings.pip_index_url),
-                "github_token": legacy.get("GITHUB_TOKEN", "********" if settings.github_token else ""),
-                "browser_engine": legacy.get("BROWSER_ENGINE", settings.browser_engine),
-                "cloakbrowser_use_free_key": legacy.get(
-                    "CLOAKBROWSER_USE_FREE_KEY", legacy_cloak_key_enabled,
-                ),
-                "cloakbrowser_license_key": legacy_cloak_key,
-                "log_cleaner": legacy.get("LOG_CLEANER", settings.log_cleaner),
-            }
-        try:
-            existing = asdict(settings)
-            body = SettingsBody.model_validate({**{key: existing[key] for key in SettingsBody.model_fields
-                                                   if key in existing}, **raw})
-        except Exception as exc:
-            raise HTTPException(status_code=422, detail=f"设置格式不正确：{exc}") from exc
-        previous = (settings.api_id, settings.api_hash, settings.bot_token, settings.proxy_url,
-                    settings.default_bot_id, settings.web_host, settings.web_port,
-                    [(item.id, item.token) for item in settings.bots], dict(settings.log_cleaner))
-        existing_tokens = {item.id: item.token for item in settings.bots}
-        new_bots = [BotSettings(
-            id=str(item.get("id") or "").strip(),
-            name=str(item.get("name") or item.get("id") or "Bot").strip(),
-            token=(existing_tokens.get(str(item.get("id") or ""), "")
-                   if item.get("token") == "********" else str(item.get("token") or "").strip()),
-        ) for item in body.bots if str(item.get("id") or "").strip() and item.get("id") != "default"]
-        bot_ids = [item.id for item in new_bots]
-        if len(bot_ids) != len(set(bot_ids)) or any(not item.replace("_", "").replace("-", "").isalnum() for item in bot_ids):
-            raise HTTPException(status_code=400, detail="Bot ID 必须唯一，且只能包含字母、数字、横线和下划线")
-        if (body.default_bot_id.strip() or "default") not in {"default", *bot_ids}:
-            raise HTTPException(status_code=400, detail="默认 Bot 不存在")
-        try:
-            new_repos = [normalize_repo(item) for item in body.plugin_repos if item.strip()]
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        current_channels = {str(item.get("id") or ""): item for item in settings.notification_channels}
-        channels = []
-        for raw_channel in body.notification_channels:
-            nested = raw_channel.get("config") if isinstance(raw_channel.get("config"), dict) else {}
-            item = {**nested, **raw_channel}
-            item.pop("config", None)
-            previous_channel = current_channels.get(str(item.get("id") or ""), {})
-            previous_nested = (previous_channel.get("config")
-                               if isinstance(previous_channel.get("config"), dict) else {})
-            for key in ("url", "webhook", "server", "token", "password", "secret", "device_key",
-                        "callback_token", "callback_aes_key"):
-                if item.get(key) == "********":
-                    item[key] = previous_channel.get(key, previous_nested.get(key, ""))
-            if item.get("type") == "wechat":
-                item["type"] = "wecom"
-            try:
-                validate_callback_config(item)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
-            if item.get("type") == "telegram":
-                # Telegram tokens are owned by the Bot settings above. Keeping
-                # a masked duplicate in the channel would corrupt later saves.
-                item.pop("token", None)
-                item["bot_id"] = str(item.get("id") or "")
-            channels.append(item)
-        channel_ids = [str(item.get("id") or "") for item in channels]
-        allowed_channels = {"telegram", "bark", "wecom", "wechat", "webhook"}
-        if any(not item for item in channel_ids) or len(channel_ids) != len(set(channel_ids)):
-            raise HTTPException(status_code=400, detail="通知渠道 ID 不能为空且必须唯一")
-        if any(str(item.get("type") or "") not in allowed_channels for item in channels):
-            raise HTTPException(status_code=400, detail="通知渠道类型不受支持")
-        try:
-            validate_callback_channels(channels)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        proxy_url = body.proxy_url.strip()
-        if "********" in proxy_url:
-            proxy_url = settings.proxy_url
-        if proxy_url:
-            parsed_proxy = urlparse(proxy_url)
-            if parsed_proxy.scheme not in {"http", "socks4", "socks5"} or not parsed_proxy.hostname or not parsed_proxy.port:
-                raise HTTPException(status_code=400, detail="代理地址必须是完整的 http/socks4/socks5 URL")
-        pip_index_url = body.pip_index_url.strip()
-        if pip_index_url:
-            parsed_index = urlparse(pip_index_url)
-            if parsed_index.scheme not in {"http", "https"} or not parsed_index.hostname:
-                raise HTTPException(status_code=400, detail="pip 镜像源必须是完整的 http/https URL")
-        cleaner = dict(body.log_cleaner or settings.log_cleaner)
-        try:
-            normalized_cleaner = {
-                "enabled": bool(cleaner.get("enabled", True)),
-                "keep_lines": max(1, min(int(cleaner.get("keep_lines", 1000)), 1000)),
-                "hour": max(0, min(int(cleaner.get("hour", 3)), 23)),
-                "minute": max(0, min(int(cleaner.get("minute", 0)), 59)),
-            }
-        except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="日志清理设置格式不正确") from exc
-        if body.browser_engine == "cloakbrowser":
-            try:
-                await DependencyManager(body).ensure(
-                    [CLOAKBROWSER_INSTALL_REQUIREMENT],
-                    plugin_name="CloakBrowser 浏览器引擎",
-                    target_only=True,
-                )
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=f"CloakBrowser 安装失败：{exc}") from exc
-        # An update can enter maintenance while dependency installation awaits.
-        # No await is allowed between this check and the synchronous mutation.
-        check_settings_save_available()
-        try:
-            update_cloakbrowser_license(
-                settings, enabled=body.cloakbrowser_use_free_key,
-                license_key=(settings.cloakbrowser_license_key
-                             if body.cloakbrowser_license_key == "********"
-                             else body.cloakbrowser_license_key),
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        settings.api_id = body.api_id
-        if body.api_hash != "********":
-            settings.api_hash = body.api_hash.strip()
-        if body.bot_token != "********":
-            settings.bot_token = body.bot_token.strip()
-        settings.bot_name = body.bot_name.strip() or "主要 Bot"
-        settings.default_bot_id = body.default_bot_id.strip() or "default"
-        settings.default_bot_chat_id = body.default_bot_chat_id.strip()
-        settings.web_host = body.web_host.strip() or "0.0.0.0"
-        settings.web_port = body.web_port
-        settings.bots = new_bots
-        valid_route_bots = {spec.id for spec in settings.bot_specs() if spec.token} | set(channel_ids)
-        settings.bot_routing = {
-            plugin_id: ",".join(bot_id for bot_id in str(route).split(",")
-                                 if bot_id.strip() in valid_route_bots)
-            for plugin_id, route in settings.bot_routing.items()
-            if any(bot_id.strip() in valid_route_bots for bot_id in str(route).split(","))
-        }
-        settings.ai_base_url = body.ai_base_url.strip() or "https://api.openai.com/v1"
-        if body.ai_api_key != "********":
-            settings.ai_api_key = body.ai_api_key.strip()
-        settings.ai_model = body.ai_model.strip() or "gpt-4.1-mini"
-        settings.plugin_repos = new_repos
-        settings.notification_channels = channels
-        if update_system_notification:
-            settings.system_update_notify_enabled = body.system_update_notify_enabled
-        settings.proxy_url = proxy_url
-        if body.webhook_secret != "********":
-            settings.webhook_secret = body.webhook_secret.strip()
-        if body.api_key != "********":
-            settings.api_key = body.api_key.strip()
-        settings.pip_index_url = pip_index_url
-        if body.github_token != "********":
-            settings.github_token = body.github_token.strip()
-        settings.browser_engine = body.browser_engine
-        settings.log_cleaner = normalized_cleaner
-        save_settings(settings)
-        market.clear_cache()
-        current = (settings.api_id, settings.api_hash, settings.bot_token, settings.proxy_url,
-                   settings.default_bot_id, settings.web_host, settings.web_port,
-                   [(item.id, item.token) for item in settings.bots], dict(settings.log_cleaner))
-        return {"ok": True, "restart_required": current != previous}
+        return await save_system_settings(deps, await request.json())
 
     @router.put("/api/settings/notification-channels", dependencies=[Depends(require_admin)])
     async def save_notification_channels(request: Request):
@@ -791,7 +848,7 @@ def create_router(deps) -> APIRouter:
                      "API_KEY": settings.api_key,
                      "WEBHOOK_SECRET": settings.webhook_secret}.get(field, "")
         elif kind == "ai":
-            provider = next((item for item in current_ai_settings().get("providers", [])
+            provider = next((item for item in current_ai_settings_value().get("providers", [])
                              if isinstance(item, dict) and str(item.get("id")) == item_id), None)
             value = str((provider or {}).get(field) or "")
         elif kind == "cookie":
