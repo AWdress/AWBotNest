@@ -9,6 +9,8 @@ import { publishNotificationSync, subscribeNotificationSync } from '../utils/not
 import SecretInput from '../components/SecretInput.vue'
 import { Sparkles } from '@lucide/vue'
 
+function openAssistant() { window.dispatchEvent(new Event('awbotnest:open-assistant')) }
+
 const tab = ref('login')   // login | notify | ai | cookies | api | system | maint
 
 const TABS = [
@@ -2132,8 +2134,11 @@ onBeforeRouteLeave(async () => {
                   </div>
                 </div>
               </div>
-              <div class="ai-config-state" :class="{ ready: aiStatus?.configured }">
-                <i></i>{{ aiStatus?.configured ? '服务已配置' : '等待配置' }}
+              <div class="row" style="gap: 10px; flex-wrap: wrap">
+                <button type="button" class="btn sm" @click="openAssistant">打开系统助手</button>
+                <div class="ai-config-state" :class="{ ready: aiStatus?.configured }">
+                  <i></i>{{ aiStatus?.configured ? '服务已配置' : '等待配置' }}
+                </div>
               </div>
             </div>
 

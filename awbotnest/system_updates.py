@@ -286,13 +286,19 @@ class SystemUpdateService:
             await asyncio.shield(self._fetch_task)
         if notify:
             await self.notify_pending()
+        return self.snapshot(include_history=include_history)
+
+    def snapshot(self, *, include_history: bool = False) -> dict[str, Any]:
+        """Read the existing cache without fetching or dispatching notices."""
         result = copy.deepcopy(self._cache or {
             "current_version": self.current_version, "latest_version": "", "update_available": False, "releases": [],
         })
         if not include_history:
             result["releases"] = result["releases"][:1]
         result.update({
-            "ok": not bool(self._check_error), "status": "error" if self._check_error else "ok", "error": self._check_error,
+            "ok": bool(self._cache) and not bool(self._check_error),
+            "status": "error" if self._check_error else "ok" if self._cache else "unavailable",
+            "error": self._check_error or ("" if self._cache else "暂时没有可用检查结果"),
             "checked_at": self._checked_at, "last_checked_at": self._checked_at,
             "stale": bool(self._check_error and self._cache is not None),
             "notification_status": (self._notification_status if self.settings.system_update_notify_enabled is True

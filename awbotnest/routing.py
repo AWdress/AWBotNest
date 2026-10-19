@@ -4,11 +4,22 @@ import inspect
 import json
 import asyncio
 import uuid
+import copy
 from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Any
+from contextvars import ContextVar
 
 from .wecom_messages import WECOM_MESSAGE_TYPES, WeComMessage
+
+_ACTION_CHECK: ContextVar[Callable[[], Any] | None] = ContextVar("plugin_action_check", default=None)
+
+
+def check_action_authorization() -> None:
+    """Recheck assistant authority after Governor admission, not only before queuing."""
+    check = _ACTION_CHECK.get()
+    if check is not None:
+        check()
 
 
 def _wecom_filter_values(values: Any, name: str) -> tuple[str, ...]:
@@ -72,6 +83,7 @@ class PluginRoutes:
     def __init__(self) -> None:
         self._webhooks: dict[tuple[str, str], Callable[..., Any]] = {}
         self._actions: dict[tuple[str, str], Callable[..., Any]] = {}
+        self._action_metadata: dict[tuple[str, str], dict[str, Any]] = {}
         self._apis: dict[tuple[str, str], Callable[..., Any]] = {}
         self._method_apis = {}
         self._wecom_handlers: dict[str, _WeComHandler] = {}
@@ -140,8 +152,26 @@ class PluginRoutes:
     def webhook(self, plugin_id: str, path: str, callback: Callable[..., Any]) -> None:
         self._webhooks[(plugin_id, self._name(path))] = callback
 
-    def action(self, plugin_id: str, name: str, callback: Callable[..., Any]) -> None:
-        self._actions[(plugin_id, self._name(name))] = callback
+    def action(self, plugin_id: str, name: str, callback: Callable[..., Any], *,
+               description: str = "", parameters: dict[str, Any] | None = None,
+               read_only: bool = False, agent_exposed: bool = False) -> None:
+        from .assistant_tools import validate_tool_schema
+        if not callable(callback):
+            raise TypeError("插件动作回调必须可调用")
+        if not isinstance(description, str) or len(description) > 600:
+            raise ValueError("插件动作说明必须是 600 字以内的字符串")
+        if type(read_only) is not bool or type(agent_exposed) is not bool:
+            raise ValueError("插件动作授权必须是布尔值")
+        if agent_exposed and not description.strip():
+            raise ValueError("向助手开放的动作必须填写说明")
+        schema = validate_tool_schema(parameters)
+        key = (plugin_id, self._name(name))
+        self._actions[key] = callback
+        self._action_metadata[key] = {
+            "name": key[1], "description": description.strip(), "parameters": schema,
+            "read_only": read_only, "agent_exposed": agent_exposed,
+            "generation": uuid.uuid4().hex, "validate_parameters": parameters is not None or agent_exposed,
+        }
 
     async def dispatch_webhook(self, plugin_id: str, path: str, request: Any) -> Any:
         callback = self._webhooks.get((plugin_id, self._name(path)))
@@ -150,12 +180,38 @@ class PluginRoutes:
         value = callback(request)
         return await asyncio.wait_for(value, timeout=120) if inspect.isawaitable(value) else value
 
-    async def dispatch_action(self, plugin_id: str, name: str, payload: dict[str, Any]) -> Any:
-        callback = self._actions.get((plugin_id, self._name(name)))
+    async def dispatch_action(self, plugin_id: str, name: str, payload: dict[str, Any], *,
+                              expected_generation: str | None = None,
+                              authorize: Callable[[], Any] | None = None) -> Any:
+        key = (plugin_id, self._name(name))
+        callback = self._actions.get(key)
         if callback is None:
             raise LookupError("插件动作不存在")
-        value = callback(payload)
-        return await asyncio.wait_for(value, timeout=120) if inspect.isawaitable(value) else value
+        metadata = self._action_metadata.get(key)
+        if expected_generation is not None and (metadata is None or metadata["generation"] != expected_generation):
+            raise LookupError("插件动作已重载，请重新确认")
+        if metadata is not None and metadata["validate_parameters"]:
+            from .assistant_tools import validate_tool_arguments
+            payload = validate_tool_arguments(metadata["parameters"], payload)
+        def check():
+            current = self._action_metadata.get(key)
+            if expected_generation is not None and (
+                    self._actions.get(key) is not callback or current is None
+                    or current["generation"] != expected_generation):
+                raise LookupError("插件动作已重载，请重新确认")
+            if authorize is not None:
+                authorize()
+        check()
+        token = _ACTION_CHECK.set(check if expected_generation is not None or authorize is not None else None)
+        try:
+            value = callback(payload)
+            return await asyncio.wait_for(value, timeout=120) if inspect.isawaitable(value) else value
+        finally:
+            _ACTION_CHECK.reset(token)
+
+    def describe_actions(self, plugin_id: str) -> list[dict[str, Any]]:
+        return [copy.deepcopy({key: value for key, value in metadata.items() if key != "validate_parameters"})
+                for (owner, _), metadata in sorted(self._action_metadata.items()) if owner == plugin_id]
 
     def remove_plugin(self, plugin_id: str) -> None:
         self._wecom_handlers.pop(plugin_id, None)
@@ -163,6 +219,7 @@ class PluginRoutes:
         self._apis = {key: value for key, value in self._apis.items() if key[0] != plugin_id}
         self._webhooks = {key: value for key, value in self._webhooks.items() if key[0] != plugin_id}
         self._actions = {key: value for key, value in self._actions.items() if key[0] != plugin_id}
+        self._action_metadata = {key: value for key, value in self._action_metadata.items() if key[0] != plugin_id}
 
     def describe(self, plugin_id: str) -> dict[str, list[str]]:
         return {

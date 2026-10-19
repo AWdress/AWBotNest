@@ -41,6 +41,19 @@ Platform Services / Scheduler / Governance
 5. `PluginContext` 是正式 Plugin SDK Facade。插件通过 `ctx.http`、`ctx.ai`、`ctx.browser`、`ctx.ocr`、`ctx.cookies`、`ctx.storage`、`ctx.sessions`、`ctx.delivery`、通知、路由和调度接口使用系统能力，不直接依赖内部实现。
 6. 内部拆分不得无意改变现有 REST URL、HTTP method、参数、响应 JSON、状态码、鉴权、auth cookie、WebSocket 协议、前端 contract、配置格式或数据库格式。
 
+## 系统助手兼容性边界
+
+1. 系统助手是管理员控制面，不是插件 RPC；仅管理员鉴权可访问 `/api/assistant`，开放 API Key 和消息渠道成员身份均不能代替管理员身份。
+2. 现有 `ctx.ai.chat()` 返回字符串的接口不变；`AIService.tool_turn()` 新增结构化工具调用，不允许从普通模型文本推断并执行动作。
+3. 现有 `ctx.action(name, callback)` 保持兼容。助手可见动作必须显式声明 `agent_exposed=True`、中文说明和受限 JSON Schema，再由管理员授权插件；写操作还必须经本次服务端确认。
+4. 确认绑定动作参数、配置指纹和动作注册代次，一次性且有期限。等待 Governor 后必须再次核实权限和代次，不能用历史确认授权未来预约的写操作。
+5. 助手会话使用独立 `data/assistant.db`，有界保留；SQLite 事务放在线程，取消时等待短事务完成并关闭连接。系统关闭时取消并收拢全部助手工作，重启不重放未确认的副作用。
+6. 工具不提供任意代码、Shell、文件访问、密钥原值或跨插件存储访问。工具、技能、记忆和日志均视为不可信资料，不能扩大工具权限。
+7. 本次不开放插件配置写入，避免绕过现有配置校验、生命周期锁和失败回滚；插件动作继续经过既有 Governor。
+8. 内置 Skill 使用随包编译的只读纯文本注册表，目录只注入有界元数据；正文经 `read_skill` 分页按需读取，必须保留续读标记，不能静默截断。自定义技能继续使用原 SQLite 文档，不占用内置命名空间，不执行脚本、文件路径或远程包。
+9. GitHub Issue 是新增的外部写入边界：复用系统已有 GitHub Token，默认关闭提交，仅允许管理员明确配置的仓库。必须先生成脱敏本地草稿，再确认完整目标、标题和正文；执行前复核内容、授权、Token 和代理指纹。仅访问固定 GitHub API，禁重定向及任意 URL，Token 和原始上游异常不得交给模型或日志。提交前持久化一次性状态，超时、取消或重启恢复为结果待核实，不自动重试。
+10. 本轮不改已有公开 REST、WebSocket、Plugin API 或 Telegram 消息入口。助手新增设置项从安全默认值合并，原有文档继续可读；Issue 草稿沿用独立数据库的文档存储，无需变更业务表或迁移真实配置。回滚可停用助手并保留数据库，不删除用户记录；未处理补充必须在接受时持久化，任务终止时明确提示。
+
 ## 入口与元数据
 
 1. 单文件入口为 `plugins/<id>.py`，目录包入口为 `plugins/<id>/__init__.py`。

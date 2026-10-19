@@ -393,18 +393,23 @@ class PluginContext:
             return handler
         return register(callback) if callback is not None else register
 
-    def action(self, name: str, callback: Callable[..., Any] | None = None):
+    def action(self, name: str, callback: Callable[..., Any] | None = None, *,
+               description: str = "", parameters: dict[str, Any] | None = None,
+               read_only: bool = False, agent_exposed: bool = False):
         self._ensure_open()
         if callback is None:
-            return lambda handler: self.action(name, handler)
+            return lambda handler: self.action(name, handler, description=description, parameters=parameters,
+                                                read_only=read_only, agent_exposed=agent_exposed)
         if self.is_primary_instance:
-            if not inspect.signature(callback).parameters:
-                async def no_args(payload):
-                    value = callback()
-                    return await value if inspect.isawaitable(value) else value
-                self.routes.action(self.plugin_id, name, self._managed(no_args, operation=f"action:{name}"))
-            else:
-                self.routes.action(self.plugin_id, name, self._managed(callback, operation=f"action:{name}"))
+            no_args = not inspect.signature(callback).parameters
+            async def invoke_action(payload):
+                from .routing import check_action_authorization
+                check_action_authorization()
+                value = callback() if no_args else callback(payload)
+                return await value if inspect.isawaitable(value) else value
+            self.routes.action(self.plugin_id, name, self._managed(invoke_action, operation=f"action:{name}"),
+                               description=description, parameters=parameters,
+                               read_only=read_only, agent_exposed=agent_exposed)
         return callback
 
     def schedule(self, callback, trigger="interval", **fields):

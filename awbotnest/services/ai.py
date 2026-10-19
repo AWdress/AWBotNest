@@ -21,11 +21,15 @@ from .ai_usage import AIUsageTracker
 from .ai_protocol import (
     AIRequestError,
     build_request,
+    build_tool_request,
     decode_json,
     normalize_api_format,
+    normalize_tools,
     parse_text_response,
+    parse_tool_response,
     protocol_candidates,
     raise_for_status,
+    validate_tool_messages,
 )
 
 logger = logging.getLogger("awbotnest.ai")
@@ -216,7 +220,9 @@ class AIService:
 
     async def _text_request(self, messages: list[dict[str, object]], *, capability: str,
                             model: str, plugin_id: str, temperature: float | None,
-                            max_tokens: int | None, used_fallback: bool) -> str:
+                            max_tokens: int | None, used_fallback: bool,
+                            tools: list[dict[str, Any]] | None = None,
+                            tool_budget: dict[str, Any] | None = None) -> str | dict[str, Any]:
         resolving_started = time.perf_counter()
         try:
             target = self._resolve_details(capability, model, plugin_id)
@@ -231,26 +237,57 @@ class AIService:
         )
         last_error: Exception | None = None
         for index, protocol in enumerate(candidates):
+            data = None
             started = time.perf_counter()
-            self._log_started("文字" if capability == "text" else "视觉",
-                              plugin_id, resolved_model, base_url)
+            if tools is None:
+                self._log_started("文字" if capability == "text" else "视觉",
+                                  plugin_id, resolved_model, base_url)
             try:
-                request = build_request(
-                    protocol, base_url, target["api_key"], resolved_model, messages,
-                    temperature=temperature, max_tokens=max_tokens,
-                )
+                if tools is None:
+                    request = build_request(
+                        protocol, base_url, target["api_key"], resolved_model, messages,
+                        temperature=temperature, max_tokens=max_tokens,
+                    )
+                else:
+                    request = build_tool_request(
+                        protocol, base_url, target["api_key"], resolved_model, messages, tools,
+                        max_tokens=max_tokens,
+                    )
+                    if tool_budget is not None:
+                        # This is a conservative admission reservation, not a bill:
+                        # UTF-8 input bytes + the full possible output token count.
+                        # Never refund or reset it when changing protocol/model.
+                        reservation = len(json.dumps(
+                            request.payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+                        ).encode("utf-8")) + int(max_tokens or 2048)
+                        limit = tool_budget["limit"]
+                        if limit is not None and tool_budget["used"] + reservation > limit:
+                            raise AIRequestError("AI 工具调用预算不足，未发送请求", category="budget")
+                        tool_budget["used"] += reservation
+                    self._log_started("文字" if capability == "text" else "视觉",
+                                      plugin_id, resolved_model, base_url)
                 response = await self._post(
                     request.url, headers=request.headers, json=request.payload,
                     timeout=self._timeout(capability),
                 )
                 raise_for_status(response, protocol)
                 data = decode_json(response, protocol)
-                result = parse_text_response(data, protocol)
+                if tools is not None:
+                    self.usage.record_tokens(data)
+                    if tool_budget is not None:
+                        for key, value in zip(("input_tokens", "output_tokens", "total_tokens"),
+                                              AIUsageTracker._tokens(data)):
+                            tool_budget[key] += value
+                result = (parse_text_response(data, protocol) if tools is None else parse_tool_response(
+                    data, protocol, allowed_tools={item["name"] for item in normalize_tools(tools)},
+                    model=resolved_model,
+                ))
                 if target["api_format"] == "auto":
                     self._detected_protocols[target["provider_id"]] = protocol
                 self._log_succeeded("文字" if capability == "text" else "视觉",
                                     plugin_id, resolved_model, base_url, started, data)
-                self.usage.record_tokens(data)
+                if tools is None:
+                    self.usage.record_tokens(data)
                 self._record_attempt(
                     capability=capability, plugin_id=plugin_id, target=target,
                     protocol=protocol, started=started, succeeded=True, data=data,
@@ -261,6 +298,19 @@ class AIService:
                 last_error = exc
             except Exception as exc:
                 last_error = exc
+            if isinstance(last_error, AIRequestError) and last_error.category == "budget":
+                # Nothing was sent, so do not count a provider attempt or try a
+                # different endpoint/model with the same exhausted reservation.
+                raise last_error
+            if tools is not None and isinstance(last_error, AIRequestError):
+                # Providers may echo prompts or arguments in their error detail.
+                # Keep the category/status for fallback without persisting that detail.
+                suffix = f"，HTTP {last_error.status_code}" if last_error.status_code else ""
+                last_error = AIRequestError(
+                    f"AI 工具请求失败（{last_error.category}{suffix}）",
+                    category=last_error.category, status_code=last_error.status_code,
+                    retryable=last_error.retryable, protocol_mismatch=last_error.protocol_mismatch,
+                )
             may_try_protocol = (
                 target["api_format"] == "auto" and index < len(candidates) - 1
                 and isinstance(last_error, AIRequestError) and last_error.protocol_mismatch
@@ -271,11 +321,55 @@ class AIService:
             self._record_attempt(
                 capability=capability, plugin_id=plugin_id, target=target,
                 protocol=protocol, started=started, succeeded=False, exc=last_error,
+                data=data if tools is not None else None,
                 used_fallback=used_fallback or may_try_protocol,
             )
             if not may_try_protocol:
                 raise last_error
         raise last_error or AIRequestError("AI 服务未返回结果", category="unknown")
+
+    async def tool_turn(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
+                        model: str | None = "", max_tokens: int | None = 2048,
+                        plugin_id: str = "", budget_tokens: int | None = None) -> dict[str, Any]:
+        """Request structured calls; execution and approval belong to the caller."""
+        definitions = normalize_tools(tools)
+        validate_tool_messages(messages)
+        requested_model = str(model or "")
+        try:
+            output_budget = max(1, min(32768, int(max_tokens if max_tokens is not None else 2048)))
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise AIRequestError("AI 输出预算无效", category="configuration") from exc
+        if budget_tokens is not None and (type(budget_tokens) is not int or budget_tokens < 1):
+            raise AIRequestError("AI 工具调用预算无效", category="budget")
+        tool_budget = {"limit": budget_tokens, "used": 0,
+                       "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        self.usage.begin()
+        completed = False
+        try:
+            try:
+                result = await self._text_request(
+                    messages, capability="text", model=requested_model, plugin_id=plugin_id,
+                    temperature=None, max_tokens=output_budget, used_fallback=False, tools=definitions,
+                    tool_budget=tool_budget,
+                )
+            except Exception as exc:
+                fallback = self._fallback("text", plugin_id) if not requested_model else ""
+                if (not fallback or isinstance(exc, PermissionError)
+                        or isinstance(exc, AIRequestError) and exc.category == "budget"):
+                    raise
+                result = await self._text_request(
+                    messages, capability="text", model=fallback, plugin_id=plugin_id,
+                    temperature=None, max_tokens=output_budget, used_fallback=True, tools=definitions,
+                    tool_budget=tool_budget,
+                )
+            result["budget_used"] = tool_budget["used"]
+            result["usage"] = {key: tool_budget[key] for key in ("input_tokens", "output_tokens", "total_tokens")}
+            self.usage.succeed()
+            completed = True
+            return result
+        finally:
+            if not completed:
+                self.usage.fail()
 
     async def chat(self, messages: list[dict[str, object]], *, model: str = "",
                    temperature: float | None = None, max_tokens: int | None = None,

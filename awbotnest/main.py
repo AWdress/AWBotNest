@@ -253,6 +253,9 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
     async def initialize_platform() -> None:
         try:
             await start_platform(settings, accounts, runtime, scheduler, market)
+            assistant = getattr(app.state, "assistant", None)
+            if assistant is not None:
+                await assistant.start()
         except Exception as exc:
             app.state.platform_startup_error = type(exc).__name__
             raise
@@ -282,6 +285,12 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         platform_task.cancel()
         memory_pressure_task.cancel()
         await asyncio.gather(restart_watcher, platform_task, memory_pressure_task, return_exceptions=True)
+        assistant = getattr(app.state, "assistant", None)
+        if assistant is not None:
+            try:
+                await assistant.close()
+            except Exception:
+                logger.warning("助手任务清理失败，继续停止其他服务")
         try:
             await app.state.wecom_commands.close()
         except Exception:

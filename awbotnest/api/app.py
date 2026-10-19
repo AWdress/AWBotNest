@@ -14,6 +14,7 @@ from ..market import PluginMarket
 from ..open_api import register_open_api
 from ..resources import ResourceSampler
 from .accounts import create_router as accounts_router
+from .assistant import create_router as assistant_router
 from .docs import register_api_docs
 from .operations import create_router as operations_router
 from .plugin_routes import create_router as plugin_routes_router
@@ -62,6 +63,9 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
     market = market or PluginMarket(settings)
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
                            admin_dependency(settings), time.monotonic(), ResourceSampler())
+    from ..assistant import AssistantService
+    app.state.assistant = AssistantService(deps)
+    app.include_router(assistant_router(deps, app.state.assistant))
     register_wecom_callback(app, deps)
     register_open_api(app, settings, accounts, runtime, market=market)
     app.include_router(system_router(deps))

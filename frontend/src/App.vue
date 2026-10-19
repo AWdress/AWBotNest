@@ -1,6 +1,6 @@
 <script setup>
 import { useRoute, useRouter } from 'vue-router'
-import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, defineAsyncComponent, ref, onMounted, onUnmounted, watch } from 'vue'
 import { api, getAuthRevision, getToken, setToken, setUnauthorizedHandler } from './api'
 import Login from './views/Login.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
@@ -36,6 +36,9 @@ import { applyAppearance, disposeAppearance } from './composables/appearance'
 
 // 鉴权门：未登录显示 Login，登录后显示主界面
 const authed = ref(false)
+const assistantOpen = ref(false)
+const assistantVisited = ref(false)
+const AssistantPanel = defineAsyncComponent(() => import('./components/AssistantPanel.vue'))
 const restoringSession = ref(!!getToken())
 let restartTimer = null
 let appearanceRotationTimer = null
@@ -104,6 +107,8 @@ function clearSessionState() {
   clearUiProfile()
   clearAccountAvatarCache()
   authed.value = false
+  assistantOpen.value = false
+  assistantVisited.value = false
   restoringSession.value = false
   online.value = false
   version.value = ''
@@ -260,8 +265,14 @@ const icons = {
 }
 
 let updateTimer = null
+function openAssistant() {
+  if (!authed.value) return
+  assistantVisited.value = true
+  assistantOpen.value = true
+}
 
 onMounted(async () => {
+  window.addEventListener('awbotnest:open-assistant', openAssistant)
   window.addEventListener('awbotnest-appearance', applyAppearance)
   document.addEventListener('visibilitychange', refreshUpdatesOnOpen)
   window.addEventListener('focus', refreshUpdatesOnOpen)
@@ -280,6 +291,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('awbotnest:open-assistant', openAssistant)
   disposed = true
   sessionSequence += 1
   clearUpdateState()
@@ -395,7 +407,12 @@ onUnmounted(() => {
           <span>{{ currentPage.kicker }}</span>
           <h1>{{ currentPage.title }}</h1>
         </div>
-        <TopbarControlCenter
+        <div class="topbar-actions">
+          <button type="button" class="assistant-entry" aria-label="打开系统助手" title="系统助手" @click="openAssistant">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H9M5 9h14a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1ZM1 13v3m22-3v3M8 14h.01M16 14h.01M9 17h6" /></svg>
+            <span>助手</span>
+          </button>
+          <TopbarControlCenter
           :online="online"
           :connection-label="connectionLabel"
           :version="version"
@@ -404,7 +421,8 @@ onUnmounted(() => {
           :restarting="restarting"
           @restart="restart"
           @logout="logout"
-        />
+          />
+        </div>
       </header>
       <div class="content" data-app-content :class="`route-${route.path.slice(1) || 'status'}`">
         <RouterView />
@@ -423,6 +441,8 @@ onUnmounted(() => {
       </RouterLink>
     </nav>
   </div>
+
+  <AssistantPanel v-if="authed && assistantVisited" :open="assistantOpen" @close="assistantOpen = false" />
 
   <!-- 全局确认弹窗 -->
   <ConfirmDialog />
@@ -580,6 +600,10 @@ onUnmounted(() => {
 .page-heading { min-width: 0; display: flex; flex-direction: column; justify-content: center; position: relative; padding-bottom: 5px; }
 .page-heading::after { content: ''; position: absolute; left: 0; bottom: 0; width: 30px; height: 2px; border-radius: 2px; background: linear-gradient(90deg, #60a5fa, #10b080); box-shadow: 0 0 10px rgba(48,128,240,.28); }
 .page-heading > span { color: #60a5fa; font-size: 10px; line-height: 1; letter-spacing: .11em; font-weight: 700; }
+.topbar-actions { margin-left: auto; display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.assistant-entry { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 11px; border: 1px solid var(--border); border-radius: 10px; color: var(--text-secondary); background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.assistant-entry svg { width: 19px; height: 19px; }
+.assistant-entry:hover { color: var(--text-primary); border-color: var(--border-light); background: var(--bg-hover); }
 .topbar h1 { margin-top: 6px; font-size: 21px; line-height: 1; font-weight: 780; letter-spacing: .1px; }
 .content {
   flex: 1; overflow-x: hidden; overflow-y: auto; padding: 28px 32px 34px; position: relative;
@@ -609,6 +633,9 @@ onUnmounted(() => {
     background: var(--bg-sidebar);
   }
   .topbar-logo { display: block; }
+  .topbar-actions { gap: 3px; }
+  .assistant-entry { width: 38px; padding: 0; justify-content: center; border-color: transparent; }
+  .assistant-entry span { display: none; }
   .page-heading > span { display: none; }
   .page-heading { flex: 1; overflow: hidden; }
   .topbar h1 { margin-top: 0; overflow: hidden; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }

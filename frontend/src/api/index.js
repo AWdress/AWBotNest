@@ -36,9 +36,10 @@ function requireAuthorized(response, auth) {
   throw new Error('未登录或登录已过期')
 }
 
-async function request(method, url, body) {
+async function request(method, url, body, signal) {
   const auth = captureAuth()
   const opts = { method, headers: authHeaders(auth.token) }
+  if (signal) opts.signal = signal
   if (body !== undefined) opts.body = JSON.stringify(body)
   const res = await fetch(url, opts)
   requireAuthorized(res, auth)
@@ -88,6 +89,26 @@ async function getStatus(force = false) {
 }
 
 export const api = {
+  // 管理员助手；轮询支持取消，不影响已在服务器执行的任务。
+  getAssistant: (signal) => request('GET', '/api/assistant', undefined, signal),
+  saveAssistantSettings: (values) => request('PUT', '/api/assistant/settings', values),
+  createAssistantSession: (values = {}) => request('POST', '/api/assistant/sessions', values),
+  getAssistantSession: (id, signal) => request('GET', `/api/assistant/sessions/${encodeURIComponent(id)}`, undefined, signal),
+  deleteAssistantSession: (id) => request('DELETE', `/api/assistant/sessions/${encodeURIComponent(id)}`),
+  sendAssistantMessage: (id, content) => request('POST', `/api/assistant/sessions/${encodeURIComponent(id)}/messages`, { content }),
+  getAssistantRun: (id, signal) => request('GET', `/api/assistant/runs/${encodeURIComponent(id)}`, undefined, signal),
+  steerAssistantRun: (id, content) => request('POST', `/api/assistant/runs/${encodeURIComponent(id)}/steer`, { content }),
+  confirmAssistantRun: (id, confirmation_id, approved) => request('POST', `/api/assistant/runs/${encodeURIComponent(id)}/confirm`, { confirmation_id, approved }),
+  cancelAssistantRun: (id) => request('POST', `/api/assistant/runs/${encodeURIComponent(id)}/cancel`),
+  saveAssistantMemory: (content, id) => request('POST', '/api/assistant/memories', { content, ...(id ? { id } : {}) }),
+  deleteAssistantMemory: (id) => request('DELETE', `/api/assistant/memories/${encodeURIComponent(id)}`),
+  saveAssistantSkill: (values) => request('POST', '/api/assistant/skills', values),
+  getAssistantSkill: (id, signal) => request('GET', `/api/assistant/skills/${encodeURIComponent(id)}`, undefined, signal),
+  deleteAssistantSkill: (id) => request('DELETE', `/api/assistant/skills/${encodeURIComponent(id)}`),
+  saveAssistantTask: (values) => request('POST', '/api/assistant/tasks', values),
+  toggleAssistantTask: (id, enabled) => request('PUT', `/api/assistant/tasks/${encodeURIComponent(id)}`, { enabled }),
+  deleteAssistantTask: (id) => request('DELETE', `/api/assistant/tasks/${encodeURIComponent(id)}`),
+
   // 鉴权
   authStatus: () => request('GET', '/api/auth/status'),
   authLogin: (username, password) => request('POST', '/api/auth/login', { username, password }),

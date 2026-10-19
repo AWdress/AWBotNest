@@ -367,6 +367,37 @@ async def setup(ctx):
 不要返回密码、Cookie 等敏感值。Telegram 消息处理函数不会通过此接口调用。
 耗时动作应使用 `async def`，不要在动作中使用 `time.sleep()` 或同步网络请求阻塞事件循环。
 
+### 向系统助手开放动作
+
+现有 `ctx.action("test", callback)` 和装饰器写法继续有效，默认只供原有按钮、管理接口和已授权的企业微信指令使用，**不会自动交给 AI 调用**。
+需要助手调用时，显式填写用途、参数定义并开启 `agent_exposed`：
+
+```python
+@ctx.action(
+    "check_status",
+    description="查询指定站点的最近签到结果，不执行签到。",
+    parameters={
+        "type": "object",
+        "properties": {"site": {"type": "string", "enum": ["site_a", "site_b"]}},
+        "required": ["site"],
+        "additionalProperties": False,
+    },
+    read_only=True,
+    agent_exposed=True,
+)
+async def check_status(payload):
+    return {"site": payload["site"], "status": "已签到"}
+```
+
+- `description`：600 字以内的动作用途；开放给助手时必填。
+- `parameters`：根节点必须是 `object`。支持 `properties`、`required`、`items`、`enum`、数字上下限和字符串/数组长度；不支持 `$ref`、正则、组合 schema 或未声明参数。定义深度、字段数、参数大小均有限制。不传时为无参数对象。
+- `read_only`：仅查询、没有外部副作用才设为 `True`。默认 `False`；签到、发消息、打印、修改数据等都属于写入动作。不能为了省略确认把这些动作标为只读。
+- `agent_exposed`：默认 `False`。设为 `True` 后仍须管理员允许助手访问此插件，写入动作还须获得写入授权和本次确认；不是公开网络接口。
+
+只向助手提供必要业务参数，不要求它传入密码、Cookie、Token、Session 或系统密钥，不在参数默认值、说明和返回值中放这些内容。含敏感参数的动作不会通过助手调用。
+已声明参数的动作从按钮、管理接口、企业微信或助手调用时都会经过同一参数校验。动作仍由系统执行治理负责超时、排队和插件停用清理；助手排队时撤销授权或重载插件，旧调用会失效，不能借确认调用新注册的动作。
+这不是任意方法调用接口，助手不能访问插件实例、私有 storage 或没有开放的 Python 函数。系统助手首版不修改插件配置、安装插件或执行 Shell 命令。
+
 ## 企业微信统一消息回调
 
 插件可使用系统已配置的企业微信自建应用回调，接收文字、图片、文件和菜单按钮事件，
