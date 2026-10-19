@@ -73,6 +73,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/sessions/{session_id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 订阅助手实时文字、进度和交互状态 */
+        get: operations["events_api_assistant_sessions__session_id__events_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/sessions/{session_id}/messages": {
         parameters: {
             query?: never;
@@ -124,6 +141,178 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/assistant/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取助手渠道和已配对管理员 */
+        get: operations["channel_status_api_assistant_channels_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/channels/pair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 生成一次性管理员渠道配对码 */
+        post: operations["channel_pair_api_assistant_channels_pair_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/channels/{binding_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** 撤销渠道管理员配对 */
+        delete: operations["channel_revoke_api_assistant_channels__binding_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/mcp/servers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取管理员配置的 MCP 服务（不返回凭据） */
+        get: operations["mcp_servers_api_assistant_mcp_servers_get"];
+        put?: never;
+        /** 添加外部 MCP 服务 */
+        post: operations["mcp_add_api_assistant_mcp_servers_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/sandbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取隔离沙箱配置（不连接、不返回凭据） */
+        get: operations["sandbox_status_api_assistant_sandbox_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/sandbox/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 保存独立沙箱连接设置 */
+        put: operations["sandbox_config_api_assistant_sandbox_config_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/sandbox/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 显式检查隔离沙箱执行服务 */
+        post: operations["sandbox_check_api_assistant_sandbox_check_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/sandbox/artifacts/{artifact_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 读取未过期的沙箱截图（仅内存） */
+        get: operations["sandbox_artifact_api_assistant_sandbox_artifacts__artifact_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/mcp/servers/{server_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** 修改 MCP 服务并使旧确认失效 */
+        put: operations["mcp_update_api_assistant_mcp_servers__server_id__put"];
+        post?: never;
+        /** 移除 MCP 服务 */
+        delete: operations["mcp_delete_api_assistant_mcp_servers__server_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/mcp/servers/{server_id}/discover": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 连接 MCP 服务并读取工具目录 */
+        post: operations["mcp_discover_api_assistant_mcp_servers__server_id__discover_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/assistant/runs/{run_id}/confirm": {
         parameters: {
             query?: never;
@@ -135,6 +324,23 @@ export interface paths {
         put?: never;
         /** 批准或拒绝本次具体操作 */
         post: operations["confirm_api_assistant_runs__run_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/assistant/runs/{run_id}/answer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 回答本次助手追问（不批准修改操作） */
+        post: operations["answer_api_assistant_runs__run_id__answer_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2342,6 +2548,31 @@ export interface components {
             /** Password */
             password: string;
         };
+        /** AnswerInput */
+        AnswerInput: {
+            /** Input Id */
+            input_id: string;
+            /** Answer */
+            answer: string;
+        };
+        /** AudioInput */
+        AudioInput: {
+            /**
+             * Name
+             * @description 不含路径的音频文件名
+             */
+            name: string;
+            /**
+             * Data
+             * @description 最多 8 MiB 音频的标准 Base64 内容
+             */
+            data: string;
+            /**
+             * Content Type
+             * @default
+             */
+            content_type: string;
+        };
         /** Body_system_restore_api_system_restore_post */
         Body_system_restore_api_system_restore_post: {
             /** File */
@@ -2436,6 +2667,22 @@ export interface components {
             /** Phone */
             phone: string;
         };
+        /** MCPInput */
+        MCPInput: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /** Token */
+            token?: string | null;
+            /** Read Only Tools */
+            read_only_tools?: string[];
+        };
         /** MarketInstallBody */
         MarketInstallBody: {
             /** Plugin */
@@ -2445,8 +2692,16 @@ export interface components {
         };
         /** MessageInput */
         MessageInput: {
-            /** Content */
+            /**
+             * Content
+             * @default
+             */
             content: string;
+            /** Images */
+            images?: string[];
+            /** Attachments */
+            attachments?: components["schemas"]["TextAttachmentInput"][];
+            audio?: components["schemas"]["AudioInput"] | null;
         };
         /** NotificationTestBody */
         NotificationTestBody: {
@@ -2457,6 +2712,13 @@ export interface components {
              * @default AWBotNest 通知渠道测试成功
              */
             text: string;
+        };
+        /** PairInput */
+        PairInput: {
+            /** Kind */
+            kind: string;
+            /** Channel Id */
+            channel_id: string;
         };
         /** PluginActionBody */
         PluginActionBody: {
@@ -2471,6 +2733,26 @@ export interface components {
             id?: string | null;
             /** Content */
             content: string;
+        };
+        /** SandboxInput */
+        SandboxInput: {
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Url
+             * @default http://assistant-sandbox:8765
+             */
+            url: string;
+            /** Token */
+            token?: string | null;
+            /**
+             * Clear Token
+             * @default false
+             */
+            clear_token: boolean;
         };
         /** SessionInput */
         SessionInput: {
@@ -2501,6 +2783,24 @@ export interface components {
             run_at?: string | null;
             /** Cron */
             cron?: string | null;
+        };
+        /** TextAttachmentInput */
+        TextAttachmentInput: {
+            /**
+             * Name
+             * @description 不含路径的 UTF-8 文本文件名
+             */
+            name: string;
+            /**
+             * Data
+             * @description 标准 Base64 文件内容，不带 data URL 前缀
+             */
+            data: string;
+            /**
+             * Content Type
+             * @default text/plain
+             */
+            content_type: string;
         };
         /** ToggleInput */
         ToggleInput: {
@@ -2679,6 +2979,37 @@ export interface operations {
             };
         };
     };
+    events_api_assistant_sessions__session_id__events_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     message_api_assistant_sessions__session_id__messages_post: {
         parameters: {
             query?: never;
@@ -2780,6 +3111,344 @@ export interface operations {
             };
         };
     };
+    channel_status_api_assistant_channels_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    channel_pair_api_assistant_channels_pair_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PairInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    channel_revoke_api_assistant_channels__binding_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                binding_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mcp_servers_api_assistant_mcp_servers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    mcp_add_api_assistant_mcp_servers_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sandbox_status_api_assistant_sandbox_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    sandbox_config_api_assistant_sandbox_config_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SandboxInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sandbox_check_api_assistant_sandbox_check_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    sandbox_artifact_api_assistant_sandbox_artifacts__artifact_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                artifact_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/jpeg": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mcp_update_api_assistant_mcp_servers__server_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MCPInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mcp_delete_api_assistant_mcp_servers__server_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mcp_discover_api_assistant_mcp_servers__server_id__discover_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     confirm_api_assistant_runs__run_id__confirm_post: {
         parameters: {
             query?: never;
@@ -2792,6 +3461,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ConfirmationInput"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    answer_api_assistant_runs__run_id__answer_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                run_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnswerInput"];
             };
         };
         responses: {

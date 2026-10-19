@@ -49,7 +49,7 @@ class AIService:
     def usage_snapshot(self) -> dict[str, int]:
         return self.usage.snapshot()
 
-    async def _post(self, *args, **kwargs):
+    def _request_slot(self):
         try:
             limit = max(1, min(20, int(self.settings.ai_settings.get("max_concurrency", 3))))
         except (TypeError, ValueError):
@@ -57,7 +57,10 @@ class AIService:
         if self._limit != limit:
             self._limit = limit
             self._semaphore = asyncio.Semaphore(limit)
-        async with self._semaphore:
+        return self._semaphore
+
+    async def _post(self, *args, **kwargs):
+        async with self._request_slot():
             return await self.http.post(*args, **kwargs)
 
     def _timeout(self, capability: str) -> int:
@@ -222,7 +225,8 @@ class AIService:
                             model: str, plugin_id: str, temperature: float | None,
                             max_tokens: int | None, used_fallback: bool,
                             tools: list[dict[str, Any]] | None = None,
-                            tool_budget: dict[str, Any] | None = None) -> str | dict[str, Any]:
+                            tool_budget: dict[str, Any] | None = None,
+                            on_delta=None) -> str | dict[str, Any]:
         resolving_started = time.perf_counter()
         try:
             target = self._resolve_details(capability, model, plugin_id)
@@ -253,31 +257,48 @@ class AIService:
                         protocol, base_url, target["api_key"], resolved_model, messages, tools,
                         max_tokens=max_tokens,
                     )
-                    if tool_budget is not None:
-                        # This is a conservative admission reservation, not a bill:
-                        # UTF-8 input bytes + the full possible output token count.
-                        # Never refund or reset it when changing protocol/model.
-                        reservation = len(json.dumps(
-                            request.payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
-                        ).encode("utf-8")) + int(max_tokens or 2048)
-                        limit = tool_budget["limit"]
-                        if limit is not None and tool_budget["used"] + reservation > limit:
-                            raise AIRequestError("AI 工具调用预算不足，未发送请求", category="budget")
-                        tool_budget["used"] += reservation
                     self._log_started("文字" if capability == "text" else "视觉",
                                       plugin_id, resolved_model, base_url)
-                response = await self._post(
-                    request.url, headers=request.headers, json=request.payload,
-                    timeout=self._timeout(capability),
-                )
+                if tool_budget is not None:
+                    # The assistant shares one non-refundable reservation across
+                    # protocol/fallback attempts. Base64 bytes are not tokens;
+                    # reserve a conservative fixed image allowance separately.
+                    image_allowance = 0
+                    def budget_payload(item):
+                        nonlocal image_allowance
+                        if isinstance(item, dict):
+                            if item.get("type") in {"image_url", "input_image", "image"}:
+                                image_allowance += 8192
+                                return {"type": "image"}
+                            return {key: budget_payload(value) for key, value in item.items()}
+                        if isinstance(item, list):
+                            return [budget_payload(value) for value in item]
+                        return item
+                    payload = budget_payload(request.payload) if capability == "vision" else request.payload
+                    reservation = len(json.dumps(payload, ensure_ascii=False, separators=(",", ":"),
+                                                 allow_nan=False).encode("utf-8")) + image_allowance + int(max_tokens or 2048)
+                    limit = tool_budget["limit"]
+                    if limit is not None and tool_budget["used"] + reservation > limit:
+                        raise AIRequestError("AI 调用预算不足，未发送请求", category="budget")
+                    tool_budget["used"] += reservation
+                if tools is not None and on_delta is not None and callable(getattr(self.http, "stream", None)):
+                    from .ai_stream import stream_tool_response
+                    async with self._request_slot():
+                        response = await stream_tool_response(
+                            self.http, request, protocol, timeout=self._timeout(capability), on_delta=on_delta)
+                else:
+                    response = await self._post(
+                        request.url, headers=request.headers, json=request.payload,
+                        timeout=self._timeout(capability),
+                    )
                 raise_for_status(response, protocol)
                 data = decode_json(response, protocol)
                 if tools is not None:
                     self.usage.record_tokens(data)
-                    if tool_budget is not None:
-                        for key, value in zip(("input_tokens", "output_tokens", "total_tokens"),
-                                              AIUsageTracker._tokens(data)):
-                            tool_budget[key] += value
+                if tool_budget is not None:
+                    for key, value in zip(("input_tokens", "output_tokens", "total_tokens"),
+                                          AIUsageTracker._tokens(data)):
+                        tool_budget[key] += value
                 result = (parse_text_response(data, protocol) if tools is None else parse_tool_response(
                     data, protocol, allowed_tools={item["name"] for item in normalize_tools(tools)},
                     model=resolved_model,
@@ -302,7 +323,7 @@ class AIService:
                 # Nothing was sent, so do not count a provider attempt or try a
                 # different endpoint/model with the same exhausted reservation.
                 raise last_error
-            if tools is not None and isinstance(last_error, AIRequestError):
+            if (tools is not None or tool_budget is not None) and isinstance(last_error, AIRequestError):
                 # Providers may echo prompts or arguments in their error detail.
                 # Keep the category/status for fallback without persisting that detail.
                 suffix = f"，HTTP {last_error.status_code}" if last_error.status_code else ""
@@ -330,7 +351,8 @@ class AIService:
 
     async def tool_turn(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]], *,
                         model: str | None = "", max_tokens: int | None = 2048,
-                        plugin_id: str = "", budget_tokens: int | None = None) -> dict[str, Any]:
+                        plugin_id: str = "", budget_tokens: int | None = None,
+                        on_delta=None) -> dict[str, Any]:
         """Request structured calls; execution and approval belong to the caller."""
         definitions = normalize_tools(tools)
         validate_tool_messages(messages)
@@ -350,23 +372,71 @@ class AIService:
                 result = await self._text_request(
                     messages, capability="text", model=requested_model, plugin_id=plugin_id,
                     temperature=None, max_tokens=output_budget, used_fallback=False, tools=definitions,
-                    tool_budget=tool_budget,
+                    tool_budget=tool_budget, on_delta=on_delta,
                 )
             except Exception as exc:
                 fallback = self._fallback("text", plugin_id) if not requested_model else ""
                 if (not fallback or isinstance(exc, PermissionError)
-                        or isinstance(exc, AIRequestError) and exc.category == "budget"):
+                        or isinstance(exc, AIRequestError) and exc.category in {"budget", "incomplete_stream"}):
                     raise
                 result = await self._text_request(
                     messages, capability="text", model=fallback, plugin_id=plugin_id,
                     temperature=None, max_tokens=output_budget, used_fallback=True, tools=definitions,
-                    tool_budget=tool_budget,
+                    tool_budget=tool_budget, on_delta=on_delta,
                 )
             result["budget_used"] = tool_budget["used"]
             result["usage"] = {key: tool_budget[key] for key in ("input_tokens", "output_tokens", "total_tokens")}
             self.usage.succeed()
             completed = True
             return result
+        finally:
+            if not completed:
+                self.usage.fail()
+
+    async def transcribe_audio(self, name: str, data: bytes, mime: str = "", *, budget_tokens: int = 32000):
+        from .ai_audio import transcribe
+        return await transcribe(self, name, data, mime, budget_tokens=budget_tokens)
+
+    async def vision_turn(self, prompt: str, images: list[str], *, model: str = "",
+                          max_tokens: int = 2048, budget_tokens: int = 32000) -> dict[str, Any]:
+        """Assistant image observation with bounded output and shared budget.
+
+        The public PluginAI.vision() string-returning contract is unchanged.
+        Images are source material only; this request never includes tools.
+        """
+        from ..assistant_images import validate_images
+        checked = validate_images(images)
+        if not checked:
+            raise ValueError("请先选择图片")
+        if type(budget_tokens) is not int or budget_tokens < 1:
+            raise AIRequestError("AI 图片识别预算无效", category="budget")
+        if type(max_tokens) is not int or not 1 <= max_tokens <= 4096:
+            raise AIRequestError("AI 图片识别输出预算无效", category="configuration")
+        messages = [{"role": "user", "content": [{"type": "text", "text": prompt},
+                     *[{"type": "image_url", "image_url": {"url": image}} for image in checked]]}]
+        budget = {"limit": budget_tokens, "used": 0,
+                  "input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+        self.usage.begin()
+        completed = False
+        try:
+            try:
+                result = await self._text_request(messages, capability="vision", model=model, plugin_id="",
+                                                  temperature=None, max_tokens=max_tokens, used_fallback=False,
+                                                  tool_budget=budget)
+            except Exception as exc:
+                fallback = self._fallback("vision", "") if not model else ""
+                if (not fallback or isinstance(exc, PermissionError)
+                        or isinstance(exc, AIRequestError) and exc.category == "budget"):
+                    raise
+                result = await self._text_request(messages, capability="vision", model=fallback, plugin_id="",
+                                                  temperature=None, max_tokens=max_tokens, used_fallback=True,
+                                                  tool_budget=budget)
+            if not isinstance(result, str) or not result.strip():
+                raise AIRequestError("视觉模型没有返回有效内容", category="invalid_response")
+            self.usage.succeed()
+            completed = True
+            return {"text": result, "usage": {key: budget[key] for key in
+                    ("input_tokens", "output_tokens", "total_tokens")}, "budget_used": budget["used"]}
         finally:
             if not completed:
                 self.usage.fail()

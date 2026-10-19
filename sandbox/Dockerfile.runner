@@ -1,0 +1,11 @@
+FROM mcr.microsoft.com/playwright/python:v1.62.0-noble
+RUN pip install --no-cache-dir playwright==1.62.0 \
+    && mkdir -p /opt/runner/sandbox /workspace \
+    && chmod 0755 /opt/runner /opt/runner/sandbox
+COPY sandbox/__init__.py sandbox/contracts.py sandbox/runner.py /opt/runner/sandbox/
+COPY sandbox/client.py /opt/runner/client.py
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH=/usr/local/bin:/usr/bin:/bin HOME=/workspace
+WORKDIR /workspace
+USER 1000:1000
+ENTRYPOINT ["python3", "-I", "/opt/runner/entry.py"]
+COPY sandbox/entry.py /opt/runner/entry.py

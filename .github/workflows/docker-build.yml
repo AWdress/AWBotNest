@@ -10,6 +10,8 @@ on:
       - "install.sh"
       - "**/*.py"
       - "frontend/**"
+      - "sandbox/**"
+      - "docker-compose.sandbox.yml"
       - ".github/workflows/docker-build.yml"
   workflow_dispatch:
 
@@ -37,7 +39,7 @@ jobs:
       - name: 安装后端依赖
         run: pip install -r requirements.txt
       - name: 校验 Python 源码语法
-        run: python -m compileall -q awbotnest plugins/_TEMPLATE.py scripts/export_openapi.py
+        run: python -m compileall -q awbotnest sandbox plugins/_TEMPLATE.py scripts/export_openapi.py
       - name: 校验一键安装脚本语法
         run: bash -n install.sh
       - name: 安装前端依赖
@@ -137,3 +139,128 @@ jobs:
             docker rm -v awbotnest-ci
             echo "${STARTUP} startup OK"
           done
+
+  sandbox-build:
+    needs: quality
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: 构建隔离执行镜像（不推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sandbox/Dockerfile.runner
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: awbotnest-assistant-runner:local
+          cache-from: type=gha,scope=assistant-runner-${{ matrix.arch }}
+          cache-to: type=gha,scope=assistant-runner-${{ matrix.arch }},mode=min
+      - name: 构建沙箱管理服务（不推送）
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sandbox/Dockerfile.broker
+          platforms: ${{ matrix.platform }}
+          push: false
+          load: true
+          tags: awbotnest-assistant-broker:local
+      - name: 验证真实容器隔离、浏览器、文件与回收
+        run: |
+          # Disposable CI credentials and containers only. No system data,
+          # account, plugin directory or internet access is mounted in a runner.
+          TOKEN_FILE=$(mktemp "${RUNNER_TEMP}/assistant-token.XXXXXX")
+          chmod 600 "$TOKEN_FILE"
+          python -c 'import secrets,sys; from pathlib import Path; Path(sys.argv[1]).write_text(secrets.token_urlsafe(32))' "$TOKEN_FILE"
+          trap 'docker stop -t 35 awbn-sandbox-ci >/dev/null 2>&1 || true; docker rm -fv awbn-sandbox-ci >/dev/null 2>&1 || true; rm -f "$TOKEN_FILE"' EXIT
+          docker run -d --name awbn-sandbox-ci --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true --pids-limit 64 --memory 256m \
+            --tmpfs /tmp:rw,nosuid,nodev,size=32m \
+            --mount type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock,readonly \
+            --mount "type=bind,src=${TOKEN_FILE},dst=/run/secrets/assistant_sandbox_token,readonly" \
+            awbotnest-assistant-broker:local
+          for ATTEMPT in $(seq 1 20); do
+            if docker exec awbn-sandbox-ci python -c "import urllib.request; from pathlib import Path; r=urllib.request.Request('http://127.0.0.1:8765/v1/health',headers={'Authorization':'Bearer '+Path('/run/secrets/assistant_sandbox_token').read_text()}); urllib.request.urlopen(r,timeout=2)" >/dev/null 2>&1; then
+              break
+            fi
+            test "$(docker inspect awbn-sandbox-ci --format '{{.State.Running}}')" = true
+            sleep 1
+          done
+          docker exec -i awbn-sandbox-ci python - <<'PY'
+          import base64
+          import json
+          import subprocess
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+          from uuid import uuid4
+
+          token = Path('/run/secrets/assistant_sandbox_token').read_text()
+          session = uuid4().hex
+          def request(path, method='GET', body=None, auth=True):
+              headers = {'Authorization': 'Bearer ' + token} if auth else {}
+              data = None
+              if body is not None:
+                  data = json.dumps(body).encode()
+                  headers['Content-Type'] = 'application/json'
+              req = urllib.request.Request('http://127.0.0.1:8765' + path, data=data, headers=headers, method=method)
+              with urllib.request.urlopen(req, timeout=35) as response:
+                  return json.load(response)
+          def execute(operation, arguments, request_id=None):
+              result = request('/v1/execute', 'POST', {'session_id': session, 'operation': operation,
+                  'arguments': arguments, 'request_id': request_id or uuid4().hex})
+              assert result['ok'], result.get('error', 'operation failed')
+              return result['result']
+          try:
+              request('/v1/health', auth=False)
+          except urllib.error.HTTPError as error:
+              assert error.code == 401
+          else:
+              raise AssertionError('Broker accepted unauthenticated access')
+          try:
+              assert request('/v1/health')['protocol'] == 1
+              request_id = uuid4().hex
+              result = execute('python', {'code': 'import os; print(6*7); assert os.getuid()==1000'}, request_id)
+              assert result['stdout'].strip() == '42' and result['exit_code'] == 0
+              try:
+                  execute('python', {'code': 'print(6*7)'}, request_id)
+              except urllib.error.HTTPError as error:
+                  assert error.code == 409
+              else:
+                  raise AssertionError('Broker replayed an execution request')
+              execute('write_file', {'path': 'notes/result.txt', 'content': 'isolated 42'})
+              assert execute('read_file', {'path': 'notes/result.txt'})['content'] == 'isolated 42'
+              execute('browser', {'action': 'set_content', 'html': '<button id="answer" onclick="this.textContent=42">Calculate</button>'})
+              execute('browser', {'action': 'click', 'selector': '#answer'})
+              assert '42' in execute('browser', {'action': 'snapshot'})['text']
+              screenshot = execute('browser', {'action': 'screenshot'})
+              assert screenshot['mime_type'] == 'image/jpeg'
+              assert base64.b64decode(screenshot['data_base64'], validate=True).startswith(b'\xff\xd8\xff')
+              identifiers = subprocess.check_output(['docker', 'ps', '-q', '--filter', 'label=awbotnest.sandbox.protocol=1']).decode().split()
+              assert len(identifiers) == 1
+              config = json.loads(subprocess.check_output(['docker', 'inspect', identifiers[0]]))[0]
+              isolation = config['HostConfig']
+              assert isolation['NetworkMode'] == 'none' and isolation['ReadonlyRootfs']
+              assert isolation['Memory'] == 512*1024*1024 and isolation['PidsLimit'] == 128
+              assert config['Config']['User'] == '1000:1000'
+              assert not [m for m in config['Mounts'] if m['Type'] in {'bind', 'volume'}]
+              assert not isolation['Privileged'] and 'ALL' in isolation['CapDrop']
+          finally:
+              assert request('/v1/sessions/' + session, 'DELETE')['deleted']
+          remaining = subprocess.check_output(['docker', 'ps', '-aq', '--filter', 'label=awbotnest.sandbox.protocol=1']).decode().strip()
+          assert not remaining, 'Session container survived explicit cleanup'
+          print('Isolated runner execution, browser, authentication, replay prevention and cleanup OK')
+          PY

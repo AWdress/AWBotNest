@@ -132,19 +132,9 @@ class PluginRuntime:
 
 
     async def enable(self, plugin_id: str) -> PluginMeta:
-        async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
-            try:
-                meta = await self._enable(plugin_id)
-            except Exception as exc:
-                self._errors[plugin_id] = f"{type(exc).__name__}: {exc}"
-                raise
-            if meta.error:
-                self._errors[plugin_id] = meta.error
-            else:
-                self._errors.pop(plugin_id, None)
-            return meta
+        return await self.manage_guarded(plugin_id, "enable")
 
-    async def _enable(self, plugin_id: str) -> PluginMeta:
+    async def _enable(self, plugin_id: str, *, before_start=None) -> PluginMeta:
         if plugin_id in self.loaded:
             return self.loaded[plugin_id].meta
         if self.services.governor.pending_shutdown_tasks(plugin_id):
@@ -168,6 +158,8 @@ class PluginRuntime:
             return meta
         try:
             await self.deps.ensure(with_cloakbrowser_geoip(meta.requirements or []), plugin_name=meta.name)
+            if before_start is not None:
+                before_start()
             if requirements_use_cloakbrowser(meta.requirements or []):
                 configure_cloakbrowser(self.settings)
             module = self._import(entry, plugin_id)
@@ -190,6 +182,8 @@ class PluginRuntime:
                 if not names:
                     raise RuntimeError("按账号运行的插件当前没有可用用户账号")
             for index, name in enumerate(names):
+                if before_start is not None:
+                    before_start()
                 context = PluginContext(
                     plugin_id, meta.scope, self.accounts, self.scheduler, self.settings,
                     self.services, self.routes, self.notifier, meta.bot, meta.resources or {},
@@ -224,8 +218,7 @@ class PluginRuntime:
         return meta
 
     async def disable(self, plugin_id: str, *, persist: bool = True) -> None:
-        async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
-            await self._disable(plugin_id, persist=persist)
+        await self.manage_guarded(plugin_id, "disable", persist=persist)
 
     async def _disable(self, plugin_id: str, *, persist: bool = True) -> None:
         self._errors.pop(plugin_id, None)
@@ -318,12 +311,40 @@ class PluginRuntime:
         await self.restore()
 
     async def reload(self, plugin_id):
+        return await self.manage_guarded(plugin_id, "reload")
+
+    async def manage_guarded(self, plugin_id, operation, before_change=None, *, persist=True):
+        """Recheck an assistant approval inside the ordinary lifecycle lock.
+
+        The optional internal validator is synchronous: it cannot add an await
+        between revalidation and a lifecycle mutation. Existing public methods
+        share this implementation and keep their persistence/error semantics.
+        """
+        if operation not in {"enable", "disable", "reload"}:
+            raise ValueError("不支持的插件管理操作")
+        if before_change is not None and not callable(before_change):
+            raise TypeError("插件状态校验器必须可调用")
+        def check(stage):
+            if before_change is not None:
+                result = before_change(stage)
+                if inspect.isawaitable(result):
+                    if inspect.iscoroutine(result):
+                        result.close()
+                    raise TypeError("插件状态校验不能异步执行")
         async with self._lifecycle_locks.setdefault(plugin_id, asyncio.Lock()):
-            await self._disable(plugin_id, persist=False)
+            if operation in {"disable", "reload"}:
+                check("disable")
+                await self._disable(plugin_id, persist=persist if operation == "disable" else False)
+                if operation == "disable":
+                    return None
             try:
-                meta = await self._enable(plugin_id)
+                check("enable")
+                meta = (await self._enable(plugin_id, before_start=lambda: check("enable"))
+                        if before_change is not None else await self._enable(plugin_id))
                 if meta.error:
                     self._errors[plugin_id] = meta.error
+                elif operation == "enable":
+                    self._errors.pop(plugin_id, None)
                 return meta
             except Exception as exc:
                 self._errors[plugin_id] = f"{type(exc).__name__}: {exc}"

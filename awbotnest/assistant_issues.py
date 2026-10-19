@@ -18,6 +18,7 @@ from uuid import uuid4
 
 from .logs import redact_secrets
 
+SYSTEM_REPOSITORY = "awdress/awbotnest"
 MAX_DRAFTS = 20
 MAX_TITLE = 180
 MAX_BODY = 12000
@@ -43,6 +44,61 @@ def normalize_repository(value):
 def _digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def resolve_issue_target(deps, plugin_id="", *, installed_plugins=None):
+    """Use installed provenance, never author names, manifest listings or URLs.
+
+    PluginMarket._sources contains only explicitly installed or content-proven
+    legacy sources. Its public listing is not sufficient proof: another listed
+    repository may contain a plugin with the same ID.
+    """
+    if plugin_id == "":
+        return {"plugin_id": "", "repository": SYSTEM_REPOSITORY,
+                "fingerprint": _digest(["system", SYSTEM_REPOSITORY])}
+    if not isinstance(plugin_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", plugin_id):
+        raise ValueError("插件编号不正确")
+    if installed_plugins is None:
+        runtime = getattr(deps, "runtime", None)
+        scan = getattr(runtime, "scan_summary", None) or getattr(runtime, "scan", None)
+        if not callable(scan):
+            raise ValueError("插件状态暂不可用，尚未生成反馈草稿")
+        try:
+            installed_plugins = scan()
+        except Exception:
+            raise ValueError("插件状态暂不可用，尚未生成反馈草稿") from None
+    if not isinstance(installed_plugins, (list, tuple)):
+        raise ValueError("插件状态暂不可用，尚未生成反馈草稿")
+    matches = [meta for meta in installed_plugins if getattr(meta, "id", None) == plugin_id]
+    if len(matches) != 1:
+        raise ValueError("未找到唯一的已安装插件，尚未生成反馈草稿")
+    market = getattr(deps, "market", None)
+    sources = getattr(market, "_sources", None)
+    source = sources.get(plugin_id) if isinstance(sources, dict) else None
+    local_only = getattr(market, "_local_only", None)
+    if (not isinstance(source, dict) or not isinstance(local_only, (set, frozenset))
+            or plugin_id in local_only
+            or not callable(getattr(market, "source_matches", None))):
+        raise ValueError("无法确定此插件的安装来源仓库，不能自动提交；可先整理报告")
+    try:
+        from .market import _safe_path
+        repository = normalize_repository(source.get("repo"))
+        path = source.get("path")
+        if not isinstance(path, str) or len(path) > 512 or _safe_path(path).as_posix() != path:
+            raise ValueError("invalid source path")
+        if market.source_matches({"id": plugin_id, "repo": repository, "path": path}) is not True:
+            raise ValueError("unconfirmed source")
+        generations = getattr(market, "_source_generation", None)
+        if not isinstance(generations, dict):
+            raise ValueError("invalid source generations")
+        generation = generations.get(plugin_id, 0)
+        if type(generation) is not int or generation < 0:
+            raise ValueError("invalid source generation")
+    except Exception:
+        raise ValueError("此插件的安装来源记录不完整，不能自动提交；可先整理报告") from None
+    return {"plugin_id": plugin_id, "repository": repository,
+            "fingerprint": _digest([plugin_id, repository, path, generation,
+                                    str(getattr(matches[0], "version", ""))[:100]])}
 
 
 class AssistantIssues:
@@ -86,7 +142,7 @@ class AssistantIssues:
             raise ValueError("反馈内容过长，请缩短后重新生成")
         return title, body
 
-    def _policy(self, repository):
+    def _policy(self, repository, plugin_id=""):
         config = self.settings()
         if not isinstance(config, dict) or config.get("enabled") is not True:
             raise PermissionError("系统助手已关闭")
@@ -94,15 +150,9 @@ class AssistantIssues:
             raise PermissionError("尚未允许提交 GitHub Issue；本地草稿仍可保留")
         if config.get("allow_actions") is not True:
             raise PermissionError("尚未允许助手执行写入操作")
-        allowed = config.get("issue_repositories")
-        if not isinstance(allowed, list) or len(allowed) > 20:
-            raise PermissionError("Issue 仓库授权配置不正确")
-        try:
-            normalized = [normalize_repository(repo) for repo in allowed]
-        except ValueError:
-            raise PermissionError("Issue 仓库授权配置不正确") from None
-        if repository not in normalized:
-            raise PermissionError("此仓库尚未获得 Issue 提交授权")
+        target = resolve_issue_target(self.deps, plugin_id)
+        if repository != target["repository"]:
+            raise PermissionError("反馈目标与系统识别的仓库不一致，请重新生成草稿")
         token = getattr(self.deps.settings, "github_token", "")
         if (not isinstance(token, str) or not token.strip() or len(token) > 4096
                 or any(ord(ch) < 33 or ord(ch) > 126 for ch in token)):
@@ -110,7 +160,7 @@ class AssistantIssues:
         # Only a one-way digest is ever kept in a draft or preparation ticket.
         policy = {"enabled": True, "allow_issue_submission": True,
                   "allow_actions": True,
-                  "issue_repositories": sorted(set(normalized)), "token": token,
+                  "target": target, "token": token,
                   "proxy": getattr(self.deps.settings, "proxy_url", "")}
         return token, _digest(policy)
 
@@ -118,50 +168,69 @@ class AssistantIssues:
         config = self.settings()
         if not isinstance(config, dict):
             config = {}
-        repositories = config.get("issue_repositories", [])
-        try:
-            repositories = list(dict.fromkeys(normalize_repository(repo) for repo in repositories)) \
-                if isinstance(repositories, list) and len(repositories) <= 20 else []
-        except ValueError:
-            repositories = []
         token = getattr(self.deps.settings, "github_token", "")
         return {"configured": bool(isinstance(token, str) and token.strip()),
                 "enabled": (config.get("enabled") is True and config.get("allow_actions") is True
                             and config.get("allow_issue_submission") is True),
-                "repositories": repositories}
+                "system_repository": SYSTEM_REPOSITORY, "target_mode": "automatic",
+                "repositories": [SYSTEM_REPOSITORY]}
 
     @staticmethod
     def _arguments(draft):
-        return {"draft_id": draft["id"], "repository": draft["repository"],
+        return {"draft_id": draft["id"], "plugin_id": draft.get("plugin_id", ""), "repository": draft["repository"],
                 "title": draft["title"], "body": draft["body"]}
 
     @staticmethod
     def _public(draft):
         return {key: copy.deepcopy(value) for key, value in draft.items()
-                if key not in {"content_digest", "submission_fingerprint"}}
+                if key not in {"content_digest", "submission_fingerprint", "target_fingerprint"}}
 
     async def list_drafts(self):
         return [self._public(item) for item in await self.store.list("issue_draft", MAX_DRAFTS)]
 
-    async def get_draft(self, draft_id):
+    async def _draft(self, draft_id):
         if not isinstance(draft_id, str) or not _ID.fullmatch(draft_id):
             raise ValueError("反馈草稿编号不正确")
         item = await self.store.get("issue_draft", draft_id)
         if item is None:
             raise KeyError("反馈草稿不存在")
-        return self._public(item)
+        return item
 
-    async def prepare_draft(self, repository, title, body):
-        repository = normalize_repository(repository)
+    async def get_draft(self, draft_id):
+        return self._public(await self._draft(draft_id))
+
+    def _check_draft_target(self, draft):
+        plugin_id = draft.get("plugin_id", "")
+        target = resolve_issue_target(self.deps, plugin_id)
+        if (draft["repository"] != target["repository"] or
+                draft.get("target_fingerprint", target["fingerprint"] if not plugin_id else None) != target["fingerprint"]):
+            raise PermissionError("插件来源或反馈目标已变化，请重新生成草稿")
+        return target
+
+    async def prepare_draft(self, repository=None, title=None, body=None, *, plugin_id=""):
+        target = resolve_issue_target(self.deps, plugin_id)
+        if repository not in (None, "") and normalize_repository(repository) != target["repository"]:
+            raise ValueError("仓库由系统自动识别，不能指定其他反馈目标")
+        repository = target["repository"]
         title, body = self._content(title, body)
-        content_digest = _digest([repository, title, body])
+        content_digest = _digest([plugin_id, repository, title, body])
         async with self._lock:
             def work(db):
                 rows = [json.loads(row[0]) for row in db.execute(
                     "SELECT body FROM documents WHERE kind='issue_draft' ORDER BY updated ASC")]
-                for row in rows:
-                    if row.get("content_digest") == content_digest and row.get("status") != "failed":
-                        return row  # Especially unknown/successful outcomes: no retry clone.
+                matching = [row for row in rows if (
+                    row.get("plugin_id", "") == plugin_id and row.get("repository") == repository
+                    and row.get("title") == title and row.get("body") == body)]
+                # Search terminal/uncertain records first. A stale local draft
+                # must not conceal a later submitted copy of the same report.
+                protected = next((row for row in matching if row.get("status") not in {"draft", "failed"}), None)
+                if protected is not None:
+                    return protected
+                ready = next((row for row in matching if row.get("status") == "draft" and
+                              row.get("target_fingerprint", target["fingerprint"] if not plugin_id else None)
+                              == target["fingerprint"]), None)
+                if ready is not None:
+                    return ready
                 # A definitive rejection (e.g. 401), or a cancellation before
                 # any request, may be prepared again. This is only a new local
                 # draft; it receives a new ticket and requires fresh approval.
@@ -171,8 +240,9 @@ class AssistantIssues:
                     if removable is None:
                         raise ValueError("有较多待核实的反馈，请先到 GitHub 检查提交结果")
                     db.execute("DELETE FROM documents WHERE kind='issue_draft' AND id=?", (removable["id"],))
-                item = {"id": uuid4().hex, "repository": repository, "title": title, "body": body,
+                item = {"id": uuid4().hex, "plugin_id": plugin_id, "repository": repository, "title": title, "body": body,
                         "status": "draft", "content_digest": content_digest,
+                        "target_fingerprint": target["fingerprint"],
                         "created_at": time.time(), "updated_at": time.time()}
                 self.store._put(db, "issue_draft", item)
                 return item
@@ -181,11 +251,12 @@ class AssistantIssues:
 
     async def prepare_submission(self, draft_id):
         async with self._lock:
-            draft = await self.get_draft(draft_id)
+            draft = await self._draft(draft_id)
             if draft["status"] != "draft":
                 raise ValueError(_UNCERTAIN if draft["status"] in {"submitting", "uncertain"}
                                  else "此草稿已有提交记录，不能重复发送")
-            _, policy = self._policy(draft["repository"])
+            self._check_draft_target(draft)
+            _, policy = self._policy(draft["repository"], draft.get("plugin_id", ""))
             title, body = self._content(draft["title"], draft["body"])
             if (title, body) != (draft["title"], draft["body"]):
                 # Known credentials may have changed since drafting. A new draft
@@ -235,11 +306,12 @@ class AssistantIssues:
                     or ticket["expires_at"] <= current):
                 raise PermissionError("Issue 提交确认已失效，请重新确认")
             draft_id = ticket["draft_id"]
-            draft = await self.get_draft(draft_id)
+            draft = await self._draft(draft_id)
             if draft["status"] != "draft":
                 raise ValueError(_UNCERTAIN if draft["status"] in {"submitting", "uncertain"}
                                  else "此草稿已有提交记录，不能重复发送")
-            token, policy = self._policy(draft["repository"])
+            self._check_draft_target(draft)
+            token, policy = self._policy(draft["repository"], draft.get("plugin_id", ""))
             arguments = self._arguments(draft)
             fingerprint = _digest([arguments, policy])
             title, body = self._content(draft["title"], draft["body"])
@@ -279,11 +351,15 @@ class AssistantIssues:
         try:
             # Recheck after waiting for the durable transaction, immediately
             # before beginning the external request.
-            fresh_token, fresh_policy = self._policy(arguments["repository"])
-            if (fresh_policy != policy or fresh_token != token or time.time() >= approved_until
-                    or time.time() >= ticket["expires_at"]):
+            try:
+                self._check_draft_target(draft)
+                fresh_token, fresh_policy = self._policy(arguments["repository"], arguments.get("plugin_id", ""))
+                if (fresh_policy != policy or fresh_token != token or time.time() >= approved_until
+                        or time.time() >= ticket["expires_at"]):
+                    raise PermissionError("authorization changed")
+            except Exception:
                 await self._finish(draft_id, "failed", error="提交前授权发生变化，未发送请求")
-                raise PermissionError("提交前授权发生变化，未发送请求")
+                raise PermissionError("提交前授权发生变化，未发送请求") from None
             status, data = await self._post(http, arguments, token)
             if status == 201:
                 number, url = self._acknowledgement(data, arguments["repository"])

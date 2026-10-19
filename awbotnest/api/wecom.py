@@ -148,7 +148,15 @@ def create_router(deps) -> APIRouter:
         # user messages before their handlers exist. Let the provider retry.
         if getattr(request.app.state, "platform_ready", True) is False:
             raise HTTPException(status_code=503, detail="系统正在启动，请稍后重试")
-        if message.get("MsgType") != "text":
+        assistant_reply = ""
+        assistant_consumed = False
+        channels = getattr(request.app.state, "assistant_channels", None)
+        if channels is not None:
+            try:
+                assistant_consumed, assistant_reply = await channels.handle_wecom(channel_id, message)
+            except Exception:
+                raise HTTPException(status_code=503, detail="助手渠道暂不可用") from None
+        if not assistant_consumed and message.get("MsgType") != "text":
             receiver = getattr(request.app.state.wecom_commands, "handle_message", None)
             try:
                 if receiver is not None:
@@ -159,7 +167,7 @@ def create_router(deps) -> APIRouter:
                 raise HTTPException(status_code=503, detail="回调服务暂不可用") from None
             return PlainTextResponse("success", headers={"Cache-Control": "no-store"})
         try:
-            reply = await request.app.state.wecom_commands.handle(channel_id, message)
+            reply = assistant_reply if assistant_consumed else await request.app.state.wecom_commands.handle(channel_id, message)
         except HTTPException:
             raise
         except Exception:
@@ -194,6 +202,11 @@ def register_wecom_callback(app, deps) -> None:
             async with previous_lifespan(asgi_app) as state:
                 yield state
         finally:
-            await asgi_app.state.wecom_commands.close()
+            channels = getattr(asgi_app.state, "assistant_channels", None)
+            try:
+                if channels is not None:
+                    await channels.close()
+            finally:
+                await asgi_app.state.wecom_commands.close()
 
     app.router.lifespan_context = callback_lifespan

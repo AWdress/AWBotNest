@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AWBotNest API",
-    "version": "2.0.1.8"
+    "version": "2.0.1.9"
   },
   "paths": {
     "/api/assistant": {
@@ -207,6 +207,51 @@
         }
       }
     },
+    "/api/assistant/sessions/{session_id}/events": {
+      "get": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "订阅助手实时文字、进度和交互状态",
+        "operationId": "events_api_assistant_sessions__session_id__events_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Session Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assistant/sessions/{session_id}/messages": {
       "post": {
         "tags": [
@@ -362,6 +407,468 @@
         }
       }
     },
+    "/api/assistant/channels": {
+      "get": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "读取助手渠道和已配对管理员",
+        "operationId": "channel_status_api_assistant_channels_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/channels/pair": {
+      "post": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "生成一次性管理员渠道配对码",
+        "operationId": "channel_pair_api_assistant_channels_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/channels/{binding_id}": {
+      "delete": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "撤销渠道管理员配对",
+        "operationId": "channel_revoke_api_assistant_channels__binding_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "binding_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Binding Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assistant/mcp/servers": {
+      "get": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "读取管理员配置的 MCP 服务（不返回凭据）",
+        "operationId": "mcp_servers_api_assistant_mcp_servers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "添加外部 MCP 服务",
+        "operationId": "mcp_add_api_assistant_mcp_servers_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/sandbox": {
+      "get": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "读取隔离沙箱配置（不连接、不返回凭据）",
+        "operationId": "sandbox_status_api_assistant_sandbox_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/sandbox/config": {
+      "put": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "保存独立沙箱连接设置",
+        "operationId": "sandbox_config_api_assistant_sandbox_config_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SandboxInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/sandbox/check": {
+      "post": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "显式检查隔离沙箱执行服务",
+        "operationId": "sandbox_check_api_assistant_sandbox_check_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/assistant/sandbox/artifacts/{artifact_id}": {
+      "get": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "读取未过期的沙箱截图（仅内存）",
+        "operationId": "sandbox_artifact_api_assistant_sandbox_artifacts__artifact_id__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "artifact_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Artifact Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "image/jpeg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assistant/mcp/servers/{server_id}": {
+      "put": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "修改 MCP 服务并使旧确认失效",
+        "operationId": "mcp_update_api_assistant_mcp_servers__server_id__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MCPInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "移除 MCP 服务",
+        "operationId": "mcp_delete_api_assistant_mcp_servers__server_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assistant/mcp/servers/{server_id}/discover": {
+      "post": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "连接 MCP 服务并读取工具目录",
+        "operationId": "mcp_discover_api_assistant_mcp_servers__server_id__discover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "server_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Server Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/assistant/runs/{run_id}/confirm": {
       "post": {
         "tags": [
@@ -391,6 +898,61 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ConfirmationInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/assistant/runs/{run_id}/answer": {
+      "post": {
+        "tags": [
+          "系统助手"
+        ],
+        "summary": "回答本次助手追问（不批准修改操作）",
+        "operationId": "answer_api_assistant_runs__run_id__answer_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Run Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerInput"
               }
             }
           }
@@ -5750,6 +6312,60 @@
         ],
         "title": "AdminLoginBody"
       },
+      "AnswerInput": {
+        "properties": {
+          "input_id": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Input Id"
+          },
+          "answer": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Answer"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "input_id",
+          "answer"
+        ],
+        "title": "AnswerInput"
+      },
+      "AudioInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "description": "不含路径的音频文件名"
+          },
+          "data": {
+            "type": "string",
+            "maxLength": 11184812,
+            "minLength": 1,
+            "title": "Data",
+            "description": "最多 8 MiB 音频的标准 Base64 内容"
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Content Type",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "data"
+        ],
+        "title": "AudioInput"
+      },
       "Body_system_restore_api_system_restore_post": {
         "properties": {
           "file": {
@@ -5953,6 +6569,54 @@
         ],
         "title": "LoginStartBody"
       },
+      "MCPInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "minLength": 1,
+            "title": "Url"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "read_only_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 32,
+            "title": "Read Only Tools"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "url"
+        ],
+        "title": "MCPInput"
+      },
       "MarketInstallBody": {
         "properties": {
           "plugin": {
@@ -5972,15 +6636,39 @@
           "content": {
             "type": "string",
             "maxLength": 8000,
-            "minLength": 1,
-            "title": "Content"
+            "title": "Content",
+            "default": ""
+          },
+          "images": {
+            "items": {
+              "type": "string",
+              "maxLength": 6990572
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Images"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/TextAttachmentInput"
+            },
+            "type": "array",
+            "maxItems": 3,
+            "title": "Attachments"
+          },
+          "audio": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AudioInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
         "type": "object",
-        "required": [
-          "content"
-        ],
         "title": "MessageInput"
       },
       "NotificationTestBody": {
@@ -6003,6 +6691,28 @@
           "channel"
         ],
         "title": "NotificationTestBody"
+      },
+      "PairInput": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "pattern": "^(telegram|wecom)$",
+            "title": "Kind"
+          },
+          "channel_id": {
+            "type": "string",
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Channel Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "channel_id"
+        ],
+        "title": "PairInput"
       },
       "PluginActionBody": {
         "properties": {
@@ -6042,6 +6752,41 @@
           "content"
         ],
         "title": "ResourceInput"
+      },
+      "SandboxInput": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": false
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 2048,
+            "title": "Url",
+            "default": "http://assistant-sandbox:8765"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 4096
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "clear_token": {
+            "type": "boolean",
+            "title": "Clear Token",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SandboxInput"
       },
       "SessionInput": {
         "properties": {
@@ -6144,6 +6889,37 @@
           "prompt"
         ],
         "title": "TaskInput"
+      },
+      "TextAttachmentInput": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "description": "不含路径的 UTF-8 文本文件名"
+          },
+          "data": {
+            "type": "string",
+            "maxLength": 87384,
+            "minLength": 1,
+            "title": "Data",
+            "description": "标准 Base64 文件内容，不带 data URL 前缀"
+          },
+          "content_type": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Content Type",
+            "default": "text/plain"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name",
+          "data"
+        ],
+        "title": "TextAttachmentInput"
       },
       "ToggleInput": {
         "properties": {

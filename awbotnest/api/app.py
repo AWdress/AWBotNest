@@ -64,7 +64,10 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
                            admin_dependency(settings), time.monotonic(), ResourceSampler())
     from ..assistant import AssistantService
+    from ..assistant_channels import AssistantChannels
     app.state.assistant = AssistantService(deps)
+    app.state.assistant_channels = AssistantChannels(deps, app.state.assistant)
+    app.state.assistant.channels = app.state.assistant_channels
     app.include_router(assistant_router(deps, app.state.assistant))
     register_wecom_callback(app, deps)
     register_open_api(app, settings, accounts, runtime, market=market)

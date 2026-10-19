@@ -1,0 +1,40 @@
+# Optional companion service. Does not change the AWBotNest image or give it
+# access to Docker. Build the runner explicitly; do not start its helper service.
+services:
+  assistant-runner:
+    image: awbotnest-assistant-runner:local
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.runner
+    profiles: [assistant-build]
+    entrypoint: [python, -c, "print('Runner image built; the broker creates isolated sessions.')"]
+    restart: "no"
+    network_mode: none
+
+  assistant-sandbox:
+    image: awbotnest-assistant-broker:local
+    build:
+      context: .
+      dockerfile: sandbox/Dockerfile.broker
+    restart: unless-stopped
+    environment:
+      RUNNER_IMAGE: awbotnest-assistant-runner:local
+      AUTH_TOKEN_FILE: /run/secrets/assistant_sandbox_token
+    expose: ["8765"]
+    volumes:
+      # The broker, NOT the main system or runner, holds this authority.
+      # A read-only socket mount does not make Docker's API read-only.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    secrets: [assistant_sandbox_token]
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=32m
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 256m
+    cpus: 0.5
+
+secrets:
+  assistant_sandbox_token:
+    file: ./secrets/assistant-sandbox.token

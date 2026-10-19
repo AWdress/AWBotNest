@@ -127,6 +127,8 @@ def create_router(deps) -> APIRouter:
     def current_ai_settings() -> dict[str, object]:
         if settings.ai_settings:
             value = json.loads(json.dumps(settings.ai_settings))
+            if isinstance(value.get("capabilities"), dict):
+                value["capabilities"].setdefault("audio", {})
             value.setdefault("timeout_seconds", 60)
             value.setdefault("image_timeout_seconds", 300)
             value.setdefault("max_concurrency", 3)
@@ -142,7 +144,7 @@ def create_router(deps) -> APIRouter:
             "models": [{"id": "default", "alias": settings.ai_model, "name": settings.ai_model,
                         "enabled": True, "provider_id": provider_id, "model": settings.ai_model,
                         "capabilities": ["text"]}],
-            "capabilities": {"text": {"default_model": settings.ai_model}, "vision": {}, "image": {}},
+            "capabilities": {"text": {"default_model": settings.ai_model}, "vision": {}, "image": {}, "audio": {}},
             "plugin_permissions": {},
             "timeout_seconds": 60,
             "image_timeout_seconds": 300,

@@ -3,13 +3,21 @@
 
 const TOKEN_KEY = 'awbotnest_token'
 let authRevision = 0
+const authListeners = new Set()
 export function getToken() { return localStorage.getItem(TOKEN_KEY) || '' }
 export function getAuthRevision() { return authRevision }
+export function subscribeAuthChanges(listener) {
+  authListeners.add(listener)
+  return () => authListeners.delete(listener)
+}
 export function setToken(t) {
   // A new login can return the same token; it still starts a new session.
   authRevision += 1
   clearStatusCache()
   t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY)
+  for (const listener of [...authListeners]) {
+    try { listener() } catch {}
+  }
 }
 
 function authHeaders(token = getToken()) {
@@ -51,12 +59,115 @@ async function request(method, url, body, signal) {
   return res.json()
 }
 
+async function assistantRequest(method, url, body, signal) {
+  const auth = captureAuth()
+  const current = () => !signal?.aborted && auth.revision === authRevision && auth.token === getToken()
+  try {
+    const value = await request(method, url, body, signal)
+    if (!current()) throw new DOMException('请求已取消', 'AbortError')
+    return value
+  } catch (error) {
+    if (!current()) throw new DOMException('请求已取消', 'AbortError')
+    throw error
+  }
+}
+
 async function requestBlob(url, signal) {
   const auth = captureAuth()
   const res = await fetch(url, { headers: authHeaders(auth.token), signal })
   requireAuthorized(res, auth)
   if (!res.ok) throw new Error(res.statusText)
   return res.blob()
+}
+
+async function getAssistantSandboxArtifact(id, signal) {
+  const auth = captureAuth()
+  const current = () => !signal?.aborted && auth.revision === authRevision && auth.token === getToken()
+  const response = await fetch(`/api/assistant/sandbox/artifacts/${encodeURIComponent(id)}`, {
+    headers: { ...authHeaders(auth.token), Accept: 'image/jpeg' }, signal, cache: 'no-store', redirect: 'error',
+  })
+  requireAuthorized(response, auth)
+  if (!current()) {
+    await response.body?.cancel().catch(() => {})
+    throw new DOMException('请求已取消', 'AbortError')
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => {})
+    const error = new Error([404, 410].includes(response.status) ? '截图已过期，请重新生成' : '截图加载失败')
+    error.status = response.status
+    throw error
+  }
+  const limit = 64 * 1024
+  if (response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() !== 'image/jpeg'
+      || Number(response.headers.get('content-length')) > limit || !response.body) {
+    await response.body?.cancel().catch(() => {})
+    throw new Error('截图格式或大小不正确')
+  }
+  const reader = response.body.getReader(), chunks = []
+  let size = 0
+  try {
+    for (;;) {
+      if (!current()) throw new DOMException('请求已取消', 'AbortError')
+      const { value, done } = await reader.read()
+      if (!current()) throw new DOMException('请求已取消', 'AbortError')
+      if (done) break
+      size += value.byteLength
+      if (size > limit) throw new Error('截图超过大小限制')
+      chunks.push(value)
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
+  if (!size) throw new Error('截图为空')
+  return new Blob(chunks, { type: 'image/jpeg' })
+}
+
+async function streamAssistantSession(id, { signal, onSnapshot, onRun } = {}) {
+  const auth = captureAuth()
+  const response = await fetch(`/api/assistant/sessions/${encodeURIComponent(id)}/events`, {
+    headers: { ...authHeaders(auth.token), Accept: 'text/event-stream' }, signal, redirect: 'error',
+  })
+  requireAuthorized(response, auth)
+  if (!response.ok || !response.headers.get('content-type')?.includes('text/event-stream') || !response.body) {
+    await response.body?.cancel().catch(() => {})
+    throw new Error('实时连接暂不可用')
+  }
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  let buffer = ''
+  try {
+    for (;;) {
+      if (signal?.aborted || auth.revision !== authRevision || auth.token !== getToken()) return
+      const { value, done } = await reader.read()
+      if (done) break
+      if (auth.revision !== authRevision || auth.token !== getToken()) return
+      buffer += decoder.decode(value, { stream: true })
+      if (buffer.length > 2 * 1024 * 1024) throw new Error('实时响应超过大小限制')
+      for (;;) {
+        const match = /\r?\n\r?\n/.exec(buffer)
+        if (!match) break
+        const block = buffer.slice(0, match.index)
+        buffer = buffer.slice(match.index + match[0].length)
+        let event = 'message'
+        const data = []
+        for (const line of block.split(/\r?\n/)) {
+          if (line.startsWith('event:')) event = line.slice(6).trim()
+          else if (line.startsWith('data:')) data.push(line.slice(5).replace(/^ /, ''))
+        }
+        if (!data.length || !['snapshot', 'run'].includes(event)) continue
+        if (signal?.aborted || auth.revision !== authRevision || auth.token !== getToken()) return
+        let parsed
+        try { parsed = JSON.parse(data.join('\n')) } catch { throw new Error('实时响应格式无效') }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('实时响应格式无效')
+        if (event === 'snapshot') await onSnapshot?.(parsed)
+        else await onRun?.(parsed)
+      }
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
 }
 
 let statusRequest = null
@@ -90,24 +201,38 @@ async function getStatus(force = false) {
 
 export const api = {
   // 管理员助手；轮询支持取消，不影响已在服务器执行的任务。
-  getAssistant: (signal) => request('GET', '/api/assistant', undefined, signal),
-  saveAssistantSettings: (values) => request('PUT', '/api/assistant/settings', values),
-  createAssistantSession: (values = {}) => request('POST', '/api/assistant/sessions', values),
-  getAssistantSession: (id, signal) => request('GET', `/api/assistant/sessions/${encodeURIComponent(id)}`, undefined, signal),
-  deleteAssistantSession: (id) => request('DELETE', `/api/assistant/sessions/${encodeURIComponent(id)}`),
-  sendAssistantMessage: (id, content) => request('POST', `/api/assistant/sessions/${encodeURIComponent(id)}/messages`, { content }),
-  getAssistantRun: (id, signal) => request('GET', `/api/assistant/runs/${encodeURIComponent(id)}`, undefined, signal),
-  steerAssistantRun: (id, content) => request('POST', `/api/assistant/runs/${encodeURIComponent(id)}/steer`, { content }),
-  confirmAssistantRun: (id, confirmation_id, approved) => request('POST', `/api/assistant/runs/${encodeURIComponent(id)}/confirm`, { confirmation_id, approved }),
-  cancelAssistantRun: (id) => request('POST', `/api/assistant/runs/${encodeURIComponent(id)}/cancel`),
-  saveAssistantMemory: (content, id) => request('POST', '/api/assistant/memories', { content, ...(id ? { id } : {}) }),
-  deleteAssistantMemory: (id) => request('DELETE', `/api/assistant/memories/${encodeURIComponent(id)}`),
-  saveAssistantSkill: (values) => request('POST', '/api/assistant/skills', values),
-  getAssistantSkill: (id, signal) => request('GET', `/api/assistant/skills/${encodeURIComponent(id)}`, undefined, signal),
-  deleteAssistantSkill: (id) => request('DELETE', `/api/assistant/skills/${encodeURIComponent(id)}`),
-  saveAssistantTask: (values) => request('POST', '/api/assistant/tasks', values),
-  toggleAssistantTask: (id, enabled) => request('PUT', `/api/assistant/tasks/${encodeURIComponent(id)}`, { enabled }),
-  deleteAssistantTask: (id) => request('DELETE', `/api/assistant/tasks/${encodeURIComponent(id)}`),
+  getAssistant: (signal) => assistantRequest('GET', '/api/assistant', undefined, signal),
+  saveAssistantSettings: (values, signal) => assistantRequest('PUT', '/api/assistant/settings', values, signal),
+  createAssistantSession: (values = {}, signal) => assistantRequest('POST', '/api/assistant/sessions', values, signal),
+  getAssistantSession: (id, signal) => assistantRequest('GET', `/api/assistant/sessions/${encodeURIComponent(id)}`, undefined, signal),
+  streamAssistantSession,
+  deleteAssistantSession: (id, signal) => assistantRequest('DELETE', `/api/assistant/sessions/${encodeURIComponent(id)}`, undefined, signal),
+  sendAssistantMessage: (id, content, images = [], attachments = [], audio = null, signal) => assistantRequest('POST', `/api/assistant/sessions/${encodeURIComponent(id)}/messages`, { content, images, attachments, audio }, signal),
+  getAssistantRun: (id, signal) => assistantRequest('GET', `/api/assistant/runs/${encodeURIComponent(id)}`, undefined, signal),
+  steerAssistantRun: (id, content, signal) => assistantRequest('POST', `/api/assistant/runs/${encodeURIComponent(id)}/steer`, { content }, signal),
+  confirmAssistantRun: (id, confirmation_id, approved, signal) => assistantRequest('POST', `/api/assistant/runs/${encodeURIComponent(id)}/confirm`, { confirmation_id, approved }, signal),
+  answerAssistantRun: (id, input_id, answer, signal) => assistantRequest('POST', `/api/assistant/runs/${encodeURIComponent(id)}/answer`, { input_id, answer }, signal),
+  cancelAssistantRun: (id, signal) => assistantRequest('POST', `/api/assistant/runs/${encodeURIComponent(id)}/cancel`, undefined, signal),
+  saveAssistantMemory: (content, id, signal) => assistantRequest('POST', '/api/assistant/memories', { content, ...(id ? { id } : {}) }, signal),
+  deleteAssistantMemory: (id, signal) => assistantRequest('DELETE', `/api/assistant/memories/${encodeURIComponent(id)}`, undefined, signal),
+  saveAssistantSkill: (values, signal) => assistantRequest('POST', '/api/assistant/skills', values, signal),
+  getAssistantSkill: (id, signal) => assistantRequest('GET', `/api/assistant/skills/${encodeURIComponent(id)}`, undefined, signal),
+  deleteAssistantSkill: (id, signal) => assistantRequest('DELETE', `/api/assistant/skills/${encodeURIComponent(id)}`, undefined, signal),
+  saveAssistantTask: (values, signal) => assistantRequest('POST', '/api/assistant/tasks', values, signal),
+  toggleAssistantTask: (id, enabled, signal) => assistantRequest('PUT', `/api/assistant/tasks/${encodeURIComponent(id)}`, { enabled }, signal),
+  deleteAssistantTask: (id, signal) => assistantRequest('DELETE', `/api/assistant/tasks/${encodeURIComponent(id)}`, undefined, signal),
+  getAssistantChannels: (signal) => assistantRequest('GET', '/api/assistant/channels', undefined, signal),
+  pairAssistantChannel: (kind, channel_id, signal) => assistantRequest('POST', '/api/assistant/channels/pair', { kind, channel_id }, signal),
+  revokeAssistantChannel: (id, signal) => assistantRequest('DELETE', `/api/assistant/channels/${encodeURIComponent(id)}`, undefined, signal),
+  getAssistantMcpServers: (signal) => assistantRequest('GET', '/api/assistant/mcp/servers', undefined, signal),
+  createAssistantMcpServer: (values, signal) => assistantRequest('POST', '/api/assistant/mcp/servers', values, signal),
+  updateAssistantMcpServer: (id, values, signal) => assistantRequest('PUT', `/api/assistant/mcp/servers/${encodeURIComponent(id)}`, values, signal),
+  deleteAssistantMcpServer: (id, signal) => assistantRequest('DELETE', `/api/assistant/mcp/servers/${encodeURIComponent(id)}`, undefined, signal),
+  discoverAssistantMcpServer: (id, signal) => assistantRequest('POST', `/api/assistant/mcp/servers/${encodeURIComponent(id)}/discover`, undefined, signal),
+  getAssistantSandbox: (signal) => assistantRequest('GET', '/api/assistant/sandbox', undefined, signal),
+  saveAssistantSandbox: (values, signal) => assistantRequest('PUT', '/api/assistant/sandbox/config', values, signal),
+  checkAssistantSandbox: (signal) => assistantRequest('POST', '/api/assistant/sandbox/check', undefined, signal),
+  getAssistantSandboxArtifact,
 
   // 鉴权
   authStatus: () => request('GET', '/api/auth/status'),

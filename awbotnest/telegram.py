@@ -62,6 +62,7 @@ class TelegramAccounts:
         self._stopping = False
         self._retry_delay = 5.0
         self.on_recovered: Callable[[str, str], Awaitable[None]] | None = None
+        self.on_bot_ready: Callable[[str, object], Awaitable[None]] | None = None
         self._profiles_path = DATA_DIR / "account_profiles.json"
 
     def _profiles(self) -> dict[str, dict[str, object]]:
@@ -414,6 +415,11 @@ class TelegramAccounts:
             existing = self.bots.get(bot_spec.id)
             if existing is not None and existing.is_connected():
                 self._watch_client("bot", bot_spec.id, existing)
+                if self.on_bot_ready is not None:
+                    try:
+                        await self.on_bot_ready(bot_spec.id, existing)
+                    except Exception:
+                        logger.warning("Bot 助手消息入口绑定失败")
                 return True
             await self._discard_client("bot", bot_spec.id, existing)
             bot = None
@@ -425,6 +431,11 @@ class TelegramAccounts:
                     return None
                 self.bots[bot_spec.id] = bot
                 self._watch_client("bot", bot_spec.id, bot)
+                if self.on_bot_ready is not None:
+                    try:
+                        await self.on_bot_ready(bot_spec.id, bot)
+                    except Exception:
+                        logger.warning("Bot 助手消息入口绑定失败")
                 try:
                     await asyncio.wait_for(self._cache_profile(f"bot_{bot_spec.id}", bot), timeout=15)
                 except Exception:

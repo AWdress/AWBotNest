@@ -256,6 +256,9 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
             assistant = getattr(app.state, "assistant", None)
             if assistant is not None:
                 await assistant.start()
+            channels = getattr(app.state, "assistant_channels", None)
+            if channels is not None:
+                await channels.start()
         except Exception as exc:
             app.state.platform_startup_error = type(exc).__name__
             raise
@@ -286,6 +289,12 @@ async def serve_platform(settings, accounts, runtime, scheduler, routes, market)
         memory_pressure_task.cancel()
         await asyncio.gather(restart_watcher, platform_task, memory_pressure_task, return_exceptions=True)
         assistant = getattr(app.state, "assistant", None)
+        channels = getattr(app.state, "assistant_channels", None)
+        if channels is not None:
+            try:
+                await channels.close()
+            except Exception:
+                logger.warning("助手渠道任务清理失败，继续停止其他服务")
         if assistant is not None:
             try:
                 await assistant.close()

@@ -96,6 +96,7 @@ function aiProtocolLabel(value) {
     responses: 'Responses',
     anthropic_messages: 'Anthropic Messages',
     image_generations: 'Images',
+    audio_transcriptions: '语音转写',
   })[value] || value || '未知协议'
 }
 function aiErrorLabel(value) {
@@ -104,6 +105,7 @@ function aiErrorLabel(value) {
     endpoint_not_found: '接口路径不存在', rate_limit: '服务商限流',
     protocol_mismatch: '协议不匹配', invalid_request: '请求不兼容',
     invalid_response: '响应格式异常', timeout: '请求超时', network: '网络异常',
+    incomplete_stream: '响应未完成',
     upstream: '上游异常', http_error: 'HTTP 异常',
   })[value] || value || '调用失败'
 }
@@ -231,7 +233,17 @@ const AI_CAPABILITIES = [
   { key: 'text', label: '文字模型', desc: '总结、改写、问答和结构化处理' },
   { key: 'vision', label: '视觉模型', desc: '识别图片、截图、验证码与视觉内容' },
   { key: 'image', label: '生图模型', desc: '根据文字描述生成图片' },
+  { key: 'audio', label: '语音转写', desc: '将语音消息转成文字' },
 ]
+
+function normalizeAiSettings(value) {
+  const settings = { ...value, capabilities: { ...(value?.capabilities || {}) } }
+  for (const capability of AI_CAPABILITIES) settings.capabilities[capability.key] = {
+    default_model: '', fallback_model: '', ...settings.capabilities[capability.key],
+  }
+  settings.capabilities.audio.fallback_model = ''
+  return settings
+}
 
 function aiCapabilityLabel(key) {
   return AI_CAPABILITIES.find((capability) => capability.key === key)?.label || key
@@ -324,7 +336,7 @@ async function loadAiSettings() {
   try {
     const configData = await api.getAiSettings()
     if (generation !== aiLoadGeneration) return
-    ai.value = configData.settings
+    ai.value = normalizeAiSettings(configData.settings)
     ai.value.providers.forEach((provider) => { provider.api_format ||= 'auto' })
     aiStatus.value = configData.status || {}
     if (tab.value === 'ai') startAiStatusPolling()
@@ -471,7 +483,7 @@ async function saveAiSettings() {
   aiSaving.value = true
   try {
     const data = await api.saveAiSettings(ai.value)
-    ai.value = data.settings
+    ai.value = normalizeAiSettings(data.settings)
     aiStatus.value = data.status || aiStatus.value
     aiSavedSnap.value = JSON.stringify(ai.value)
     toast.success('AI 设置已保存并立即生效')
@@ -943,10 +955,10 @@ function ensurePluginPermission(pluginId) {
     ai.value.plugin_permissions[pluginId] = {
       enabled: true,
       capabilities: AI_CAPABILITIES.map((item) => item.key),
-      models: { text: '', vision: '', image: '' },
+      models: { text: '', vision: '', image: '', audio: '' },
     }
   }
-  ai.value.plugin_permissions[pluginId].models ||= { text: '', vision: '', image: '' }
+  ai.value.plugin_permissions[pluginId].models ||= { text: '', vision: '', image: '', audio: '' }
   return ai.value.plugin_permissions[pluginId]
 }
 
@@ -2525,7 +2537,7 @@ onBeforeRouteLeave(async () => {
               <div v-for="capability in AI_CAPABILITIES" :key="capability.key" class="ai-capability-card">
                 <div class="ai-capability-title">
                   <span>{{ capability.label }}</span>
-                  <button class="btn sm" @click="testAi(capability.key)"
+                  <button v-if="capability.key !== 'audio'" class="btn sm" @click="testAi(capability.key)"
                           :disabled="aiTesting[capability.key]">
                     {{ aiTesting[capability.key] ? '测试中…' : '测试' }}
                   </button>
@@ -2541,7 +2553,7 @@ onBeforeRouteLeave(async () => {
                     </option>
                   </select>
                 </div>
-                <div class="field">
+                <div v-if="capability.key !== 'audio'" class="field">
                   <label>备用模型（可空）</label>
                   <select class="select" v-model="ai.capabilities[capability.key].fallback_model">
                     <option value="">不使用备用模型</option>

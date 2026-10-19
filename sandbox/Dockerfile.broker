@@ -1,0 +1,9 @@
+FROM docker:28-cli AS dockercli
+FROM python:3.13-slim
+COPY --from=dockercli /usr/local/bin/docker /usr/local/bin/docker
+RUN pip install --no-cache-dir fastapi==0.141.1 uvicorn==0.52.4 httpx==0.28.1
+WORKDIR /opt/broker
+COPY sandbox /opt/broker/sandbox
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+EXPOSE 8765
+CMD ["uvicorn", "sandbox.broker:create_app", "--factory", "--host", "0.0.0.0", "--port", "8765", "--no-access-log"]

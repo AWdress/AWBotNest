@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from types import ModuleType
 from typing import Any
+from uuid import uuid4
 
 from ..context import PluginContext
 
@@ -45,3 +46,4 @@ class LoadedPlugin:
     module: ModuleType
     context: PluginContext
     contexts: list[PluginContext] = field(default_factory=list)
+    generation: str = field(default_factory=lambda: uuid4().hex)
