@@ -6,10 +6,16 @@ import inspect
 from collections.abc import Callable
 from typing import Any
 
+from .resources import memory_reclaimer
 from .scheduler import waiting_phase
 
 
 async def run_sync(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    with memory_reclaimer.track():
+        return await _run_sync(callback, *args, **kwargs)
+
+
+async def _run_sync(callback: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     # Cancelling an asyncio waiter cannot stop its native worker. Retain task
     # ownership and concurrency permits until that worker really exits.
     task = asyncio.create_task(asyncio.to_thread(callback, *args, **kwargs))

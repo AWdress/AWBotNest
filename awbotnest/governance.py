@@ -20,6 +20,7 @@ from typing import Any, Awaitable, Callable
 import logging
 from telethon.events import StopPropagation
 from .config import DATA_DIR
+from .resources import memory_reclaimer
 from .scheduler import waiting_phase
 logger = logging.getLogger("awbotnest.governance")
 
@@ -287,6 +288,22 @@ class PluginGovernor:
         fallback: Callable[[], Any] | None = None,
         event_data: dict[str, Any] | None = None,
     ) -> Any:
+        # Include admission and native-worker drain. A cancelled waiter must
+        # not announce an idle period while its actual callback is still live.
+        with memory_reclaimer.track():
+            return await self._execute(plugin_id, operation, func, timeout=timeout,
+                                       fallback=fallback, event_data=event_data)
+
+    async def _execute(
+        self,
+        plugin_id: str,
+        operation: str,
+        func: Callable[[], Any],
+        *,
+        timeout: float | None = None,
+        fallback: Callable[[], Any] | None = None,
+        event_data: dict[str, Any] | None = None,
+    ) -> Any:
         policy = self.policy(plugin_id)
         semaphore = self._semaphores[plugin_id]
         queued = semaphore.locked()
@@ -487,11 +504,19 @@ class PluginGovernor:
             tasks.discard(done_task)
             if not tasks and self._tasks.get(owner_id) is tasks:
                 self._tasks.pop(owner_id, None)
-            if done_task.cancelled():
-                return
-            # 后台任务可能无人显式 await；读取异常可避免事件循环再报
-            # “Task exception was never retrieved”，具体失败已经由执行管道记录。
-            done_task.exception()
+            try:
+                if done_task.cancelled():
+                    return
+                # 后台任务可能无人显式 await；读取异常可避免事件循环再报
+                # “Task exception was never retrieved”，具体失败已经由执行管道记录。
+                done_task.exception()
+            finally:
+                # Completion is a reclamation hint, not a lifetime-wide hold:
+                # a permanent background loop must not suppress every collection.
+                try:
+                    memory_reclaimer.request()
+                except Exception:
+                    pass  # Optional maintenance cannot affect a plugin result.
 
         task.add_done_callback(completed)
         return task

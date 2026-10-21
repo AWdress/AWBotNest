@@ -6,6 +6,7 @@ import asyncio
 import logging
 import platform
 import sys
+from time import monotonic
 
 import uvicorn
 
@@ -25,16 +26,23 @@ from .market import PluginMarket
 from .cloak_proxy import reset_cloakbrowser_runtime
 from .cloak_updates import check_cloakbrowser_update
 from .system_updates import get_system_update_service
-from .resources import MemoryPressureMonitor
+from .resources import MemoryPressureMonitor, memory_reclaimer
 
 
 async def watch_memory_pressure() -> None:
     monitor = MemoryPressureMonitor()
+    next_sample = 0.0
     while True:
-        # Sampling is read-only: cancelling it must not delay plugin shutdown
-        # behind a busy worker pool. An in-flight sample may finish on its own.
-        await asyncio.to_thread(monitor.check)
-        await asyncio.sleep(30)
+        # Best-effort idle collection only releases unreachable objects/free
+        # allocator pages. It never cancels work or delays shutdown for a pool.
+        await asyncio.to_thread(memory_reclaimer.reclaim_if_idle)
+        if monotonic() >= next_sample:
+            await asyncio.to_thread(monitor.check)
+            next_sample = monotonic() + 30.0
+        # An overdue sample may coincide with a short periodic callback every
+        # time. Retry off that phase, without increasing pressure sampling.
+        await asyncio.sleep(min(memory_reclaimer.next_check_delay(),
+                                max(0.0, next_sample - monotonic())))
 
 
 async def run_once() -> bool:

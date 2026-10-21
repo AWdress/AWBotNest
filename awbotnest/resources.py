@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import platform
 import logging
+import gc
 import re
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import psutil
 
@@ -16,6 +18,139 @@ _MEMORY_WARNING_RATIO = 0.85
 _MEMORY_RECOVERY_RATIO = 0.75
 _MEMORY_WARNING_INTERVAL = 5 * 60
 logger = logging.getLogger("awbotnest.resources")
+
+
+def _trim_idle_allocator() -> None:
+    """Return unused glibc arenas, when this process exposes malloc_trim.
+
+    This does not unload modules, evict live objects or clear filesystem caches.
+    Other Linux allocators may not provide the optional symbol at all.
+    """
+    import ctypes
+
+    trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+    if trim is not None:
+        trim.argtypes = [ctypes.c_size_t]
+        trim.restype = ctypes.c_int
+        trim(0)
+
+
+class IdleMemoryReclaimer:
+    """Best-effort reclamation after tracked work becomes globally idle.
+
+    Work never acquires the collection lock. A task starting during collection
+    proceeds normally, and causes the optional allocator trim to be skipped.
+    """
+
+    def __init__(self, *, idle_seconds: float = 15.0,
+                 cooldown_seconds: float = 60.0,
+                 max_wait_seconds: float = 60.0,
+                 clock: Callable[[], float] = time.monotonic,
+                 collector: Callable[[int], object] | None = None,
+                 trimmer: Callable[[], object] | None = None) -> None:
+        self._idle_seconds = max(0.0, float(idle_seconds))
+        self._cooldown_seconds = max(0.0, float(cooldown_seconds))
+        self._max_wait_seconds = max(0.0, float(max_wait_seconds))
+        self._clock = clock
+        self._collector = gc.collect if collector is None else collector
+        self._trimmer = _trim_idle_allocator if trimmer is None else trimmer
+        self._state_lock = threading.Lock()
+        self._collect_lock = threading.Lock()
+        self._active = 0
+        self._pending = False
+        self._pending_since: float | None = None
+        self._last_activity: float | None = None
+        self._last_reclaim: float | None = None
+        self._epoch = 0
+
+    @contextmanager
+    def track(self) -> Iterator[None]:
+        """Track actual work, including nesting and exception/cancel cleanup."""
+        with self._state_lock:
+            self._active += 1
+            self._epoch += 1
+        try:
+            yield
+        finally:
+            with self._state_lock:
+                self._active -= 1
+                self._request_locked()
+
+    def _request_locked(self) -> None:
+        self._epoch += 1
+        self._pending = True
+        try:
+            now = self._clock()
+            self._last_activity = now
+            # Short callbacks must not keep moving the oldest pending request.
+            if self._pending_since is None:
+                self._pending_since = now
+        except Exception:
+            # Maintenance must not replace a task's return/exception.
+            self._last_activity = None
+
+    def request(self) -> None:
+        """Signal completed work without keeping permanent background loops active."""
+        with self._state_lock:
+            self._request_locked()
+
+    def next_check_delay(self) -> float:
+        """Retry overdue requests off the normal thirty-second phase."""
+        try:
+            with self._state_lock:
+                now = self._clock()
+                if (self._pending and self._pending_since is not None
+                        and now - self._pending_since >= self._max_wait_seconds
+                        and (self._last_reclaim is None
+                             or now - self._last_reclaim >= self._cooldown_seconds)):
+                    return 1.0
+        except Exception:
+            pass
+        return 30.0
+
+    def reclaim_if_idle(self) -> bool:
+        """Run at most one idle collection; errors never affect tracked work."""
+        if not self._collect_lock.acquire(blocking=False):
+            return False
+        attempted = False
+        try:
+            with self._state_lock:
+                now = self._clock()
+                if self._pending and (self._last_activity is None or self._pending_since is None):
+                    if self._last_activity is None:
+                        self._last_activity = now
+                    if self._pending_since is None:
+                        self._pending_since = now
+                    return False
+                if (self._active or not self._pending
+                        or (now - self._last_activity < self._idle_seconds
+                            and now - self._pending_since < self._max_wait_seconds)
+                        or self._last_reclaim is not None
+                        and now - self._last_reclaim < self._cooldown_seconds):
+                    return False
+                epoch = self._epoch
+                self._pending = False
+                self._pending_since = None
+                self._last_reclaim = now
+                attempted = True
+            # Neither the state lock nor a plugin execution permit is held during GC.
+            self._collector(2)
+            with self._state_lock:
+                still_idle = not self._active and self._epoch == epoch
+            if still_idle and platform.system() == "Linux":
+                self._trimmer()
+            return True
+        except Exception:
+            if attempted:
+                with self._state_lock:
+                    # Retry at most once per cooldown, including trim failures.
+                    self._request_locked()
+            return False
+        finally:
+            self._collect_lock.release()
+
+
+memory_reclaimer = IdleMemoryReclaimer()
 
 
 def _read_positive_int(path: Path, *, allow_zero: bool = False) -> int | None:

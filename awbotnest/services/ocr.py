@@ -15,6 +15,7 @@ from concurrent.futures import ProcessPoolExecutor, TimeoutError as FutureTimeou
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, Callable
 
+from ..resources import memory_reclaimer
 
 logger = logging.getLogger("awbotnest.services.ocr")
 
@@ -278,7 +279,8 @@ class OcrService:
             self._executor = None
             self._idle_timer = None
         try:
-            expected.shutdown(wait=True, cancel_futures=True)
+            with memory_reclaimer.track():
+                expected.shutdown(wait=True, cancel_futures=True)
         except Exception:
             logger.debug("OCR 工作进程空闲退出异常", exc_info=True)
 
@@ -315,6 +317,15 @@ class OcrService:
                   timeout: float = 60.0, _cancel_event: threading.Event | None = None,
                   _model_config: dict[str, Any] | None = None,
                   _charset_range: Any = None, **kwargs: Any) -> Any:
+        with memory_reclaimer.track():
+            return self._call_sync(model, operation, *args, timeout=timeout,
+                                   _cancel_event=_cancel_event, _model_config=_model_config,
+                                   _charset_range=_charset_range, **kwargs)
+
+    def _call_sync(self, model: str, operation: str, *args: Any,
+                   timeout: float = 60.0, _cancel_event: threading.Event | None = None,
+                   _model_config: dict[str, Any] | None = None,
+                   _charset_range: Any = None, **kwargs: Any) -> Any:
         if model not in _ALLOWED_MODELS or operation not in _ALLOWED_OPERATIONS:
             raise ValueError("OCR 调用参数不受支持")
         if not self.is_available():

@@ -17,6 +17,7 @@ from ..config import DATA_DIR, Settings
 from ..cloak_proxy import CLOAKBROWSER_INSTALL_REQUIREMENT
 from ..deps import DependencyManager
 from ..governance import pause_browser_queue_timeout
+from ..resources import memory_reclaimer
 from ..workers import run_sync
 from ..scheduler import waiting_phase
 
@@ -92,6 +93,13 @@ class BrowserService:
     async def run(self, url: str, action: Callable[[Any], Any], *, headless: bool = True,
                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
                   user_agent: str = "", ua: str | None = None, proxy=None) -> Any:
+        with memory_reclaimer.track():
+            return await self._run(url, action, headless=headless, timeout=timeout,
+                                   cookies=cookies, user_agent=user_agent, ua=ua, proxy=proxy)
+
+    async def _run(self, url: str, action: Callable[[Any], Any], *, headless: bool = True,
+                   timeout: int = 60, cookies: list[dict[str, object]] | None = None,
+                   user_agent: str = "", ua: str | None = None, proxy=None) -> Any:
         # Both action styles share a FIFO queue. Waiting for another browser is
         # not a failed/skipped execution and does not consume its action timeout.
         with pause_browser_queue_timeout(), waiting_phase("等待浏览器执行名额"):
