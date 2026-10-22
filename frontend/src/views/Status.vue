@@ -5,6 +5,7 @@ import AccountAvatar from '../components/AccountAvatar.vue'
 import AccountPremiumBadge from '../components/AccountPremiumBadge.vue'
 import { isDisplayLog, logMessageLabel, logSourceLabel } from '../utils/logDisplay'
 import { jobDisplayName, jobOwnerLabel } from '../utils/jobDisplay'
+import { activityCurvePath } from '../utils/activityChart'
 import {
   platformStatus,
   platformStatusError,
@@ -288,8 +289,8 @@ const timeline = computed(() => {
   })
 })
 
-const linePath = computed(() => timeline.value.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.y}`).join(' '))
-const successLinePath = computed(() => timeline.value.map((point, index) => `${index ? 'L' : 'M'} ${point.x} ${point.successY}`).join(' '))
+const linePath = computed(() => activityCurvePath(timeline.value))
+const successLinePath = computed(() => activityCurvePath(timeline.value, 'successY'))
 const areaPath = computed(() => {
   if (!timeline.value.length) return ''
   return `${linePath.value} L ${timeline.value.at(-1).x} 176 L ${timeline.value[0].x} 176 Z`
@@ -493,10 +494,10 @@ onUnmounted(() => {
                 <defs><linearGradient id="activity-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#3080f0" stop-opacity=".26"/><stop offset="100%" stop-color="#3080f0" stop-opacity="0"/></linearGradient></defs>
                 <g class="chart-grid"><line v-for="index in 5" :key="index" x1="28" x2="972" :y1="18 + (index - 1) * 39.5" :y2="18 + (index - 1) * 39.5" /></g>
                 <path class="chart-area" :d="areaPath" />
-                <path class="chart-line trigger" :d="linePath" />
                 <path class="chart-line success" :d="successLinePath" />
-                <circle v-if="hoveredChartPoint" class="chart-point trigger" :cx="hoveredChartPoint.x" :cy="hoveredChartPoint.y" r="3" />
-                <circle v-if="hoveredChartPoint" class="chart-point success" :cx="hoveredChartPoint.x" :cy="hoveredChartPoint.successY" r="3" />
+                <path class="chart-line trigger" :d="linePath" />
+                <circle v-if="hoveredChartPoint" class="chart-point trigger" :cx="hoveredChartPoint.x" :cy="hoveredChartPoint.y" r="4.5" />
+                <circle v-if="hoveredChartPoint" class="chart-point success" :cx="hoveredChartPoint.x" :cy="hoveredChartPoint.successY" r="2.5" />
               </svg>
               <button v-for="(point, index) in timeline" :key="`hit-${index}`" type="button" class="chart-hit" :style="{ left: point.hitLeftPct, width: point.hitWidthPct }" :aria-label="`${point.label}，触发 ${point.total} 次，成功 ${point.success} 次`" @mouseenter="hoveredPoint = index" @mouseleave="hoveredPoint = null" @focus="hoveredPoint = index" @blur="hoveredPoint = null"></button>
               <div
@@ -655,9 +656,9 @@ onUnmounted(() => {
 
 .chart-legend { display: flex; gap: 18px; padding: 0 17px 4px; color: var(--text-muted); font-size: 11px; }
 .chart-legend span { display: flex; align-items: center; gap: 7px; }
-.chart-legend i { width: 16px; height: 2px; border-radius: 3px; }
-.chart-legend i.trigger { background: var(--accent); }
-.chart-legend i.success { background: var(--success); }
+.chart-legend i { width: 20px; height: 0; border-top: 2px solid; }
+.chart-legend i.trigger { border-color: var(--accent); border-top-style: dashed; }
+.chart-legend i.success { border-color: var(--success); }
 .line-chart { height: 226px; display: grid; grid-template-columns: 28px minmax(0,1fr); padding: 2px 15px 0 11px; }
 .y-axis { height: 208px; display: flex; flex-direction: column; justify-content: space-between; padding: 11px 5px 19px 0; color: var(--text-muted); font-size: 9px; text-align: right; font-variant-numeric: tabular-nums; }
 .chart-canvas { position: relative; min-width: 0; height: 226px; }
@@ -665,8 +666,8 @@ onUnmounted(() => {
 .chart-grid line { stroke: var(--border); stroke-width: 1; stroke-dasharray: 3 4; vector-effect: non-scaling-stroke; }
 .chart-area { fill: url(#activity-area); animation: chart-fade .55s ease both; }
 .chart-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
-.chart-line.trigger { stroke: var(--accent); filter: drop-shadow(0 4px 7px rgba(48,128,240,.2)); }
-.chart-line.success { stroke: var(--success); filter: drop-shadow(0 4px 7px rgba(16,176,128,.16)); }
+.chart-line.trigger { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 6 5; }
+.chart-line.success { stroke: var(--success); stroke-width: 2.5; }
 .chart-point { fill: var(--bg-card); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
 .chart-point.trigger { stroke: var(--accent); }
 .chart-point.success { stroke: var(--success); }

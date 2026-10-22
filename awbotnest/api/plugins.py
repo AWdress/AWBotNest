@@ -27,6 +27,7 @@ from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
 from ..logs import memory_logs
 from ..market import normalize_repo
+from ..plugin_icons import present_plugin_icon
 from ..plugin_config import mask_config, reveal_secret, save_plugin_config
 from ..routing import WebhookRequest
 from .models import *
@@ -59,7 +60,7 @@ def create_router(deps) -> APIRouter:
             logger.error("插件启用失败：%s（%s）", meta.name, meta.error)
             raise HTTPException(status_code=409, detail=meta.error)
         logger.info("插件启用成功：%s", meta.name)
-        value = meta.to_dict()
+        value = present_plugin_icon(deps, meta.to_dict())
         return {**value, "plugin": value}
 
     @router.post("/api/plugins/{plugin_id}/disable", dependencies=[Depends(require_admin)])
@@ -68,7 +69,7 @@ def create_router(deps) -> APIRouter:
         logger.info("插件停用开始：%s", plugin_name)
         await runtime.disable(plugin_id)
         meta = next((item for item in runtime.scan() if item.id == plugin_id), None)
-        value = meta.to_dict() if meta else {"id": plugin_id, "enabled": False, "loaded": False}
+        value = present_plugin_icon(deps, meta.to_dict()) if meta else {"id": plugin_id, "enabled": False, "loaded": False}
         value["enabled"] = False
         value["loaded"] = False
         logger.info("插件停用成功：%s", plugin_name)
@@ -79,7 +80,7 @@ def create_router(deps) -> APIRouter:
         meta = await runtime.reload(plugin_id)
         if meta.error:
             raise HTTPException(status_code=409, detail=meta.error)
-        return {"ok": True, "plugin": meta.to_dict()}
+        return {"ok": True, "plugin": present_plugin_icon(deps, meta.to_dict())}
 
     @router.post("/api/plugins/{plugin_id}/self-check", dependencies=[Depends(require_admin)])
     async def self_check_plugin(plugin_id: str):
@@ -280,7 +281,7 @@ def create_router(deps) -> APIRouter:
         finally:
             temporary.unlink(missing_ok=True)
         logger.info("已安装：%s", runtime.display_name(target.stem))
-        return {"ok": True, "plugin": meta.to_dict()}
+        return {"ok": True, "plugin": present_plugin_icon(deps, meta.to_dict())}
 
     @router.delete("/api/plugins/{plugin_id}", dependencies=[Depends(require_admin)])
     async def delete_plugin(plugin_id: str):

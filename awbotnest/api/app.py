@@ -12,6 +12,7 @@ from ..auth import admin_dependency
 from ..config import APP_ROOT, Settings
 from ..market import PluginMarket
 from ..open_api import register_open_api
+from ..plugin_icons import PluginIconCache
 from ..resources import ResourceSampler
 from .accounts import create_router as accounts_router
 from .assistant import create_router as assistant_router
@@ -36,6 +37,7 @@ class ApiDependencies:
     require_admin: object
     started_at: float
     resource_sampler: ResourceSampler
+    plugin_icons: object = None
 
 
 def create_app(settings: Settings, accounts, runtime, scheduler, routes,
@@ -62,7 +64,7 @@ def create_app(settings: Settings, accounts, runtime, scheduler, routes,
 
     market = market or PluginMarket(settings)
     deps = ApiDependencies(settings, accounts, runtime, scheduler, routes, restart_event, market,
-                           admin_dependency(settings), time.monotonic(), ResourceSampler())
+                           admin_dependency(settings), time.monotonic(), ResourceSampler(), PluginIconCache(settings))
     from ..assistant import AssistantService
     from ..assistant_channels import AssistantChannels
     app.state.assistant = AssistantService(deps)

@@ -27,6 +27,7 @@ from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings,
 from ..governance import PluginBusyError, PluginQueueTimeout
 from ..logs import memory_logs
 from ..market import normalize_repo
+from ..plugin_icons import present_plugin_icon, set_icon_resource_cookie
 from ..routing import WebhookRequest
 from .models import *
 
@@ -53,11 +54,12 @@ def create_router(deps) -> APIRouter:
     resource_sampler = deps.resource_sampler
 
     @router.get("/api/plugins", dependencies=[Depends(require_admin)])
-    async def plugins():
+    async def plugins(response: Response = None):
+        set_icon_resource_cookie(deps, response)
         values = []
         local_heat = market.local_install_counts()
         for meta in runtime.scan():
-            item = meta.to_dict()
+            item = present_plugin_icon(deps, meta.to_dict())
             item["install_count"] = local_heat.get(meta.id, 0)
             item.update(routes.describe(meta.id))
             values.append(item)
@@ -65,6 +67,27 @@ def create_router(deps) -> APIRouter:
         rank = {plugin_id: index for index, plugin_id in enumerate(order)}
         values.sort(key=lambda item: (rank.get(item["id"], len(rank)), item.get("name") or item["id"]))
         return {"plugins": values, "official_ids": [], "custom_order": bool(order)}
+
+    @router.get("/api/plugins/icons/{key}", include_in_schema=False)
+    async def plugin_icon(key: str, request: Request):
+        authorization = request.headers.get("authorization", "").split(" ", 1)
+        bearer_token = authorization[1] if len(authorization) == 2 and authorization[0].lower() == "bearer" else ""
+        cookie = request.cookies.get("awbotnest_resource", "")
+        if not (token_matches(cookie, settings.admin_token) or token_matches(bearer_token, settings.admin_token)):
+            raise HTTPException(status_code=403, detail="无权访问插件图标")
+        cache = getattr(deps, "plugin_icons", None)
+        if cache is None:
+            raise HTTPException(status_code=404, detail="插件图标不存在")
+        try:
+            path, kind = await cache.get(key)
+        except LookupError:
+            raise HTTPException(status_code=404, detail="插件图标暂不可用",
+                                headers={"Cache-Control": "no-store"}) from None
+        return FileResponse(path, media_type=kind, headers={
+            "Cache-Control": "private, max-age=86400", "Vary": "Cookie, Authorization",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
+        })
 
     @router.put("/api/plugins/order", dependencies=[Depends(require_admin)])
     async def save_plugin_order(request: Request):

@@ -26,6 +26,7 @@ from ..backup import BackupManager, MAX_BACKUP_SIZE
 from ..config import APP_ROOT, DATA_DIR, PLUGINS_DIR, SESSIONS_DIR, BotSettings, save_settings
 from ..logs import clean_log_history, memory_logs
 from ..market import normalize_repo
+from ..plugin_icons import present_plugin_icon, set_icon_resource_cookie
 from ..routing import WebhookRequest
 from .models import *
 
@@ -268,9 +269,11 @@ def create_router(deps, list_plugins) -> APIRouter:
         return clean_log_history(settings.log_cleaner.get("keep_lines", 1000), handler=memory_logs)
 
     @router.get("/api/plugins/store", dependencies=[Depends(require_admin)])
-    async def plugin_store(refresh: bool = False):
+    async def plugin_store(refresh: bool = False, response: Response = None):
         # 普通页面加载不触发联网；仅显式刷新和后台任务更新缓存。
-        return await market.refresh() if refresh else market.cached()
+        snapshot = await market.refresh() if refresh else market.cached()
+        set_icon_resource_cookie(deps, response)
+        return {**snapshot, "plugins": [present_plugin_icon(deps, item) for item in snapshot.get("plugins", [])]}
 
     @router.post("/api/plugins/store/install", dependencies=[Depends(require_admin)])
     async def install_market_plugin(body: MarketInstallBody):
@@ -337,7 +340,7 @@ def create_router(deps, list_plugins) -> APIRouter:
             logger.debug("插件已%s，安装热度暂未记录：%s", action, plugin_name, exc_info=True)
         market.clear_cache()
         logger.info("已%s：%s", action, meta.name)
-        return {"ok": True, "path": str(destination), "plugin": meta.to_dict()}
+        return {"ok": True, "path": str(destination), "plugin": present_plugin_icon(deps, meta.to_dict())}
 
     @router.post("/api/plugins/store/download", dependencies=[Depends(require_admin)])
     async def download_market_plugins_legacy(request: Request):
