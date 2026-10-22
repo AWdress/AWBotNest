@@ -49,6 +49,7 @@ let noticeTimer = null
 let jobsTimer = null
 let notificationLoadVersion = 0
 let networkRunVersion = 0
+let releaseNoteVersion = 0
 let networkSequence = Promise.resolve()
 const seenLogs = new Set()
 const quickLogsBox = ref(null)
@@ -218,7 +219,7 @@ function closeModal() {
     clearInterval(jobsTimer)
     jobsTimer = null
   }
-  selectedVersion.value = null
+  closeVersion()
   modal.value = ''
 }
 
@@ -297,7 +298,7 @@ async function loadHealth() {
 
 async function loadAbout() {
   aboutBusy.value = true
-  selectedVersion.value = null
+  closeVersion()
   try {
     const [info, releases] = await Promise.all([
       api.getAbout(),
@@ -328,23 +329,33 @@ function formatUptime(seconds) {
     .filter(Boolean).join(' ')
 }
 
+function closeVersion() {
+  releaseNoteVersion += 1
+  selectedVersion.value = null
+  releaseNoteHtml.value = ''
+}
+
 async function openVersion(item) {
+  const requestVersion = ++releaseNoteVersion
   releaseNoteHtml.value = ''
   selectedVersion.value = { ...item, notes: '', loading: true }
   try {
     const result = Object.prototype.hasOwnProperty.call(item, 'notes')
       ? item
       : await api.getAboutVersion(item.version)
+    if (requestVersion !== releaseNoteVersion) return
     const [{ marked }, { default: DOMPurify }] = await Promise.all([
       import('marked'),
       import('dompurify'),
     ])
+    if (requestVersion !== releaseNoteVersion) return
     releaseNoteHtml.value = DOMPurify.sanitize(
       marked.parse(result.notes || '', { gfm: true, breaks: false }),
     )
     selectedVersion.value = { ...result, loading: false }
   } catch (error) {
-    selectedVersion.value = { ...item, notes: `读取失败：${error.message}`, loading: false }
+    if (requestVersion !== releaseNoteVersion) return
+    selectedVersion.value = { ...item, notes: '', error: `读取失败：${error.message}`, loading: false }
   }
 }
 
@@ -438,6 +449,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  closeVersion()
   clearInterval(noticeTimer)
   clearInterval(jobsTimer)
   disconnectLogs()
@@ -668,13 +680,14 @@ onUnmounted(() => {
         </div>
       </section>
 
-      <div v-if="selectedVersion" class="release-note-mask" @click.self="selectedVersion = null">
+      <div v-if="selectedVersion" class="release-note-mask" @click.self="closeVersion">
         <article class="release-note">
           <header>
             <strong>v{{ selectedVersion.version }} 更新内容</strong>
-            <button @click="selectedVersion = null">×</button>
+            <button aria-label="关闭更新内容" @click="closeVersion">×</button>
           </header>
           <div v-if="selectedVersion.loading" class="release-note-state">正在读取更新内容…</div>
+          <div v-else-if="selectedVersion.error" class="release-note-state">{{ selectedVersion.error }}</div>
           <div v-else-if="selectedVersion.notes" class="release-note-content" v-html="releaseNoteHtml"></div>
           <div v-else class="release-note-state">该版本暂无更新说明。</div>
         </article>

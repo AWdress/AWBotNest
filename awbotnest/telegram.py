@@ -50,6 +50,10 @@ class TelegramAccounts:
         self.bots: dict[str, TelegramClient] = {}
         self.users: dict[str, TelegramClient] = {}
         self._pending_logins: dict[str, tuple[TelegramClient, str, object, float]] = {}
+        self._login_locks: dict[str, asyncio.Lock] = {}
+        self._login_requests: dict[str, asyncio.Task] = {}
+        self._login_flows: dict[str, str] = {}
+        self._cancelled_login_flows: dict[tuple[str, str], float] = {}
         self._lock = asyncio.Lock()
         self._connection_locks: dict[tuple[str, str], asyncio.Lock] = {}
         self._recovery_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
@@ -495,14 +499,31 @@ class TelegramAccounts:
             await self._discard_client("user", session_name, client)
             return self._connection_failed("user", session_name, exc, retry)
 
-    async def begin_user_login(self, session_name: str, phone: str) -> dict[str, object]:
+    @staticmethod
+    def _validate_login_flow(session_name: str, flow_id: str) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_]{1,64}", session_name):
+            raise ValueError("会话名称只能包含字母、数字和下划线，最多 64 个字符")
+        if not isinstance(flow_id, str) or len(flow_id) > 64 or re.fullmatch(r"[A-Za-z0-9_-]*", flow_id) is None:
+            raise ValueError("登录请求标识不合法")
+
+    def _prune_login_flows(self) -> None:
+        cutoff = time.monotonic() - 600
+        for key, cancelled_at in list(self._cancelled_login_flows.items()):
+            if cancelled_at < cutoff:
+                self._cancelled_login_flows.pop(key, None)
+
+    def _revoke_login_flow(self, session_name: str, flow_id: str) -> None:
+        if flow_id:
+            self._cancelled_login_flows[(session_name, flow_id)] = time.monotonic()
+
+    async def begin_user_login(self, session_name: str, phone: str, *, flow_id: str = "") -> dict[str, object]:
         """发送登录验证码；客户端保留在内存中等待下一步。"""
         if not self.telegram_available:
             raise RuntimeError("请先配置 Telegram API_ID/API_HASH")
         session_name = session_name.strip()
         phone = phone.strip()
-        if not re.fullmatch(r"[A-Za-z0-9_]+", session_name):
-            raise ValueError("会话名称只能包含字母、数字和下划线")
+        self._validate_login_flow(session_name, flow_id)
+        self._prune_login_flows()
         if not phone:
             raise ValueError("手机号不能为空")
         if session_name in self.users:
@@ -511,30 +532,82 @@ class TelegramAccounts:
         self._suppressed_users.add(session_name)
         for name, pending in list(self._pending_logins.items()):
             if time.monotonic() - pending[3] > 600:
-                await self.cancel_user_login(name)
-        await self.cancel_user_login(session_name)
-        client = self._client(str(self.sessions_dir / session_name))
+                await self.cancel_user_login(name, pending=pending)
+        async with self._login_locks.setdefault(session_name, asyncio.Lock()):
+            if flow_id and (session_name, flow_id) in self._cancelled_login_flows:
+                raise RuntimeError("登录已取消，请重新发送验证码")
+            if flow_id and self._login_flows.get(session_name) == flow_id:
+                raise ValueError("此登录请求已发送，请继续验证或重新开始")
+            await self._cancel_user_login_locked(session_name)
+            if self._stopping:
+                raise RuntimeError("系统正在停止，请稍后重试")
+            if session_name in self.users:
+                raise ValueError("该会话名称已在使用")
+            task = asyncio.create_task(self._send_user_login_code(session_name, phone))
+            self._login_requests[session_name] = task
+            self._login_flows[session_name] = flow_id
         try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A replacement/cancel request cancels the child, not the HTTP task.
+            # An HTTP cancellation must also finish closing its own client.
+            if asyncio.current_task().cancelling():
+                await self.cancel_user_login(session_name, request=task, flow_id=flow_id)
+                raise
+            raise RuntimeError("登录已取消，请重新发送验证码") from None
+
+    async def _send_user_login_code(self, session_name: str, phone: str) -> dict[str, object]:
+        task = asyncio.current_task()
+        client = None
+        try:
+            client = self._client(str(self.sessions_dir / session_name))
             await asyncio.wait_for(client.connect(), timeout=60)
             sent = await asyncio.wait_for(client.send_code_request(phone), timeout=60)
+            if self._stopping or self._login_requests.get(session_name) is not task:
+                raise RuntimeError("登录已取消，请重新发送验证码")
+            self._pending_logins[session_name] = (client, phone, sent.phone_code_hash, time.monotonic())
+            return {"session": session_name, "code_type": type(sent.type).__name__}
         except BaseException:
-            await client.disconnect()
+            if client is not None:
+                await self._finish_login_cleanup(client.disconnect())
             raise
-        self._pending_logins[session_name] = (client, phone, sent.phone_code_hash, time.monotonic())
-        return {"session": session_name, "code_type": type(sent.type).__name__}
+        finally:
+            if self._login_requests.get(session_name) is task and session_name not in self._pending_logins:
+                self._login_requests.pop(session_name, None)
+                self._login_flows.pop(session_name, None)
+
+    @staticmethod
+    async def _finish_login_cleanup(awaitable) -> None:
+        task = asyncio.ensure_future(awaitable)
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            waiter = asyncio.gather(task, return_exceptions=True)
+            while not waiter.done():
+                try:
+                    await asyncio.shield(waiter)
+                except asyncio.CancelledError:
+                    continue
+            raise
 
     async def complete_user_login(
         self,
         session_name: str,
         code: str = "",
         password: str = "",
+        flow_id: str = "",
     ) -> dict[str, object]:
+        self._validate_login_flow(session_name, flow_id)
+        self._prune_login_flows()
+        if flow_id and (self._login_flows.get(session_name) != flow_id
+                        or (session_name, flow_id) in self._cancelled_login_flows):
+            raise LookupError("登录已取消或重新开始，请重新发送验证码")
         pending = self._pending_logins.get(session_name)
         if pending is None:
             raise LookupError("登录会话不存在或已过期，请重新发送验证码")
         client, phone, code_hash, started = pending
         if time.monotonic() - started > 600:
-            await self.cancel_user_login(session_name)
+            await self.cancel_user_login(session_name, pending=pending)
             raise LookupError("登录会话已超过 10 分钟，请重新发送验证码")
         try:
             if password:
@@ -550,9 +623,13 @@ class TelegramAccounts:
             return {"session": session_name, "needs_password": False, "authorized": False,
                     "error": "验证码错误"}
         except Exception:
-            await self.cancel_user_login(session_name)
+            await self.cancel_user_login(session_name, pending=pending)
             raise
+        if self._pending_logins.get(session_name) is not pending:
+            raise LookupError("登录已取消或重新开始，请重新发送验证码")
         self._pending_logins.pop(session_name, None)
+        self._login_requests.pop(session_name, None)
+        self._revoke_login_flow(session_name, self._login_flows.pop(session_name, ""))
         self._suppressed_users.discard(session_name)
         self.users[session_name] = client
         self._watch_client("user", session_name, client)
@@ -571,10 +648,34 @@ class TelegramAccounts:
             "username": getattr(me, "username", None),
         }
 
-    async def cancel_user_login(self, session_name: str) -> None:
+    async def _cancel_user_login_locked(self, session_name: str) -> None:
+        task = self._login_requests.pop(session_name, None)
         pending = self._pending_logins.pop(session_name, None)
-        if pending is not None:
-            await pending[0].disconnect()
+        self._revoke_login_flow(session_name, self._login_flows.pop(session_name, ""))
+
+        async def cleanup():
+            if task is not None:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if pending is not None:
+                await pending[0].disconnect()
+
+        await self._finish_login_cleanup(cleanup())
+
+    async def cancel_user_login(self, session_name: str, *, flow_id: str = "", request=None, pending=None) -> None:
+        self._validate_login_flow(session_name, flow_id)
+        self._prune_login_flows()
+        async with self._login_locks.setdefault(session_name, asyncio.Lock()):
+            # Keep a short-lived revocation even when cancel arrives before start.
+            self._revoke_login_flow(session_name, flow_id)
+            if flow_id and self._login_flows.get(session_name) != flow_id:
+                return
+            # A cancelled old HTTP request must not cancel its replacement.
+            if request is not None and self._login_requests.get(session_name) is not request:
+                return
+            if pending is not None and self._pending_logins.get(session_name) is not pending:
+                return
+            await self._cancel_user_login_locked(session_name)
 
     async def disconnect_user(self, session_name: str) -> bool:
         self._suppressed_users.add(session_name)
@@ -683,6 +784,8 @@ class TelegramAccounts:
 
     async def stop(self) -> None:
         await self.stop_recovery()
+        for session_name in list(self._login_requests):
+            await self.cancel_user_login(session_name)
         async with self._lock:
             clients = [
                 *self.users.values(),

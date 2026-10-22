@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted } from 'vue'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { api } from '../api'
 import { confirm } from '../composables/confirm'
 import AccountAvatar from '../components/AccountAvatar.vue'
@@ -26,6 +26,10 @@ const form = ref({ session: '', phone: '', code: '', password: '' })
 const wizardBusy = ref(false)
 const wizardErr = ref('')
 const doneInfo = ref(null)
+let wizardRequestId = 0
+let loginFlow = null
+let loginFlowSequence = 0
+const loginCancellations = new Map()
 
 async function load() {
   const requestId = ++loadRequestId
@@ -77,7 +81,31 @@ async function remove(acc) {
 }
 
 // ── 登录向导 ──
+function newLoginFlowId() {
+  return globalThis.crypto?.randomUUID?.()
+    || `login_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}_${++loginFlowSequence}`
+}
+
+function cancelLoginSession(session, flowId) {
+  if (!session) return
+  const previous = loginCancellations.get(session) || Promise.resolve()
+  const pending = previous.then(() => api.loginCancel(session, flowId)).catch(() => {})
+  loginCancellations.set(session, pending)
+  pending.finally(() => {
+    if (loginCancellations.get(session) === pending) loginCancellations.delete(session)
+  })
+}
+
+function closeWizard() {
+  wizardRequestId += 1
+  wizardOpen.value = false
+  wizardBusy.value = false
+  if (step.value !== 'done' && loginFlow) cancelLoginSession(loginFlow.session, loginFlow.id)
+  loginFlow = null
+}
+
 function openWizard() {
+  closeWizard()
   form.value = { session: '', phone: '', code: '', password: '' }
   step.value = 'phone'
   wizardErr.value = ''
@@ -85,10 +113,41 @@ function openWizard() {
   wizardOpen.value = true
 }
 
-async function showLoginComplete(result) {
+function wizardRequest(expectedStep) {
+  if (!wizardOpen.value || wizardBusy.value || step.value !== expectedStep) return null
+  return {
+    id: ++wizardRequestId,
+    target: form.value,
+    step: expectedStep,
+    session: form.value.session.trim(),
+    phone: form.value.phone.trim(),
+    flowId: loginFlow?.id,
+  }
+}
+
+function isWizardCurrent(request) {
+  return request.id === wizardRequestId && wizardOpen.value && form.value === request.target
+    && step.value === request.step && form.value.session.trim() === request.session
+    && form.value.phone.trim() === request.phone
+    && request.flowId === loginFlow?.id
+}
+
+function backToPhone() {
+  wizardRequestId += 1
+  wizardBusy.value = false
+  if (loginFlow) cancelLoginSession(loginFlow.session, loginFlow.id)
+  loginFlow = null
+  form.value.code = ''
+  form.value.password = ''
+  wizardErr.value = ''
+  step.value = 'phone'
+}
+
+async function showLoginComplete(result, request) {
   // Refresh the account profile first so the success state can use the same
   // avatar data as the account cards (including the freshly downloaded photo).
   await load()
+  if (!isWizardCurrent(request)) return
   const account = accounts.value.find((item) => item.session === result.session)
   doneInfo.value = {
     ...result,
@@ -100,6 +159,7 @@ async function showLoginComplete(result) {
       avatar_id: '',
     },
   }
+  loginFlow = null
   step.value = 'done'
 }
 
@@ -108,50 +168,75 @@ function sanitizeCode() {
 }
 
 async function sendCode() {
+  if (!wizardOpen.value || wizardBusy.value || step.value !== 'phone') return
   if (!form.value.session.trim()) { wizardErr.value = '请填写本地账号名称'; return }
   if (!form.value.phone.trim()) { wizardErr.value = '请填写手机号'; return }
+  const request = wizardRequest('phone')
+  if (!request) return
+  request.flowId = newLoginFlowId()
+  loginFlow = { session: request.session, id: request.flowId }
   wizardBusy.value = true; wizardErr.value = ''
   try {
-    await api.loginSendCode(form.value.session.trim(), form.value.phone.trim())
+    // A cancelled login must finish cancelling before this session name is reused.
+    await loginCancellations.get(request.session)
+    if (!isWizardCurrent(request)) return
+    await api.loginSendCode(request.session, request.phone, request.flowId)
+    if (!isWizardCurrent(request)) return
     step.value = 'code'
   } catch (e) {
-    wizardErr.value = e.message
+    if (isWizardCurrent(request)) wizardErr.value = e.message
   } finally {
-    wizardBusy.value = false
+    if (request.id === wizardRequestId) {
+      if (!isWizardCurrent(request) && step.value === 'phone') cancelLoginSession(request.session, request.flowId)
+      wizardBusy.value = false
+    }
   }
 }
 
 async function submitCode() {
+  if (!wizardOpen.value || wizardBusy.value || step.value !== 'code') return
   if (!form.value.code.trim()) { wizardErr.value = '请输入验证码'; return }
+  const request = wizardRequest('code')
+  if (!request) return
   wizardBusy.value = true; wizardErr.value = ''
   try {
-    const r = await api.loginSubmitCode(form.value.session.trim(), form.value.code.trim())
+    const r = await api.loginSubmitCode(request.session, form.value.code.trim(), request.flowId)
+    if (!isWizardCurrent(request)) return
     if (r.need === 'password' || r.needs_password) step.value = 'password'
-    else if (r.ok || r.authorized) await showLoginComplete(r)
+    else if (r.ok || r.authorized) await showLoginComplete(r, request)
+    if (request.id !== wizardRequestId) return
     if (r.error) wizardErr.value = r.error
     else if (!(r.need === 'password' || r.needs_password || r.ok || r.authorized)) wizardErr.value = '登录未完成，请检查验证码后重试'
   } catch (e) {
-    wizardErr.value = e.message
+    if (isWizardCurrent(request)) wizardErr.value = e.message
   } finally {
-    wizardBusy.value = false
+    if (request.id === wizardRequestId) wizardBusy.value = false
   }
 }
 
 async function submitPassword() {
+  if (!wizardOpen.value || wizardBusy.value || step.value !== 'password') return
   if (!form.value.password) { wizardErr.value = '请输入两步验证密码'; return }
+  const request = wizardRequest('password')
+  if (!request) return
   wizardBusy.value = true; wizardErr.value = ''
   try {
-    const r = await api.loginSubmitPassword(form.value.session.trim(), form.value.password)
-    if (r.ok || r.authorized) await showLoginComplete(r)
+    const r = await api.loginSubmitPassword(request.session, form.value.password, request.flowId)
+    if (!isWizardCurrent(request)) return
+    if (r.ok || r.authorized) await showLoginComplete(r, request)
     else wizardErr.value = r.error || '登录未完成，请检查两步验证密码后重试'
   } catch (e) {
-    wizardErr.value = e.message
+    if (isWizardCurrent(request)) wizardErr.value = e.message
   } finally {
-    wizardBusy.value = false
+    if (request.id === wizardRequestId) wizardBusy.value = false
   }
 }
 
 onMounted(load)
+onUnmounted(() => {
+  loadRequestId += 1
+  closeWizard()
+})
 </script>
 
 <template>
@@ -217,11 +302,11 @@ onMounted(load)
     </div>
 
     <!-- 登录向导 -->
-    <div v-if="wizardOpen" class="modal-mask" @click.self="wizardOpen=false">
+    <div v-if="wizardOpen" class="modal-mask" @click.self="closeWizard">
       <div class="modal card" role="dialog" aria-modal="true" aria-label="登录账号">
         <div class="modal-head">
           <h2>登录账号</h2>
-          <button type="button" class="close" aria-label="关闭" @click="wizardOpen=false"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+          <button type="button" class="close" aria-label="关闭" @click="closeWizard"><svg class="x-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
         </div>
 
         <!-- 步骤指示 -->
@@ -239,14 +324,14 @@ onMounted(load)
         <div v-if="step==='phone'" class="form">
           <div class="field">
             <label>本地账号名称（英文，自定义）</label>
-            <input class="input" v-model="form.session" placeholder="例如 user_account" />
+            <input class="input" v-model="form.session" :disabled="wizardBusy" placeholder="例如 user_account" />
           </div>
           <div class="field">
             <label>手机号（带国家码）</label>
-            <input class="input" v-model="form.phone" placeholder="+8615012345678" />
+            <input class="input" v-model="form.phone" :disabled="wizardBusy" placeholder="+8615012345678" />
           </div>
           <div class="modal-foot">
-            <button class="btn" @click="wizardOpen=false">取消</button>
+            <button class="btn" @click="closeWizard">取消</button>
             <button class="btn btn-primary" @click="sendCode" :disabled="wizardBusy">
               {{ wizardBusy ? '发送中…' : '发送验证码' }}
             </button>
@@ -258,10 +343,10 @@ onMounted(load)
           <div class="field">
             <label>验证码（Telegram 发来的 6 位数字）</label>
             <input class="input" v-model="form.code" inputmode="numeric" autocomplete="one-time-code"
-                   maxlength="6" pattern="[0-9]*" placeholder="123456" @input="sanitizeCode" />
+                   maxlength="6" pattern="[0-9]*" placeholder="123456" :disabled="wizardBusy" @input="sanitizeCode" />
           </div>
           <div class="modal-foot">
-            <button class="btn" @click="step='phone'">上一步</button>
+            <button class="btn" @click="backToPhone">上一步</button>
             <button class="btn btn-primary" @click="submitCode" :disabled="wizardBusy">
               {{ wizardBusy ? '验证中…' : '确认' }}
             </button>
@@ -273,7 +358,7 @@ onMounted(load)
           <p class="muted hint-text">该账号已开启两步验证，请输入 Telegram 两步验证密码。<br>未开启两步验证的账号无需填写。</p>
           <div class="field">
             <label>两步验证密码</label>
-            <input class="input" type="password" v-model="form.password" @keyup.enter="submitPassword" />
+            <input class="input" type="password" v-model="form.password" :disabled="wizardBusy" @keyup.enter="submitPassword" />
           </div>
           <div class="modal-foot">
             <button class="btn btn-primary" @click="submitPassword" :disabled="wizardBusy">
@@ -287,7 +372,7 @@ onMounted(load)
           <AccountAvatar :account="doneInfo.account" class="done-avatar" />
           <p><b>{{ doneInfo?.name }}</b> 登录成功并已上线</p>
           <p class="muted mono">{{ doneInfo?.session }}<template v-if="doneInfo?.tgid"> · {{ doneInfo.tgid }}</template></p>
-          <button class="btn btn-primary" @click="wizardOpen=false">完成</button>
+          <button class="btn btn-primary" @click="closeWizard">完成</button>
         </div>
       </div>
     </div>

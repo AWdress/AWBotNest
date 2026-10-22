@@ -127,6 +127,12 @@ class PluginRuntime:
     def scan_summary(self) -> list[PluginMeta]:
         return self.scanner.scan(summary=True)
 
+    def plugin_meta(self, plugin_id: str) -> PluginMeta | None:
+        return self.scanner.plugin_meta(plugin_id)
+
+    def visit_config_schemas(self, visitor) -> None:
+        self.scanner.visit_config_schemas(visitor)
+
     def invalidate_scan_cache(self) -> None:
         self.scanner.invalidate_scan_cache()
 

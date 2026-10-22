@@ -251,7 +251,14 @@ class AssistantTools:
         return list(scan())[:500]
 
     def _plugin(self, plugin_id):
-        meta = next((item for item in self._metas() if item.id == plugin_id), None)
+        lookup = getattr(self.runtime, "plugin_meta", None)
+        if callable(lookup):
+            meta = lookup(plugin_id)
+        else:
+            scan = getattr(self.runtime, "scan", None)
+            if not callable(scan):
+                raise ValueError("插件定义暂不可用")
+            meta = next((item for item in scan() if item.id == plugin_id), None)
         if meta is None:
             raise ValueError("插件不存在")
         return meta
@@ -465,46 +472,102 @@ class AssistantTools:
 
     def _known_secrets(self):
         found = set()
-        visited = 0
-        def collect(value, sensitive=False, depth=0):
-            nonlocal visited
-            visited += 1
-            if depth > MAX_DEPTH or visited > 10000:
-                return
-            if isinstance(value, str) and sensitive and value not in {MASK, "***"} and len(value) >= 4:
-                found.add(value)
-            elif isinstance(value, dict):
-                for key, item in list(value.items())[:1000]:
-                    collect(item, sensitive or bool(_SENSITIVE.search(str(key))), depth + 1)
-            elif isinstance(value, (tuple, list)):
-                for item in value[:1000]:
-                    collect(item, sensitive, depth + 1)
-            elif is_dataclass(value) and not isinstance(value, type):
-                for field in fields(value)[:100]:
-                    collect(getattr(value, field.name), sensitive or bool(_SENSITIVE.search(field.name)), depth + 1)
+        collected = set()
+
+        def collect(value, sensitive=False):
+            # A redaction scan cannot silently stop at a display/payload budget:
+            # a credential after that boundary would be sent to the model intact.
+            # Iterator frames avoid recursion limits and wide temporary copies.
+            def children(item, marked):
+                if isinstance(item, dict):
+                    for key, child in item.items():
+                        yield child, marked or bool(_SENSITIVE.search(str(key)))
+                elif isinstance(item, (tuple, list)):
+                    for child in item:
+                        yield child, marked
+                else:
+                    for field in fields(item):
+                        yield getattr(item, field.name), marked or bool(_SENSITIVE.search(field.name))
+
+            stack = [iter(((value, sensitive),))]
+            while stack:
+                try:
+                    item, marked = next(stack[-1])
+                except StopIteration:
+                    stack.pop()
+                    continue
+                if isinstance(item, str):
+                    if marked and item and item not in {MASK, "***"}:
+                        found.add(item)
+                elif isinstance(item, (dict, tuple, list)) or is_dataclass(item) and not isinstance(item, type):
+                    # The same object may first be visited through a public path
+                    # and later through a secret one; those visits are distinct.
+                    identity = (id(item), marked)
+                    if identity not in collected:
+                        collected.add(identity)
+                        stack.append(iter(children(item, marked)))
+
         collect(self.settings if is_dataclass(self.settings) else
                 vars(self.settings) if hasattr(self.settings, "__dict__") else {})
-        def declared(spec, value, name="", depth=0):
+        declared_seen = set()
+
+        def declared(spec, value, name=""):
             from .assistant_plugins import _described_secret
-            if depth > MAX_DEPTH or not isinstance(spec, dict):
-                return
-            if _described_secret(spec, name):
-                collect(value, True)
-                collect(spec.get("default"), True)
-                return
-            fields = spec.get("fields", spec.get("properties", {}))
-            if isinstance(value, dict) and isinstance(fields, dict):
-                for key, child in list(fields.items())[:100]:
-                    declared(child, value.get(key), key, depth + 1)
-            elif isinstance(value, list):
-                item_spec = spec.get("items") or {"properties": fields}
-                for item in value[:100]:
-                    declared(item_spec, item, "", depth + 1)
-        for meta in self._metas():
-            schema = getattr(meta, "config_schema", None) or {}
-            config = self.settings.plugin_config.get(meta.id, {})
+
+            def children(node, item, marked):
+                schema_fields = node.get("fields", node.get("properties", {}))
+                item_spec = node.get("items")
+                if isinstance(schema_fields, dict):
+                    for key, child in schema_fields.items():
+                        # Defaults can be used by a plugin even when the field
+                        # has never been saved, including empty object/array rows.
+                        yield child, None, key, marked
+                        if isinstance(item, dict):
+                            yield child, item.get(key), key, marked
+                        elif isinstance(item, list) and not isinstance(item_spec, dict):
+                            for row in item:
+                                if isinstance(row, dict):
+                                    yield child, row.get(key), key, marked
+                if isinstance(item_spec, dict):
+                    yield item_spec, None, "", marked
+                    if isinstance(item, list):
+                        for row in item:
+                            yield item_spec, row, "", marked
+
+            stack = [iter(((spec, value, name, False),))]
+            while stack:
+                try:
+                    node, item, key, inherited = next(stack[-1])
+                except StopIteration:
+                    stack.pop()
+                    continue
+                if not isinstance(node, dict):
+                    # Unknown field definitions are not evidence that a stored
+                    # value is public; mirror the configuration bridge's policy.
+                    collect(item, True)
+                    continue
+                marked = inherited or _described_secret(node, key)
+                identity = (id(node), id(item), marked)
+                if identity in declared_seen:
+                    continue
+                declared_seen.add(identity)
+                if marked:
+                    collect(item, True)
+                    collect(node.get("default"), True)
+                stack.append(iter(children(node, item if item is not None else node.get("default"), marked)))
+
+        def collect_declared(plugin_id, schema):
+            config = self.settings.plugin_config.get(plugin_id, {})
             for key, spec in schema.items():
                 declared(spec, config.get(key), key)
+        visit = getattr(self.runtime, "visit_config_schemas", None)
+        if callable(visit):
+            visit(collect_declared)
+        else:
+            scan = getattr(self.runtime, "scan", None)
+            if callable(scan):
+                for meta in scan():
+                    collect_declared(meta.id, getattr(meta, "config_schema", None) or {})
         return sorted(found, key=len, reverse=True)
 
     def _sanitize(self, value):

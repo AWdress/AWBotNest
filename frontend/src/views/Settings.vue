@@ -478,18 +478,50 @@ watch(tab, (value) => {
   }
 })
 
+// Apply only edits made since submission, retaining server normalization and secret masks.
+function mergeSavedSettings(submitted, current, saved) {
+  if (JSON.stringify(current) === JSON.stringify(submitted)) return saved
+  if (Array.isArray(current) && Array.isArray(submitted) && Array.isArray(saved)) {
+    return current.map((value, index) => {
+      const hasId = value && typeof value === 'object' && value.id != null
+      const previousIndex = hasId ? submitted.findIndex(item => item?.id === value.id) : index
+      const savedIndex = hasId ? saved.findIndex(item => item?.id === value.id) : previousIndex
+      if (previousIndex < 0 || previousIndex >= submitted.length || savedIndex < 0) return value
+      return mergeSavedSettings(submitted[previousIndex], value, saved[savedIndex])
+    })
+  }
+  if (current && submitted && typeof current === 'object' && typeof submitted === 'object'
+      && !Array.isArray(current) && !Array.isArray(submitted)) {
+    const result = { ...saved }
+    for (const key of Object.keys(submitted)) {
+      if (!Object.prototype.hasOwnProperty.call(current, key)) delete result[key]
+    }
+    for (const key of Object.keys(current)) {
+      result[key] = Object.prototype.hasOwnProperty.call(submitted, key)
+        ? mergeSavedSettings(submitted[key], current[key], saved?.[key])
+        : current[key]
+    }
+    return result
+  }
+  return current
+}
+
 async function saveAiSettings() {
   if (!ai.value || aiSaving.value) return false
+  const target = ai.value
+  const submitted = JSON.stringify(target)
   aiSaving.value = true
   try {
-    const data = await api.saveAiSettings(ai.value)
-    ai.value = normalizeAiSettings(data.settings)
+    const data = await api.saveAiSettings(JSON.parse(submitted))
+    if (!secretsMounted || ai.value !== target) return false
+    const saved = normalizeAiSettings(data.settings)
+    ai.value = mergeSavedSettings(JSON.parse(submitted), target, saved)
     aiStatus.value = data.status || aiStatus.value
-    aiSavedSnap.value = JSON.stringify(ai.value)
-    toast.success('AI 设置已保存并立即生效')
-    return true
+    aiSavedSnap.value = JSON.stringify(saved)
+    toast.success(aiDirty.value ? 'AI 设置已保存，后续改动尚未保存' : 'AI 设置已保存并立即生效')
+    return !aiDirty.value
   } catch (e) {
-    toast.error('保存 AI 设置失败：' + e.message)
+    if (secretsMounted && ai.value === target) toast.error('保存 AI 设置失败：' + e.message)
     return false
   } finally {
     aiSaving.value = false
@@ -514,17 +546,20 @@ async function loadCookieSettings() {
 
 async function saveCookieSettings() {
   if (!cookieSettings.value || cookieSaving.value) return false
+  const target = cookieSettings.value
+  const submitted = JSON.stringify(target)
   cookieSaving.value = true
   try {
-    const data = await api.saveCookieSettings(cookieSettings.value)
-    cookieSettings.value = data.settings
+    const data = await api.saveCookieSettings(JSON.parse(submitted))
+    if (!secretsMounted || cookieSettings.value !== target) return false
+    cookieSettings.value = mergeSavedSettings(JSON.parse(submitted), target, data.settings)
     cookieStatus.value = data.sync_status || data.status || {}
     cookieHistory.value = data.history || cookieHistory.value
-    cookieSavedSnap.value = JSON.stringify(cookieSettings.value)
-    toast.success('Cookie 服务设置已保存并立即生效')
-    return true
+    cookieSavedSnap.value = JSON.stringify(data.settings)
+    toast.success(cookieDirty.value ? 'Cookie 设置已保存，后续改动尚未保存' : 'Cookie 服务设置已保存并立即生效')
+    return !cookieDirty.value
   } catch (e) {
-    toast.error('保存 Cookie 服务设置失败：' + e.message)
+    if (secretsMounted && cookieSettings.value === target) toast.error('保存 Cookie 服务设置失败：' + e.message)
     return false
   } finally {
     cookieSaving.value = false

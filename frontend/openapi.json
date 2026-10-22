@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "AWBotNest API",
-    "version": "2.0.2.0"
+    "version": "2.0.2.1"
   },
   "paths": {
     "/api/assistant": {
@@ -4376,6 +4376,18 @@
               "type": "string",
               "title": "Session Name"
             }
+          },
+          {
+            "name": "flow_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[A-Za-z0-9_-]*$",
+              "default": "",
+              "title": "Flow Id"
+            }
           }
         ],
         "responses": {
@@ -6539,6 +6551,13 @@
             "maxLength": 256,
             "title": "Password",
             "default": ""
+          },
+          "flow_id": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]*$",
+            "title": "Flow Id",
+            "default": ""
           }
         },
         "type": "object",
@@ -6560,6 +6579,13 @@
             "maxLength": 32,
             "minLength": 3,
             "title": "Phone"
+          },
+          "flow_id": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[A-Za-z0-9_-]*$",
+            "title": "Flow Id",
+            "default": ""
           }
         },
         "type": "object",

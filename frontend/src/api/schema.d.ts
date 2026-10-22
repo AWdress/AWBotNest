@@ -2659,6 +2659,11 @@ export interface components {
              * @default
              */
             password: string;
+            /**
+             * Flow Id
+             * @default
+             */
+            flow_id: string;
         };
         /** LoginStartBody */
         LoginStartBody: {
@@ -2666,6 +2671,11 @@ export interface components {
             session: string;
             /** Phone */
             phone: string;
+            /**
+             * Flow Id
+             * @default
+             */
+            flow_id: string;
         };
         /** MCPInput */
         MCPInput: {
@@ -6033,7 +6043,9 @@ export interface operations {
     };
     cancel_login_api_accounts_login__session_name__cancel_post: {
         parameters: {
-            query?: never;
+            query?: {
+                flow_id?: string;
+            };
             header?: never;
             path: {
                 session_name: string;

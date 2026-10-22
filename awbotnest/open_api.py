@@ -5,6 +5,7 @@ import json
 from contextlib import nullcontext
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
@@ -14,7 +15,7 @@ from .auth import api_key_dependency
 from .config import Settings, save_settings
 from .logs import memory_logs
 from .plugins import PluginRuntime
-from .plugin_config import mask_config, restore_config_secrets
+from .plugin_config import mask_config, save_plugin_config
 from .storage import PluginKV
 from .telegram import TelegramAccounts
 
@@ -153,28 +154,22 @@ def register_open_api(
 
     @router.put("/plugins/{plugin_id}/config")
     async def put_plugin_config(plugin_id: str, request: Request):
-        plugin = meta(plugin_id)
+        meta(plugin_id)
         raw = await request.json()
         values = raw.get("config") if isinstance(raw, dict) else None
         if not isinstance(values, dict):
             raise HTTPException(status_code=400, detail="config 必须是对象")
         if len(json.dumps(values, ensure_ascii=False).encode("utf-8")) > 1024 * 1024:
             raise HTTPException(status_code=413, detail="插件配置超过 1 MB")
-        try:
-            values = restore_config_secrets(plugin.config_schema or {}, values,
-                                            settings.plugin_config.get(plugin_id, {}))
-            runtime.validate_config(plugin.config_schema or {}, values,
-                                    allow_extra=plugin.render_mode == "vue")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        settings.plugin_config[plugin_id] = dict(values)
-        save_settings(settings)
         reloaded = plugin_id in runtime.loaded
-        if reloaded:
-            await runtime.disable(plugin_id, persist=False)
-            value = await runtime.enable(plugin_id)
-            if value.error:
-                raise HTTPException(status_code=409, detail=value.error)
+        try:
+            await save_plugin_config(
+                SimpleNamespace(settings=settings, runtime=runtime), plugin_id, values,
+                persist=save_settings,
+            )
+        except ValueError as exc:
+            status = 409 if str(exc).startswith("插件配置未生效") else 400
+            raise HTTPException(status_code=status, detail=str(exc)) from exc
         return {"ok": True, "message": "配置已更新", "reloaded": reloaded}
 
     @router.get("/plugins/{plugin_id}/kv")

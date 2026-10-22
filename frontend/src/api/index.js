@@ -355,9 +355,10 @@ export const api = {
   accountOnline: (s) => request('POST', `/api/accounts/${s}/online`),
   accountOffline: (s) => request('POST', `/api/accounts/${s}/offline`),
   deleteAccount: (s) => request('DELETE', `/api/accounts/${s}`),
-  loginSendCode: (session, phone) => request('POST', '/api/accounts/login/send_code', { session, phone }),
-  loginSubmitCode: (session, code) => request('POST', '/api/accounts/login/submit_code', { session, code }),
-  loginSubmitPassword: (session, password) => request('POST', '/api/accounts/login/submit_password', { session, password }),
+  loginSendCode: (session, phone, flowId) => request('POST', '/api/accounts/login/send_code', { session, phone, ...(flowId ? { flow_id: flowId } : {}) }),
+  loginSubmitCode: (session, code, flowId) => request('POST', '/api/accounts/login/submit_code', { session, code, ...(flowId ? { flow_id: flowId } : {}) }),
+  loginSubmitPassword: (session, password, flowId) => request('POST', '/api/accounts/login/submit_password', { session, password, ...(flowId ? { flow_id: flowId } : {}) }),
+  loginCancel: (session, flowId) => request('POST', `/api/accounts/login/${encodeURIComponent(session)}/cancel${flowId ? `?flow_id=${encodeURIComponent(flowId)}` : ''}`),
   accountAvatar: (session, version = '', signal) => requestBlob(
     `/api/accounts/${encodeURIComponent(session)}/avatar${version ? `?v=${encodeURIComponent(version)}` : ''}`,
     signal,

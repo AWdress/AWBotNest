@@ -27,6 +27,9 @@ const version = ref('')
 const latestVersion = ref('')   // 最新发布版本
 const latestNote = ref('')      // 新版本的一句更新说明（hover 提示用）
 const hasUpdate = ref(false)    // 是否有新版本
+const updateTipOpen = ref(false)
+const updateTipStyle = ref({})
+const updateAnchor = ref(null)
 const latestReleaseUrl = ref('https://github.com/AWdress/AWBotNest/releases')
 const connectionLabel = computed(() => online.value
   ? '连接正常'
@@ -56,9 +59,28 @@ function clearUpdateState() {
   updateSequence += 1
   lastOpenUpdateCheck = null
   hasUpdate.value = false
+  closeUpdateTip()
   latestVersion.value = ''
   latestNote.value = ''
   latestReleaseUrl.value = 'https://github.com/AWdress/AWBotNest/releases'
+}
+
+function showUpdateTip() {
+  const rect = updateAnchor.value?.getBoundingClientRect()
+  if (!rect || !authed.value || !hasUpdate.value) return
+  updateTipStyle.value = {
+    left: `${Math.max(12, Math.min(rect.left, window.innerWidth - 252))}px`,
+    bottom: `${Math.max(12, window.innerHeight - rect.top + 8)}px`,
+  }
+  updateTipOpen.value = true
+}
+
+function hideUpdateTip() {
+  if (!updateAnchor.value?.matches(':hover, :focus-within')) closeUpdateTip()
+}
+
+function closeUpdateTip() {
+  updateTipOpen.value = false
 }
 
 async function onAuthed() {
@@ -272,6 +294,7 @@ function openAssistant() {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', closeUpdateTip)
   window.addEventListener('awbotnest:open-assistant', openAssistant)
   window.addEventListener('awbotnest-appearance', applyAppearance)
   document.addEventListener('visibilitychange', refreshUpdatesOnOpen)
@@ -291,6 +314,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('resize', closeUpdateTip)
   window.removeEventListener('awbotnest:open-assistant', openAssistant)
   disposed = true
   sessionSequence += 1
@@ -367,21 +391,17 @@ onUnmounted(() => {
                 <path d="M6 15h13" />
               </svg>
               v{{ version }}
-              <span v-if="hasUpdate" class="update-wrap">
+              <span v-if="hasUpdate" ref="updateAnchor" class="update-wrap"
+                    @pointerenter="showUpdateTip" @pointerleave="hideUpdateTip"
+                    @focusin="showUpdateTip" @focusout="hideUpdateTip"
+                    @keydown.esc="closeUpdateTip">
                 <a :href="latestReleaseUrl" target="_blank" rel="noopener" class="update-arrow"
-                   title="发现新版本">
+                   title="发现新版本" aria-describedby="system-update-tip">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"
                        stroke-linecap="round" stroke-linejoin="round">
                     <path d="M12 19V5M5 12l7-7 7 7" />
                   </svg>
                 </a>
-                <div class="update-pop">
-                  <div class="update-pop-head">
-                    <span class="update-pop-title">发现新版本</span>
-                    <span class="update-pop-ver">v{{ latestVersion }}</span>
-                  </div>
-                  <div class="update-pop-note" v-if="latestNote">{{ latestNote }}</div>
-                </div>
               </span>
             </span>
             <div class="footer-status" :class="{ online }">
@@ -443,6 +463,17 @@ onUnmounted(() => {
   </div>
 
   <AssistantPanel v-if="authed && assistantVisited" :open="assistantOpen" @close="assistantOpen = false" />
+
+  <Teleport to="body">
+    <div v-show="authed && hasUpdate && updateTipOpen" id="system-update-tip"
+         role="tooltip" class="update-pop" :style="updateTipStyle">
+      <div class="update-pop-head">
+        <span class="update-pop-title">发现新版本</span>
+        <span class="update-pop-ver">v{{ latestVersion }}</span>
+      </div>
+      <div v-if="latestNote" class="update-pop-note">{{ latestNote }}</div>
+    </div>
+  </Teleport>
 
   <!-- 全局确认弹窗 -->
   <ConfirmDialog />
@@ -543,17 +574,11 @@ onUnmounted(() => {
 @keyframes update-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.55; } }
 .update-wrap { position: relative; display: inline-flex; align-items: center; }
 .update-pop {
-  position: absolute; bottom: calc(100% + 8px); left: 0;
-  transform: translateY(4px);
-  min-width: 176px; max-width: 240px; padding: 10px 12px;
+  position: fixed;
+  width: 240px; max-width: calc(100vw - 24px); padding: 10px 12px;
   background: var(--bg-elevated); border: 1px solid var(--border-light);
   border-radius: var(--radius-sm); box-shadow: var(--shadow);
-  font-family: initial; z-index: 50;
-  opacity: 0; visibility: hidden; pointer-events: none;
-  transition: opacity 0.15s ease, transform 0.15s ease;
-}
-.update-wrap:hover .update-pop {
-  opacity: 1; visibility: visible; transform: translateY(0);
+  font-family: inherit; z-index: 50; pointer-events: none;
 }
 .update-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .update-pop-title { color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }

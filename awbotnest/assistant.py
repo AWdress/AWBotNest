@@ -1149,7 +1149,8 @@ class AssistantService:
                                 async with asyncio.timeout(limits["timeout_seconds"]):
                                     execution_started = True
                                     result = await self._local_execute(prepared, run) if local else await self.tools.execute(prepared)
-                                    if not read_only and isinstance(result, dict) and result.get("error"):
+                                    if not read_only and isinstance(result, dict) and (
+                                            result.get("error") or result.get("is_error") is True):
                                         raise ValueError("写操作返回错误，需核实实际结果")
                                 step.update(status="completed", content="已完成")
                     except (ValueError, PermissionError, KeyError) as exc:

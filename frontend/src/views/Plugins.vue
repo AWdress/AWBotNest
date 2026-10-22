@@ -36,6 +36,7 @@ const runtimeOpen = ref(false)
 const runtimeTarget = ref(null)
 const runtimeData = ref(null)
 const runtimeBusy = ref(false)
+let runtimeRequestId = 0
 const fileInput = ref(null)
 
 // 配置弹窗
@@ -321,31 +322,47 @@ async function openDependencies() {
 }
 
 async function openRuntime(p) {
+  const requestId = ++runtimeRequestId
+  const current = () => requestId === runtimeRequestId && runtimeOpen.value && runtimeTarget.value?.id === p.id
   closeMenu()
   runtimeTarget.value = p
   runtimeData.value = null
   runtimeOpen.value = true
   runtimeBusy.value = true
   try {
-    runtimeData.value = await api.pluginRuntime(p.id)
+    const data = await api.pluginRuntime(p.id)
+    if (current()) runtimeData.value = data
   } catch (e) {
-    toast.error('读取运行诊断失败：' + e.message)
+    if (current()) toast.error('读取运行诊断失败：' + e.message)
   } finally {
-    runtimeBusy.value = false
+    if (current()) runtimeBusy.value = false
   }
 }
 
+function closeRuntime() {
+  runtimeRequestId += 1
+  runtimeOpen.value = false
+  runtimeTarget.value = null
+  runtimeData.value = null
+  runtimeBusy.value = false
+}
+
 async function replayEvent(event) {
-  if (!runtimeTarget.value) return
+  if (!runtimeOpen.value || !runtimeTarget.value || runtimeBusy.value) return
+  const pluginId = runtimeTarget.value.id
+  const requestId = ++runtimeRequestId
+  const current = () => requestId === runtimeRequestId && runtimeOpen.value && runtimeTarget.value?.id === pluginId
   runtimeBusy.value = true
   try {
-    await api.replayPluginEvent(runtimeTarget.value.id, event.id)
+    await api.replayPluginEvent(pluginId, event.id)
+    if (!current()) return
     toast.success('事件已重新执行')
-    runtimeData.value = await api.pluginRuntime(runtimeTarget.value.id)
+    const data = await api.pluginRuntime(pluginId)
+    if (current()) runtimeData.value = data
   } catch (e) {
-    toast.error('重新执行失败：' + e.message)
+    if (current()) toast.error('重新执行失败：' + e.message)
   } finally {
-    runtimeBusy.value = false
+    if (current()) runtimeBusy.value = false
   }
 }
 
@@ -1332,6 +1349,7 @@ onMounted(() => {
 })
 onUnmounted(() => {
   pluginPageMounted = false
+  closeRuntime()
   closeConfig()
   loadRequestId += 1
   logsDisconnect()
@@ -1787,9 +1805,9 @@ onUnmounted(() => {
     </div>
 
     <!-- 插件运行诊断与事件回放 -->
-    <div v-if="runtimeOpen && runtimeTarget" class="modal-mask" @click.self="runtimeOpen=false">
+    <div v-if="runtimeOpen && runtimeTarget" class="modal-mask" @click.self="closeRuntime">
       <div class="modal card modal-governance">
-        <div class="modal-head"><h2>{{ runtimeTarget.name }} · 运行诊断</h2><button class="close" @click="runtimeOpen=false" aria-label="关闭">×</button></div>
+        <div class="modal-head"><h2>{{ runtimeTarget.name }} · 运行诊断</h2><button class="close" @click="closeRuntime" aria-label="关闭">×</button></div>
         <div class="modal-body governance-body">
           <div v-if="runtimeBusy && !runtimeData" class="muted center">正在读取运行状态…</div>
           <template v-else-if="runtimeData">

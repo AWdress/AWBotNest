@@ -15,6 +15,16 @@ from .config import DATA_DIR
 T = TypeVar("T")
 
 
+async def _drain_cancelled_task(task: asyncio.Task) -> None:
+    """Keep waiting through repeated cancellation without cancelling the worker."""
+    waiter = asyncio.gather(task, return_exceptions=True)
+    while not waiter.done():
+        try:
+            await asyncio.shield(waiter)
+        except asyncio.CancelledError:
+            continue
+
+
 class PluginKV:
     """Asynchronous, namespace-isolated SQLite storage for one plugin instance.
 
@@ -70,7 +80,7 @@ class PluginKV:
             except asyncio.CancelledError:
                 # sqlite transactions cannot be interrupted safely. Wait for commit or
                 # rollback while retaining the namespace lock, then propagate cancellation.
-                await asyncio.gather(task, return_exceptions=True)
+                await _drain_cancelled_task(task)
                 raise
 
     def _get(self, key: str, default: Any) -> Any:
@@ -125,5 +135,5 @@ class PluginKV:
         try:
             await asyncio.shield(task)
         except asyncio.CancelledError:
-            await asyncio.gather(task, return_exceptions=True)
+            await _drain_cancelled_task(task)
             raise

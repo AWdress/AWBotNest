@@ -3,6 +3,7 @@ from pydantic import BaseModel, Field, StrictBool
 class LoginStartBody(BaseModel):
     session: str = Field(min_length=1, max_length=64)
     phone: str = Field(min_length=3, max_length=32)
+    flow_id: str = Field(default="", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
 
 class AdminLoginBody(BaseModel):
     username: str = Field(min_length=1, max_length=64)
@@ -17,6 +18,7 @@ class LoginCompleteBody(BaseModel):
     session: str = Field(min_length=1, max_length=64)
     code: str = Field(default="", max_length=16)
     password: str = Field(default="", max_length=256)
+    flow_id: str = Field(default="", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")
 
 class SettingsBody(BaseModel):
     api_id: int = Field(default=0, ge=0)

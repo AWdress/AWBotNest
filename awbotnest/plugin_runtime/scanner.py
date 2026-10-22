@@ -52,16 +52,17 @@ class PluginScanner:
                 continue
         return tuple(signature)
 
-    def _cached_metas(self, *, summary: bool = False) -> list[PluginMeta]:
+    def _cached_metas(self, *, summary: bool = False, plugin_id: str | None = None) -> list[PluginMeta]:
+        cached = self._scan_cache if plugin_id is None else [meta for meta in self._scan_cache if meta.id == plugin_id]
         if summary:
             # Status polling only needs identity, visibility and errors. Avoid
             # copying every schema/option list and changelog on each heartbeat.
             metas = [PluginMeta(
                 id=meta.id, name=meta.name, version=meta.version, scope=meta.scope,
                 bot=meta.bot, error=meta.error,
-            ) for meta in self._scan_cache]
+            ) for meta in cached]
         else:
-            metas = copy.deepcopy(self._scan_cache)
+            metas = copy.deepcopy(cached)
         for meta in metas:
             meta.enabled = meta.id in self.settings.enabled_plugins
             meta.loaded = meta.id in self.loaded
@@ -223,25 +224,44 @@ class PluginScanner:
                 channels.update(self.source_cloakbrowser_channels(source))
         return tuple(channel for channel in ("stable", "preview") if channel in channels)
 
+    def plugin_meta(self, plugin_id: str) -> PluginMeta | None:
+        """Copy one full definition without copying unrelated schemas/logs."""
+        with self._lock:
+            self._refresh_cache()
+            return next(iter(self._cached_metas(plugin_id=plugin_id)), None)
+
+    def visit_config_schemas(self, visitor) -> None:
+        """Read cached definitions under the lock, without copying large schemas.
+
+        The internal visitor must not mutate or retain the borrowed definitions.
+        Include hidden plugins too: visibility must not disable credential redaction.
+        """
+        with self._lock:
+            self._refresh_cache()
+            for meta in self._scan_cache:
+                visitor(meta.id, meta.config_schema or {})
+
+    def _refresh_cache(self) -> None:
+        signature = self._entry_signature()
+        if signature == self._scan_cache_signature:
+            return
+        result: list[PluginMeta] = []
+        for entry in self.entries():
+            fallback_id = entry.parent.name if entry.name == "__init__.py" else entry.stem
+            try:
+                raw = self.metadata(entry)
+                meta = self.resolver.descriptor(entry, raw, fallback_id)
+                self.dependencies.validate(meta.requirements or [])
+                result.append(meta)
+            except Exception as exc:
+                result.append(PluginMeta(
+                    id=fallback_id, name=fallback_id, version="0.0.0", scope="standalone",
+                    error=f"{type(exc).__name__}: {exc}",
+                ))
+        self._scan_cache = sorted(result, key=lambda item: item.id)
+        self._scan_cache_signature = signature
+
     def scan(self, *, summary: bool = False) -> list[PluginMeta]:
         with self._lock:
-            signature = self._entry_signature()
-            if signature == self._scan_cache_signature:
-                return self._cached_metas(summary=summary)
-
-            result: list[PluginMeta] = []
-            for entry in self.entries():
-                fallback_id = entry.parent.name if entry.name == "__init__.py" else entry.stem
-                try:
-                    raw = self.metadata(entry)
-                    meta = self.resolver.descriptor(entry, raw, fallback_id)
-                    self.dependencies.validate(meta.requirements or [])
-                    result.append(meta)
-                except Exception as exc:
-                    result.append(PluginMeta(
-                        id=fallback_id, name=fallback_id, version="0.0.0", scope="standalone",
-                        error=f"{type(exc).__name__}: {exc}",
-                    ))
-            self._scan_cache = sorted(result, key=lambda item: item.id)
-            self._scan_cache_signature = signature
+            self._refresh_cache()
             return self._cached_metas(summary=summary)

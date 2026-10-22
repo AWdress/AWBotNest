@@ -16,7 +16,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
 from .. import __version__
@@ -115,7 +115,7 @@ def create_router(deps) -> APIRouter:
     async def start_login(body: LoginStartBody):
         logger.info("账号登录开始：%s", body.session)
         try:
-            return await accounts.begin_user_login(body.session, body.phone)
+            return await accounts.begin_user_login(body.session, body.phone, flow_id=body.flow_id)
         except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ConnectionError as exc:
@@ -134,7 +134,7 @@ def create_router(deps) -> APIRouter:
         logger.info("账号验证码校验开始：%s", body.session)
         try:
             result = await accounts.complete_user_login(
-                body.session, code=body.code, password=body.password,
+                body.session, code=body.code, password=body.password, flow_id=body.flow_id,
             )
         except LookupError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -158,8 +158,11 @@ def create_router(deps) -> APIRouter:
         return await complete_login(body)
 
     @router.post("/api/accounts/login/{session_name}/cancel", dependencies=[Depends(require_admin)])
-    async def cancel_login(session_name: str):
-        await accounts.cancel_user_login(session_name)
+    async def cancel_login(session_name: str, flow_id: str = Query(default="", max_length=64, pattern=r"^[A-Za-z0-9_-]*$")):
+        try:
+            await accounts.cancel_user_login(session_name, flow_id=flow_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"ok": True}
 
     @router.post("/api/accounts/{session_name}/disconnect", dependencies=[Depends(require_admin)])
