@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import re
 import threading
 import time
@@ -12,12 +13,17 @@ from pathlib import Path
 from urllib.parse import parse_qsl, urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
+from PIL import Image, ImageOps
+
 from .assistant_mcp import MCPHttpTransport, public_endpoint, validate_endpoint
 from .config import DATA_DIR
 from .logs import redact_secrets
 from .services.http import HttpService
 
 MAX_ICON_BYTES = 2 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 16 * 1024 * 1024
+MAX_ICON_PIXELS = 16 * 1024 * 1024
+MAX_ICON_DIMENSION = 256
 MAX_CACHE_BYTES = 128 * 1024 * 1024
 MAX_CACHE_FILES = 1024
 ICON_TTL = 7 * 86400
@@ -47,18 +53,120 @@ def _icon_url(value: str) -> str:
     return value
 
 
+def _check_raster_header(body: bytes, suffix: str) -> None:
+    # These Pillow plugins can allocate pixels inside Image.open(), before the
+    # normal size check. Validate their bounded container headers first.
+    if suffix == ".webp":
+        if len(body) < 20 or body[:4] != b"RIFF" or body[8:12] != b"WEBP":
+            raise ValueError("插件图标格式不正确")
+        end = int.from_bytes(body[4:8], "little") + 8
+        length = int.from_bytes(body[16:20], "little")
+        if not 20 <= end <= len(body) or 20 + length + (length & 1) > end:
+            raise ValueError("插件图标格式不正确")
+        tag = body[12:16]
+        if tag == b"VP8X" and length == 10:
+            width = int.from_bytes(body[24:27], "little") + 1
+            height = int.from_bytes(body[27:30], "little") + 1
+        elif tag == b"VP8 " and length >= 10 and body[23:26] == b"\x9d\x01\x2a":
+            width = int.from_bytes(body[26:28], "little") & 0x3FFF
+            height = int.from_bytes(body[28:30], "little") & 0x3FFF
+        elif tag == b"VP8L" and length >= 5 and body[20] == 0x2F:
+            packed = int.from_bytes(body[21:25], "little")
+            width, height = (packed & 0x3FFF) + 1, ((packed >> 14) & 0x3FFF) + 1
+        else:
+            raise ValueError("插件图标格式不正确")
+        if width < 1 or height < 1 or width * height > MAX_ICON_PIXELS:
+            raise ValueError("插件图标像素过多")
+    elif suffix == ".ico":
+        if len(body) < 6 or body[:4] != b"\x00\x00\x01\x00":
+            raise ValueError("插件图标格式不正确")
+        count = int.from_bytes(body[4:6], "little")
+        directory_end = 6 + 16 * count
+        if not 1 <= count <= 256 or directory_end > len(body):
+            raise ValueError("插件图标格式不正确")
+        for index in range(count):
+            entry = body[6 + index * 16:22 + index * 16]
+            expected = (entry[0] or 256, entry[1] or 256)
+            length = int.from_bytes(entry[8:12], "little")
+            offset = int.from_bytes(entry[12:16], "little")
+            if length < 12 or offset < directory_end or offset + length > len(body):
+                raise ValueError("插件图标格式不正确")
+            frame = memoryview(body)[offset:offset + length]
+            if frame[:8] == b"\x89PNG\r\n\x1a\n":
+                if length < 33 or frame[8:16] != b"\x00\x00\x00\rIHDR":
+                    raise ValueError("插件图标格式不正确")
+                width = int.from_bytes(frame[16:20], "big")
+                height = int.from_bytes(frame[20:24], "big")
+                # Pillow accepts later IHDR chunks too. An embedded ICO PNG is
+                # decoded during open(), so reject a replacement size up front.
+                position, chunks = 33, 0
+                while position < length:
+                    chunks += 1
+                    size = int.from_bytes(frame[position:position + 4], "big")
+                    tag = frame[position + 4:position + 8]
+                    if (chunks > 10000 or position + 12 + size > length
+                            or tag == b"IHDR"):
+                        raise ValueError("插件图标格式不正确")
+                    if tag == b"IDAT":
+                        break
+                    position += 12 + size
+                else:
+                    raise ValueError("插件图标格式不正确")
+            else:
+                header = int.from_bytes(frame[:4], "little")
+                if header == 12:
+                    width = int.from_bytes(frame[4:6], "little")
+                    stored_height = int.from_bytes(frame[6:8], "little")
+                elif header in {40, 52, 56, 64, 108, 124} and header <= length:
+                    width = int.from_bytes(frame[4:8], "little", signed=True)
+                    stored_height = abs(int.from_bytes(frame[8:12], "little", signed=True))
+                else:
+                    raise ValueError("插件图标格式不正确")
+                if stored_height % 2:
+                    raise ValueError("插件图标尺寸不正确")
+                height = stored_height // 2
+            if not 1 <= width <= 256 or not 1 <= height <= 256 or (width, height) != expected:
+                raise ValueError("插件图标尺寸不正确")
+
+
+def _raster_bytes(body: bytes, suffix: str) -> tuple[bytes, str]:
+    _check_raster_header(body, suffix)
+    try:
+        with Image.open(io.BytesIO(body), formats=("PNG", "JPEG", "GIF", "ICO", "WEBP")) as image:
+            if image.width * image.height > MAX_ICON_PIXELS:
+                raise ValueError("插件图标像素过多")
+            if len(body) <= MAX_ICON_BYTES and max(image.size) <= MAX_ICON_DIMENSION:
+                image.load()
+                return body, suffix
+            # Resize before converting to RGBA to avoid a second full-size image.
+            # Oversized animated icons use their first frame as the local thumbnail.
+            image.thumbnail((MAX_ICON_DIMENSION, MAX_ICON_DIMENSION), Image.Resampling.LANCZOS)
+            ImageOps.exif_transpose(image, in_place=True)
+            with image.convert("RGBA") as icon, io.BytesIO() as output:
+                icon.info.clear()
+                icon.save(output, format="PNG", optimize=True)
+                content = output.getvalue()
+            if len(content) > MAX_ICON_BYTES:
+                raise ValueError("插件图标过大")
+            return content, ".png"
+    except (OSError, SyntaxError, Image.DecompressionBombError) as exc:
+        raise ValueError("插件图标不是可用图片") from exc
+
+
 def _image_bytes(body: bytes, content_type: str) -> tuple[bytes, str]:
-    if not body or len(body) > MAX_ICON_BYTES or not content_type.startswith("image/"):
+    if not body or len(body) > MAX_DOWNLOAD_BYTES or not content_type.startswith("image/"):
         raise ValueError("插件图标不是可用图片")
     signatures = ((b"\x89PNG\r\n\x1a\n", ".png"), (b"\xff\xd8\xff", ".jpg"),
                   (b"GIF87a", ".gif"), (b"GIF89a", ".gif"), (b"\x00\x00\x01\x00", ".ico"))
     for signature, suffix in signatures:
         if body.startswith(signature):
-            return body, suffix
+            return _raster_bytes(body, suffix)
     if body.startswith(b"RIFF") and body[8:12] == b"WEBP":
-        return body, ".webp"
+        return _raster_bytes(body, ".webp")
     if content_type != "image/svg+xml":
         raise ValueError("插件图标格式不受支持")
+    if len(body) > MAX_ICON_BYTES:
+        raise ValueError("插件图标过大")
     try:
         text = body.decode("utf-8-sig")
     except UnicodeError:
@@ -93,6 +201,7 @@ class PluginIconCache:
         self._pending: dict[str, asyncio.Task] = {}
         self._failed: OrderedDict[str, float] = OrderedDict()
         self._slots = asyncio.Semaphore(4)
+        self._image_slots = asyncio.Semaphore(1)
         self._stream = stream or MCPHttpTransport(HttpService(settings))._pinned_stream
         self._resolver = resolver
         self._disk_lock = threading.Lock()
@@ -178,6 +287,19 @@ class PluginIconCache:
             while len(self._failed) > 2048:
                 self._failed.popitem(last=False)
 
+    async def _prepare_image(self, body: bytes, kind: str) -> tuple[bytes, str]:
+        await self._image_slots.acquire()
+        worker = asyncio.create_task(asyncio.to_thread(_image_bytes, body, kind))
+        # Cancelling an HTTP request cannot stop a decoder thread. Keep the slot
+        # until the actual work finishes, and consume any unobserved exception.
+        worker.add_done_callback(self._finish_image)
+        return await asyncio.shield(worker)
+
+    def _finish_image(self, worker: asyncio.Task) -> None:
+        self._image_slots.release()
+        if not worker.cancelled():
+            worker.exception()
+
     async def _download(self, key: str, source: str) -> tuple[Path, str]:
         async with asyncio.timeout(45), self._slots:
             async with asyncio.timeout(15):
@@ -202,15 +324,17 @@ class PluginIconCache:
                         if response.headers.get("content-encoding", "identity").lower() not in {"", "identity"}:
                             raise ValueError("插件图标响应格式不受支持")
                         length = response.headers.get("content-length", "")
-                        if length and (not length.isdecimal() or int(length) > MAX_ICON_BYTES):
+                        if length and (not length.isdecimal() or int(length) > MAX_DOWNLOAD_BYTES):
                             raise ValueError("插件图标过大")
                         body = bytearray()
                         async for chunk in response.aiter_bytes(chunk_size=16384):
-                            if len(body) + len(chunk) > MAX_ICON_BYTES:
+                            if len(body) + len(chunk) > MAX_DOWNLOAD_BYTES:
                                 raise ValueError("插件图标过大")
                             body.extend(chunk)
                         kind = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                        content, suffix = await asyncio.to_thread(_image_bytes, bytes(body), kind)
+                        original = bytes(body)
+                        body.clear()
+                        content, suffix = await self._prepare_image(original, kind)
                         path = await asyncio.to_thread(self._write, key, content, suffix)
                         return path, _KINDS[suffix]
         raise ValueError("插件图标下载失败")
